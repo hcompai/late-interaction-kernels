@@ -18,7 +18,12 @@ run: |
   # versions ship the legacy `(Q, D, mask=None)` signature which we no
   # longer target; see pyproject.toml -> [pylate].
   pip install --no-cache-dir -e ".[dev,pylate]" --force-reinstall --no-deps
-  pip install --no-cache-dir -U "pylate>=1.3.3" "sentence-transformers>=5.1"
+  # Upgrade PyLate + sentence-transformers *without* letting pip resolve
+  # their transitive deps — the base Docker image already has compatible
+  # torch / transformers / huggingface-hub, and allowing pip to
+  # back-track over the entire universe turns a 10-second install into
+  # a 30-minute download of every historical `anyio` / `httpcore`.
+  pip install --no-cache-dir --no-deps -U "pylate>=1.3.3" "sentence-transformers>=5.1"
   python -c "import late_interaction_kernels as L; print('version', L.__version__); import triton; print('triton', triton.__version__); import pylate, sentence_transformers; print('pylate', pylate.__version__, 'st', sentence_transformers.__version__)"
 
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)

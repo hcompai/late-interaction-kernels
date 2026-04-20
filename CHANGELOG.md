@@ -58,11 +58,28 @@ fits (and does not fit) in the story.
   exactly. Previously we only accepted a single positional `mask=` kwarg,
   which meant `Contrastive`, `CachedContrastive`, and `Distillation`
   (which all call into the score fn with keyword args `queries_mask=` /
-  `documents_mask=`) would raise `TypeError` after `patch_pylate()` on
-  PyLate ≥ 1.1. The old single-`mask=` kwarg is still accepted for
-  pinned-old PyLate installs. New tests:
-  `test_pylate_colbert_scores_with_both_masks`,
-  `test_pylate_colbert_scores_accepts_legacy_mask_kwarg`.
+  `documents_mask=`) would raise `TypeError` after `patch_pylate()`.
+  The legacy `mask=` kwarg is still silently accepted so the patch
+  remains a drop-in.
+- **Pinned PyLate to ≥ 1.3.3** in `pyproject.toml`'s `[pylate]` extra
+  (PyLate 1.3 is the first release with the new mask-kwarg signature).
+  Older PyLate (1.2.x) is no longer targeted — use
+  `late-interaction-kernels==0.4.x` if you need PyLate 1.2 compatibility.
+
+### Tests
+
+- **`tests/test_pylate_compat.py`** rewritten to target only the current
+  PyLate signature. Adds coverage for `colbert_kd_scores` (distillation
+  call site), CPU fallback, `LIK_DISABLE=1` kill switch, and verifying
+  that `unpatch_pylate()` fully restores PyLate's original references
+  in every loss module.
+- **`tests/test_robustness.py`** — a new senior-review-grade test file:
+  forward determinism (bitwise equality on repeated calls), gradcheck
+  on `soft_maxsim` (smooth forward → valid FD gradcheck), `torch.compile`
+  smoke, `torch.inference_mode()` / `torch.no_grad()` VRAM accounting
+  (argmax buffer is actually skipped), CUDA Graphs capture + replay,
+  API contract errors (shape / device mismatch), small-magnitude
+  numerical stability, and `soft_maxsim` backward determinism.
 
 ### Honest performance notes
 

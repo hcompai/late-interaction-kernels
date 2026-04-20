@@ -25,9 +25,11 @@ run: |
 
   pip install --no-cache-dir -e ".[dev,pylate]" --force-reinstall --no-deps
   # LateOn-Code-edge was uploaded with sentence-transformers 5.x Dense
-  # layers (`use_residual`). Upgrade ST + PyLate so we can actually load
-  # the checkpoint on the cluster image.
-  pip install --no-cache-dir -U "pylate>=1.3.3" "sentence-transformers>=5.1"
+  # layers (`use_residual`). Upgrade ST + PyLate — but with `--no-deps`
+  # to avoid triggering pip's full backtracking solver, which can OOM or
+  # spin for 30+ minutes downloading every historical `anyio` /
+  # `httpcore` / `rfc3986`.
+  pip install --no-cache-dir --no-deps -U "pylate>=1.3.3" "sentence-transformers>=5.1"
   python -c "import late_interaction_kernels as L; print('lik', L.__version__)"
   python -c "import pylate, sentence_transformers; print('pylate', pylate.__version__, 'st', sentence_transformers.__version__)"
 
