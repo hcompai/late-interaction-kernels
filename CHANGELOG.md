@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — CSR backward + auto-selector
+
+### Added
+- Scatter-free CSR (`"csr"`) backward path for `grad_D`. Per doc-batch
+  cub radix sort of the argmax buffer, `torch.searchsorted` to build
+  CSR row_ptr, then one Triton program per `(j, t)` output cell does
+  a non-atomic bucket reduction. Zero contention, one write per cell.
+- `flash_colbert.set_backward_method("auto"|"csr"|"atomic")` +
+  `get_backward_method()` for process-wide selection.
+- `"auto"` (default): empirical three-term heuristic picks CSR on
+  (`Nq·Nd·Lq·d ≥ 1e8` | `Lq ≥ 1024` | `Nd ≥ 1024`), atomic otherwise.
+- `benchmarks/bench_backward_method.py` — CSR vs atomic vs naive sweep
+  across 10 training / retrieval / long-sequence shapes.
+- 20 new tests (`tests/test_backward_csr.py`) — parity, equivalence,
+  hot-bucket stress, empty-bucket handling, determinism, bf16, mask
+  interactions, non-power-of-two `d`, `auto`-picks-correct-path.
+
+### Changed
+- Default grad_D path is now `"auto"` (was implicit `"atomic"` in 0.1).
+- `docs/design.md` expanded with CSR design + measured numbers + the
+  honest finding that CSR **does not always win** on H100 (its win
+  regime is large-batch or long-sequence training).
+
+### Performance (1×H100 80 GB HBM3, fp16 inputs, end-to-end forward+backward)
+- Default `auto` matches the best manually-chosen path on 11/11 shapes.
+- **CSR wins by ~1.3×–1.5×** on `train-256`, `long-Lq`, `huge-Nd`.
+- **Atomic wins by ~1.2×–1.4×** on small/medium training shapes — H100
+  hardware atomics coalesce at L2 faster than the CSR `sort` amortizes
+  for those workloads.
+
 ## 0.1.0 — initial release
 
 ### Added

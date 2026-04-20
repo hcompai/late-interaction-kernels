@@ -100,17 +100,56 @@ care about.
 `j ∈ Nd`, gathers `D[j, argmax[i,j,s], :]`, weighted sum, write.
 
 `grad_D` has output contention: the same `(j, t)` slot receives contributions
-from many `(i, s)` pairs. We use `tl.atomic_add` in **fp32** (not fp16 like
-`flash-maxsim`'s backward). H100 fp32 atomics run at ~1 cycle / element and
-are fully deterministic under tie-breaking rules that don't depend on
-thread-execution order, so the result is bitwise reproducible between runs
-as long as argmax ties break the same way (and they do — `tl.argmax` is
-deterministic).
+from many `(i, s)` pairs. We provide two implementations selected by
+`set_backward_method`:
 
-Alternative backward path (future work — toggle `save_argmax=False`): redo
-the forward max in the backward, picking the winner on the fly. Saves the
-argmax buffer at the cost of one extra GEMM. Analogous to FlashAttention's
-recompute backward.
+1. **Atomic** (`"atomic"`) — `tl.atomic_add` in **fp32** (not fp16 like
+   `flash-maxsim`'s backward). H100 fp32 atomics run at ~1 cycle / element
+   and are fully deterministic under tie-breaking rules that don't depend
+   on thread-execution order, so the result is bitwise reproducible between
+   runs as long as argmax ties break the same way (and they do — `tl.argmax`
+   is deterministic).
+
+2. **CSR** (`"csr"`) — scatter-free bucketed reduction. We sort the argmax
+   per doc-batch into a CSR structure `(row_ptr, perm)` where
+   `perm[j, row_ptr[j, t] : row_ptr[j, t+1]]` lists every `(i, s)` whose
+   argmax is `t`. Each `(j, t)` program then reduces its own bucket into a
+   register accumulator and writes once — no atomics at all. Build cost is
+   `Nd` independent cub radix-sorts of `Nq · Lq` int32 keys plus a batched
+   `searchsorted`; typically a few hundred µs.
+
+3. **Auto** (`"auto"`, default) — pick atomic vs CSR based on workload:
+
+   ```python
+   csr_wins = (
+       Nq * Nd * Lq * d >= 1e8      # sheer atomic volume
+       or (Lq >= 1024 and Nq*Nd >= 16)   # long-sequence (ColPali-like)
+       or Nd >= 1024                 # huge corpus
+   )
+   ```
+
+   This is empirical from a sweep on 1×H100 (see
+   `benchmarks/bench_backward_method.py`). In **every other case**, H100's
+   hardware-accelerated fp32 atomic_add beats CSR because CSR's fixed cost
+   (sort + empty-bucket stores for the `Nd · Ld` grid) dominates when the
+   atomic workload is modest. That's a surprising result — we expected CSR
+   to always win — and flipped the default accordingly.
+
+Measured on H100 80 GB (ms per forward+backward step, fp16):
+
+| shape                       | atomic | CSR  | auto | auto picks |
+| --------------------------- | :----: | :--: | :--: | :--------: |
+| train-32  (32 × 32, Lq=32)  | 0.48   | 0.66 | 0.49 | atomic     |
+| train-128 (128 × 128)       | 0.50   | 0.65 | 0.51 | atomic     |
+| train-256 (256 × 256)       | 1.85   | 1.25 | 1.25 | **CSR**    |
+| retrieval (16 × 512, L=300) | 0.47   | 0.65 | 0.48 | atomic     |
+| long-Lq (Lq=1024)           | 0.85   | 0.65 | 0.66 | **CSR**    |
+| huge-Nd (Nd=1024)           | 0.66   | 0.65 | 0.65 | **CSR**    |
+
+**Alternative backward path** (future work — toggle `save_argmax=False`):
+redo the forward max in the backward, picking the winner on the fly. Saves
+the argmax buffer at the cost of one extra GEMM. Analogous to
+FlashAttention's recompute backward.
 
 ## Varlen / packed path
 

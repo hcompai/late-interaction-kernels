@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flash-colbert"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fused Triton kernels for ColBERT / ColPali late-interaction MaxSim — with masks, varlen, and training-grade backward."
 readme = "README.md"
 requires-python = ">=3.9"

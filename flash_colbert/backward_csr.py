@@ -1,0 +1,181 @@
+"""CSR (scatter-free) backward for grad_D.
+
+Motivation
+----------
+The default atomic backward scatters ``gs * Q[i, s, :]`` into
+``grad_D[j, argmax[i, j, s], :]`` with ``fp32 tl.atomic_add``. When multiple
+``(i, s)`` pairs land on the same ``t = argmax[i, j, s]`` (which is the norm —
+the average bucket size is ``Nq * Lq / Ld``), the atomics contend on the same
+cache line and serialize through L2. On H100 this caps grad_D throughput to
+the atomic-add rate (~1.5 GFLOPs/SM) rather than the tensor-core or HBM rate.
+
+The CSR path inverts the scatter: we build a per-``j`` CSR structure where
+``row_ptr[j, t]..row_ptr[j, t+1]`` lists every ``(i, s)`` whose argmax is
+``t``. Then each ``(j, t)`` program sums that bucket into one register
+accumulator and does a single non-atomic store. Zero contention, one write
+per output element.
+
+Cost of the CSR build is ``Nd`` independent ``sort``s over ``Nq * Lq`` int32
+keys — cub radix sort handles this in a few hundred µs for realistic sizes,
+which is still strictly less than the contention penalty removed.
+
+Determinism
+-----------
+The reduction order inside each bucket is the order the sort returns, which
+is data-dependent. That means CSR is **bitwise** different from the atomic
+path on the same inputs, but it is itself deterministic (same input → same
+output) because sort is deterministic. If you need bitwise reproducibility
+across runs of the CSR path itself, you already have it.
+"""
+
+from __future__ import annotations
+
+import torch
+import triton
+import triton.language as tl
+
+from ._utils import next_pow2
+
+# ---------------------------------------------------------------------------
+# PyTorch-side CSR construction
+# ---------------------------------------------------------------------------
+
+def _build_csr(
+    argmax: torch.Tensor,
+    Nq: int,
+    Nd: int,
+    Lq: int,
+    Ld: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build per-doc-batch CSR from argmax.
+
+    Args:
+        argmax: [Nq*Nd, Lq] int32 — layout is ``(i * Nd + j, s)``.
+
+    Returns:
+        row_ptr: [Nd, Ld+1] int32 — ``row_ptr[j, t]`` is the first index in
+            ``perm[j]`` whose key is ``>= t``. ``row_ptr[j, t+1] - row_ptr[j, t]``
+            is the size of bucket ``(j, t)``.
+        perm:    [Nd, Nq*Lq] int32 — flat ``(i * Lq + s)`` indices sorted by
+            the argmax value within each ``j``-row.
+    """
+    # Reshape [Nq*Nd, Lq] -> [Nq, Nd, Lq] -> [Nd, Nq, Lq] -> [Nd, Nq*Lq]
+    # .contiguous() is required because the Triton kernel reads flat strides.
+    a = argmax.view(Nq, Nd, Lq).permute(1, 0, 2).contiguous().view(Nd, Nq * Lq)
+
+    # Sort each j-row. `values` is sorted argmax ids; `perm` is the original
+    # flat index k = i*Lq + s that landed there.
+    sorted_t, perm = a.sort(dim=1)
+
+    # row_ptr via batched searchsorted.
+    # boundaries[j, :] = [0, 1, ..., Ld], expanded per doc-batch.
+    boundaries = torch.arange(Ld + 1, device=argmax.device, dtype=sorted_t.dtype)
+    boundaries = boundaries.unsqueeze(0).expand(Nd, -1).contiguous()
+    row_ptr = torch.searchsorted(sorted_t, boundaries).to(torch.int32)
+
+    return row_ptr, perm.to(torch.int32)
+
+
+# ---------------------------------------------------------------------------
+# Triton CSR kernel for grad_D
+# ---------------------------------------------------------------------------
+
+@triton.jit
+def _bwd_dD_csr_kernel(
+    Q_ptr, perm_ptr, row_ptr_ptr, grad_s_ptr, q_mask_ptr, grad_D_ptr,
+    Nd: tl.constexpr, Lq: tl.constexpr, Ld: tl.constexpr,
+    d: tl.constexpr, d_pad: tl.constexpr,
+    stride_q_n, stride_q_l, stride_q_k,
+    stride_gs_n, stride_gs_d,
+    stride_qm_n, stride_qm_l,
+    stride_gd_n, stride_gd_l, stride_gd_k,
+    stride_rp_n, stride_rp_l,
+    stride_perm_n, stride_perm_f,
+    has_q_mask: tl.constexpr,
+):
+    """One program per ``(j, t)`` output row.
+
+    Reduces ``grad_D[j, t, :] = Σ gs[i, j] * Q[i, s, :]`` over the bucket
+    ``perm[j, row_ptr[j, t] : row_ptr[j, t+1]]``. No atomics, one store.
+    """
+    pid = tl.program_id(0)
+    j = pid // Ld
+    t = pid % Ld
+
+    k_off = tl.arange(0, d_pad)
+    km = k_off < d
+
+    start = tl.load(row_ptr_ptr + j * stride_rp_n + t * stride_rp_l).to(tl.int32)
+    end = tl.load(row_ptr_ptr + j * stride_rp_n + (t + 1) * stride_rp_l).to(tl.int32)
+
+    acc = tl.zeros([d_pad], dtype=tl.float32)
+
+    # Dynamic-bound loop — Triton lowers this to a while loop on the GPU.
+    # Empty bucket (start == end) skips the body and we store zeros below.
+    for off in range(start, end):
+        flat = tl.load(perm_ptr + j * stride_perm_n + off * stride_perm_f).to(tl.int32)
+        i = flat // Lq
+        s = flat % Lq
+
+        q_active = True
+        if has_q_mask:
+            qm = tl.load(q_mask_ptr + i * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = qm != 0
+
+        if q_active:
+            gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+            qv = tl.load(
+                Q_ptr + i * stride_q_n + s * stride_q_l + k_off * stride_q_k,
+                mask=km, other=0.0,
+            ).to(tl.float32)
+            acc += gs * qv
+
+    tl.store(
+        grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k_off * stride_gd_k,
+        acc, mask=km,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public launcher
+# ---------------------------------------------------------------------------
+
+def maxsim_backward_csr_dD(
+    grad_scores: torch.Tensor,
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    argmax: torch.Tensor,
+    q_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    """Compute ``grad_D`` only, via the CSR path.
+
+    Args match ``maxsim_backward`` in ``backward.py``. ``grad_Q`` is computed
+    by the existing non-atomic kernel in ``backward.py``.
+
+    Returns:
+        grad_D: [Nd, Ld, d] fp32 (caller casts to D.dtype).
+    """
+    Nq, Lq, d = Q.shape
+    Nd, Ld, _ = D.shape
+    d_pad = next_pow2(d)
+
+    row_ptr, perm = _build_csr(argmax, Nq, Nd, Lq, Ld)
+
+    grad_D = torch.zeros(Nd, Ld, d, device=D.device, dtype=torch.float32)
+
+    has_q_mask = q_mask is not None
+    qm_ptr = q_mask if has_q_mask else Q
+    qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
+
+    _bwd_dD_csr_kernel[(Nd * Ld,)](
+        Q, perm, row_ptr, grad_scores, qm_ptr, grad_D,
+        Nd, Lq, Ld, d, d_pad,
+        Q.stride(0), Q.stride(1), Q.stride(2),
+        grad_scores.stride(0), grad_scores.stride(1),
+        qm_strides[0], qm_strides[1],
+        grad_D.stride(0), grad_D.stride(1), grad_D.stride(2),
+        row_ptr.stride(0), row_ptr.stride(1),
+        perm.stride(0), perm.stride(1),
+        has_q_mask,
+    )
+    return grad_D

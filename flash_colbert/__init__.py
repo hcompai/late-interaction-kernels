@@ -19,9 +19,14 @@ Reference
     from flash_colbert.reference import maxsim_reference, maxsim_reference_soft
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from .autograd import maxsim, maxsim_inference
+from .autograd import (
+    get_backward_method,
+    maxsim,
+    maxsim_inference,
+    set_backward_method,
+)
 from .forward import maxsim_forward
 from .soft import soft_maxsim
 from .varlen import maxsim_varlen
@@ -32,5 +37,7 @@ __all__ = [
     "maxsim_forward",
     "soft_maxsim",
     "maxsim_varlen",
+    "set_backward_method",
+    "get_backward_method",
     "__version__",
 ]
