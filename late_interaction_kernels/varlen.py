@@ -44,17 +44,27 @@ from ._utils import next_pow2, pick_compute_dtype
 )
 @triton.jit
 def _varlen_fwd_kernel(
-    Q_ptr, D_ptr,
-    cu_q_ptr, cu_d_ptr,
+    Q_ptr,
+    D_ptr,
+    cu_q_ptr,
+    cu_d_ptr,
     scores_ptr,
-    Nq: tl.constexpr, Nd: tl.constexpr,
-    max_lq: tl.constexpr, max_ld: tl.constexpr,
-    d: tl.constexpr, d_pad: tl.constexpr,
-    stride_q_t, stride_q_k,
-    stride_d_t, stride_d_k,
-    stride_s_n, stride_s_d,
-    Lq: tl.constexpr, Ld: tl.constexpr,  # unused, kept for autotune key compat
-    BLOCK_Q: tl.constexpr, BLOCK_D: tl.constexpr,
+    Nq: tl.constexpr,
+    Nd: tl.constexpr,
+    max_lq: tl.constexpr,
+    max_ld: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    stride_q_t,
+    stride_q_k,
+    stride_d_t,
+    stride_d_k,
+    stride_s_n,
+    stride_s_d,
+    Lq: tl.constexpr,
+    Ld: tl.constexpr,  # unused, kept for autotune key compat
+    BLOCK_Q: tl.constexpr,
+    BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -159,14 +169,25 @@ def maxsim_varlen(
     D_packed = D_packed.contiguous()
 
     _varlen_fwd_kernel[(Nq * Nd,)](
-        Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d, scores,
-        Nq, Nd,
-        max_seqlen_q, max_seqlen_d,
-        d, d_pad,
-        Q_packed.stride(0), Q_packed.stride(1),
-        D_packed.stride(0), D_packed.stride(1),
-        scores.stride(0), scores.stride(1),
-        max_seqlen_q, max_seqlen_d,  # Lq, Ld placeholders
+        Q_packed,
+        D_packed,
+        cu_seqlens_q,
+        cu_seqlens_d,
+        scores,
+        Nq,
+        Nd,
+        max_seqlen_q,
+        max_seqlen_d,
+        d,
+        d_pad,
+        Q_packed.stride(0),
+        Q_packed.stride(1),
+        D_packed.stride(0),
+        D_packed.stride(1),
+        scores.stride(0),
+        scores.stride(1),
+        max_seqlen_q,
+        max_seqlen_d,  # Lq, Ld placeholders
         COMPUTE_DTYPE=tl_dtype,
     )
     return scores

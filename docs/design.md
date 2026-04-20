@@ -73,7 +73,7 @@ PyLate and `flash-maxsim` handle masks differently:
   A masked position becomes `0`, which can still win the `max` if the true
   scores were all negative.
 - `flash-maxsim` applies the mask *after* the forward kernel (post-scale).
-- `flash-colbert` applies the mask *inside* the kernel, before every
+- `late-interaction-kernels` applies the mask *inside* the kernel, before every
   `tl.max` reduction, by overwriting masked positions with `−inf`. This has
   two benefits:
   1. Masked positions never influence the argmax (semantic correctness).
@@ -104,11 +104,11 @@ from many `(i, s)` pairs. We provide two implementations selected by
 `set_backward_method`:
 
 1. **Atomic** (`"atomic"`) — `tl.atomic_add` in **fp32** (not fp16 like
-   `flash-maxsim`'s backward). H100 fp32 atomics run at ~1 cycle / element
-   and are fully deterministic under tie-breaking rules that don't depend
-   on thread-execution order, so the result is bitwise reproducible between
-   runs as long as argmax ties break the same way (and they do — `tl.argmax`
-   is deterministic).
+   `flash-maxsim`'s backward). H100 fp32 atomics run at ~1 cycle / element.
+   The reduction order depends on thread scheduling, so the path is **not
+   strictly bitwise-reproducible across runs**, but the fp32 ULP drift is
+   bounded by ~1e-6 relative (far below fp16 / bf16 input noise). Argmax
+   selection itself is fully deterministic (`tl.argmax` is stable).
 
 2. **CSR** (`"csr"`) — scatter-free bucketed reduction. We sort the argmax
    per doc-batch into a CSR structure `(row_ptr, perm)` where

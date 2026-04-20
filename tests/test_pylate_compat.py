@@ -13,7 +13,7 @@ pylate = pytest.importorskip("pylate")
 def test_pylate_colbert_scores_patched():
     from pylate.scores import colbert_scores as original_fn
 
-    from flash_colbert.pylate_compat import patch_pylate, unpatch_pylate
+    from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
 
     Q = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
     D = torch.randn(8, 128, 128, device="cuda", dtype=torch.float32)
@@ -41,12 +41,27 @@ def test_pylate_colbert_scores_patched():
 
 def test_pylate_contrastive_loss_uses_flash():
     """Verify the monkey-patch propagates into `pylate.losses.contrastive`."""
-    from flash_colbert.pylate_compat import flash_colbert_scores, patch_pylate, unpatch_pylate
+    from late_interaction_kernels.pylate_compat import patch_pylate, patched_colbert_scores, unpatch_pylate
 
     patch_pylate()
     try:
         import pylate.losses.contrastive as c
 
-        assert c.colbert_scores is flash_colbert_scores
+        assert c.colbert_scores is patched_colbert_scores
+    finally:
+        unpatch_pylate()
+
+
+def test_pylate_cached_contrastive_loss_uses_flash():
+    """`CachedContrastive` is the LightOn Reason-ModernColBERT training recipe —
+    it chunks MaxSim via the `score_metric` parameter (default `colbert_scores`).
+    Make sure our patch intercepts that import too."""
+    from late_interaction_kernels.pylate_compat import patch_pylate, patched_colbert_scores, unpatch_pylate
+
+    patch_pylate()
+    try:
+        import pylate.losses.cached_contrastive as cc
+
+        assert cc.colbert_scores is patched_colbert_scores
     finally:
         unpatch_pylate()

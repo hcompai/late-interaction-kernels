@@ -1,0 +1,49 @@
+name: Bug report
+description: A kernel crashes, returns wrong numbers, or misbehaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of the commands below.
+      placeholder: |
+        python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+        python -c "import triton; print('triton', triton.__version__)"
+        python -c "import late_interaction_kernels as lik; print('lik', lik.__version__)"
+        nvidia-smi | head -5
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: Ideally < 20 lines of runnable Python.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed vs expected
+      description: Include tracebacks, numerical diffs, or perf numbers.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: Shape
+      description: "(Nq, Nd, Lq, Ld, d), dtype, mask usage, backward method."
+      placeholder: "Nq=32, Nd=32, Lq=32, Ld=300, d=128, fp16, d_mask=True, auto"

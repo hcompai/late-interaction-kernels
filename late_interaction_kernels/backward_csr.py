@@ -40,6 +40,7 @@ from ._utils import next_pow2
 # PyTorch-side CSR construction
 # ---------------------------------------------------------------------------
 
+
 def _build_csr(
     argmax: torch.Tensor,
     Nq: int,
@@ -80,17 +81,34 @@ def _build_csr(
 # Triton CSR kernel for grad_D
 # ---------------------------------------------------------------------------
 
+
 @triton.jit
 def _bwd_dD_csr_kernel(
-    Q_ptr, perm_ptr, row_ptr_ptr, grad_s_ptr, q_mask_ptr, grad_D_ptr,
-    Nd: tl.constexpr, Lq: tl.constexpr, Ld: tl.constexpr,
-    d: tl.constexpr, d_pad: tl.constexpr,
-    stride_q_n, stride_q_l, stride_q_k,
-    stride_gs_n, stride_gs_d,
-    stride_qm_n, stride_qm_l,
-    stride_gd_n, stride_gd_l, stride_gd_k,
-    stride_rp_n, stride_rp_l,
-    stride_perm_n, stride_perm_f,
+    Q_ptr,
+    perm_ptr,
+    row_ptr_ptr,
+    grad_s_ptr,
+    q_mask_ptr,
+    grad_D_ptr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    Ld: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    stride_q_n,
+    stride_q_l,
+    stride_q_k,
+    stride_gs_n,
+    stride_gs_d,
+    stride_qm_n,
+    stride_qm_l,
+    stride_gd_n,
+    stride_gd_l,
+    stride_gd_k,
+    stride_rp_n,
+    stride_rp_l,
+    stride_perm_n,
+    stride_perm_f,
     has_q_mask: tl.constexpr,
 ):
     """One program per ``(j, t)`` output row.
@@ -126,19 +144,22 @@ def _bwd_dD_csr_kernel(
             gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
             qv = tl.load(
                 Q_ptr + i * stride_q_n + s * stride_q_l + k_off * stride_q_k,
-                mask=km, other=0.0,
+                mask=km,
+                other=0.0,
             ).to(tl.float32)
             acc += gs * qv
 
     tl.store(
         grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k_off * stride_gd_k,
-        acc, mask=km,
+        acc,
+        mask=km,
     )
 
 
 # ---------------------------------------------------------------------------
 # Public launcher
 # ---------------------------------------------------------------------------
+
 
 def maxsim_backward_csr_dD(
     grad_scores: torch.Tensor,
@@ -168,14 +189,31 @@ def maxsim_backward_csr_dD(
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
 
     _bwd_dD_csr_kernel[(Nd * Ld,)](
-        Q, perm, row_ptr, grad_scores, qm_ptr, grad_D,
-        Nd, Lq, Ld, d, d_pad,
-        Q.stride(0), Q.stride(1), Q.stride(2),
-        grad_scores.stride(0), grad_scores.stride(1),
-        qm_strides[0], qm_strides[1],
-        grad_D.stride(0), grad_D.stride(1), grad_D.stride(2),
-        row_ptr.stride(0), row_ptr.stride(1),
-        perm.stride(0), perm.stride(1),
+        Q,
+        perm,
+        row_ptr,
+        grad_scores,
+        qm_ptr,
+        grad_D,
+        Nd,
+        Lq,
+        Ld,
+        d,
+        d_pad,
+        Q.stride(0),
+        Q.stride(1),
+        Q.stride(2),
+        grad_scores.stride(0),
+        grad_scores.stride(1),
+        qm_strides[0],
+        qm_strides[1],
+        grad_D.stride(0),
+        grad_D.stride(1),
+        grad_D.stride(2),
+        row_ptr.stride(0),
+        row_ptr.stride(1),
+        perm.stride(0),
+        perm.stride(1),
         has_q_mask,
     )
     return grad_D

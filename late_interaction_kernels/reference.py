@@ -67,9 +67,7 @@ def maxsim_reference(
 
     # If an entire row is -inf (whole doc masked) max() would give -inf; clamp to 0.
     row_max = S.max(dim=-1).values  # [Nq, Nd, Lq]
-    row_max = torch.where(
-        torch.isfinite(row_max), row_max, torch.zeros_like(row_max)
-    )
+    row_max = torch.where(torch.isfinite(row_max), row_max, torch.zeros_like(row_max))
 
     if q_mask is not None:
         if q_mask.dim() == 1:
@@ -119,9 +117,7 @@ def maxsim_reference_soft(
 
     # (1/beta) * logsumexp(beta * S, dim=-1)
     row_soft = (1.0 / beta) * torch.logsumexp(beta * S, dim=-1)  # [Nq, Nd, Lq]
-    row_soft = torch.where(
-        torch.isfinite(row_soft), row_soft, torch.zeros_like(row_soft)
-    )
+    row_soft = torch.where(torch.isfinite(row_soft), row_soft, torch.zeros_like(row_soft))
 
     if q_mask is not None:
         if q_mask.dim() == 1:

@@ -40,16 +40,32 @@ from ._utils import next_pow2
 # grad_Q kernel — one program per (q_batch, q_token)
 # ---------------------------------------------------------------------------
 
+
 @triton.jit
 def _bwd_dQ_kernel(
-    D_ptr, argmax_ptr, grad_s_ptr, q_mask_ptr, grad_Q_ptr,
-    Nq: tl.constexpr, Nd: tl.constexpr, Lq: tl.constexpr,
-    Ld: tl.constexpr, d: tl.constexpr, d_pad: tl.constexpr,
-    stride_d_n, stride_d_l, stride_d_k,
-    stride_gs_n, stride_gs_d,
-    stride_qm_n, stride_qm_l,
-    stride_gq_n, stride_gq_l, stride_gq_k,
-    stride_a_pair, stride_a_lq,
+    D_ptr,
+    argmax_ptr,
+    grad_s_ptr,
+    q_mask_ptr,
+    grad_Q_ptr,
+    Nq: tl.constexpr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    Ld: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    stride_d_n,
+    stride_d_l,
+    stride_d_k,
+    stride_gs_n,
+    stride_gs_d,
+    stride_qm_n,
+    stride_qm_l,
+    stride_gq_n,
+    stride_gq_l,
+    stride_gq_k,
+    stride_a_pair,
+    stride_a_lq,
     has_q_mask: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -72,13 +88,15 @@ def _bwd_dQ_kernel(
             t = t.to(tl.int32)
             v = tl.load(
                 D_ptr + j * stride_d_n + t * stride_d_l + k * stride_d_k,
-                mask=km, other=0.0,
+                mask=km,
+                other=0.0,
             ).to(tl.float32)
             acc += gs * v
 
     tl.store(
         grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
-        acc, mask=km,
+        acc,
+        mask=km,
     )
 
 
@@ -86,16 +104,31 @@ def _bwd_dQ_kernel(
 # grad_D kernel — atomic-add scatter. One program per (q_batch, d_batch).
 # ---------------------------------------------------------------------------
 
+
 @triton.jit
 def _bwd_dD_kernel(
-    Q_ptr, argmax_ptr, grad_s_ptr, q_mask_ptr, grad_D_ptr,
-    Nd: tl.constexpr, Lq: tl.constexpr, Ld: tl.constexpr,
-    d: tl.constexpr, d_pad: tl.constexpr,
-    stride_q_n, stride_q_l, stride_q_k,
-    stride_gs_n, stride_gs_d,
-    stride_qm_n, stride_qm_l,
-    stride_gd_n, stride_gd_l, stride_gd_k,
-    stride_a_pair, stride_a_lq,
+    Q_ptr,
+    argmax_ptr,
+    grad_s_ptr,
+    q_mask_ptr,
+    grad_D_ptr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    Ld: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    stride_q_n,
+    stride_q_l,
+    stride_q_k,
+    stride_gs_n,
+    stride_gs_d,
+    stride_qm_n,
+    stride_qm_l,
+    stride_gd_n,
+    stride_gd_l,
+    stride_gd_k,
+    stride_a_pair,
+    stride_a_lq,
     has_q_mask: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -119,17 +152,20 @@ def _bwd_dD_kernel(
             t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
             qv = tl.load(
                 Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
-                mask=km, other=0.0,
+                mask=km,
+                other=0.0,
             ).to(tl.float32)
             tl.atomic_add(
                 grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
-                gs * qv, mask=km,
+                gs * qv,
+                mask=km,
             )
 
 
 # ---------------------------------------------------------------------------
 # Python-side launcher
 # ---------------------------------------------------------------------------
+
 
 def maxsim_backward(
     grad_scores: torch.Tensor,
@@ -195,13 +231,29 @@ def maxsim_backward(
     # grad_Q kernel is shared — it already has no atomics (each query-token
     # program owns its output row).
     _bwd_dQ_kernel[(Nq * Lq,)](
-        D, argmax, grad_scores, qm_ptr, grad_Q,
-        Nq, Nd, Lq, Ld, d, d_pad,
-        D.stride(0), D.stride(1), D.stride(2),
-        grad_scores.stride(0), grad_scores.stride(1),
-        qm_strides[0], qm_strides[1],
-        grad_Q.stride(0), grad_Q.stride(1), grad_Q.stride(2),
-        argmax.stride(0), argmax.stride(1),
+        D,
+        argmax,
+        grad_scores,
+        qm_ptr,
+        grad_Q,
+        Nq,
+        Nd,
+        Lq,
+        Ld,
+        d,
+        d_pad,
+        D.stride(0),
+        D.stride(1),
+        D.stride(2),
+        grad_scores.stride(0),
+        grad_scores.stride(1),
+        qm_strides[0],
+        qm_strides[1],
+        grad_Q.stride(0),
+        grad_Q.stride(1),
+        grad_Q.stride(2),
+        argmax.stride(0),
+        argmax.stride(1),
         has_q_mask,
     )
 
@@ -213,13 +265,28 @@ def maxsim_backward(
     else:
         grad_D = torch.zeros(Nd, Ld, d, device=D.device, dtype=torch.float32)
         _bwd_dD_kernel[(Nq * Nd,)](
-            Q, argmax, grad_scores, qm_ptr, grad_D,
-            Nd, Lq, Ld, d, d_pad,
-            Q.stride(0), Q.stride(1), Q.stride(2),
-            grad_scores.stride(0), grad_scores.stride(1),
-            qm_strides[0], qm_strides[1],
-            grad_D.stride(0), grad_D.stride(1), grad_D.stride(2),
-            argmax.stride(0), argmax.stride(1),
+            Q,
+            argmax,
+            grad_scores,
+            qm_ptr,
+            grad_D,
+            Nd,
+            Lq,
+            Ld,
+            d,
+            d_pad,
+            Q.stride(0),
+            Q.stride(1),
+            Q.stride(2),
+            grad_scores.stride(0),
+            grad_scores.stride(1),
+            qm_strides[0],
+            qm_strides[1],
+            grad_D.stride(0),
+            grad_D.stride(1),
+            grad_D.stride(2),
+            argmax.stride(0),
+            argmax.stride(1),
             has_q_mask,
         )
 

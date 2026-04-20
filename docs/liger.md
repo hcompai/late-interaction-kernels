@@ -1,4 +1,4 @@
-# Should flash-colbert be a Liger-Kernel addition?
+# Should late-interaction-kernels be a Liger-Kernel addition?
 
 Short answer: **it could live in Liger, and a PR would likely be accepted, but the standalone library is a better home today.** Here is the reasoning.
 
@@ -40,7 +40,7 @@ A `liger_kernel/ops/maxsim.py` kernel and a `MaxSimLoss` wrapper in
 `liger_kernel/transformers/` would fit that folder convention. The Triton
 style (`@triton.autotune` + `torch.autograd.Function`) matches Liger
 perfectly — our `autograd.py` is deliberately written in that exact idiom
-(compare `flash_colbert/autograd.py` to `liger_kernel/ops/softmax.py`).
+(compare `late_interaction_kernels/autograd.py` to `liger_kernel/ops/softmax.py`).
 
 ## Why we're not doing that today
 
@@ -50,7 +50,7 @@ perfectly — our `autograd.py` is deliberately written in that exact idiom
    `apply_liger_kernel_to_pylate` is doable but crosses a project
    boundary.
 
-2. **Varlen + masks are first-class here, not in Liger**: flash-colbert
+2. **Varlen + masks are first-class here, not in Liger**: late-interaction-kernels
    carries a packed/varlen kernel and the mask-fused kernels that retrieval
    workloads actually need. Liger's kernels mostly operate on packed
    `[B·T]` tensors without the retrieval-specific mask semantics.
@@ -60,17 +60,17 @@ perfectly — our `autograd.py` is deliberately written in that exact idiom
    pinning that inside Liger adds a non-transformers dependency to an
    LLM-training library.
 
-4. **Audience**: Liger users are LLM trainers. flash-colbert users are
+4. **Audience**: Liger users are LLM trainers. late-interaction-kernels users are
    retrieval people. Keeping them in separate installs lets each track its
    own release cadence (e.g., we can ship a fix for a PyLate version bump
    without waiting on a Liger release).
 
 ## What I would do
 
-- **Today**: ship `flash-colbert` as its own `pip install flash-colbert`
+- **Today**: ship `late-interaction-kernels` as its own `pip install late-interaction-kernels`
   package — which is what this repo is.
 - **If LinkedIn accepts it**: open a Liger PR that vendors the
-  `flash_colbert.forward`, `backward`, `autograd` modules under
+  `late_interaction_kernels.forward`, `backward`, `autograd` modules under
   `liger_kernel/ops/maxsim.py` + `liger_kernel/chunked_loss/maxsim_loss.py`
   (Liger already has a `chunked_loss` submodule for memory-efficient
   losses). That delivery form reuses Liger's autotune caches and test
@@ -85,7 +85,7 @@ perfectly — our `autograd.py` is deliberately written in that exact idiom
 
 ## Summary
 
-|                              | flash-colbert (standalone) | as Liger-Kernel op |
+|                              | late-interaction-kernels (standalone) | as Liger-Kernel op |
 | ---------------------------- | -------------------------- | ------------------ |
 | Code style fits              | ✓ (modeled after it)       | ✓                 |
 | Maintenance overhead         | 1 repo                     | cross-project     |
@@ -95,7 +95,7 @@ perfectly — our `autograd.py` is deliberately written in that exact idiom
 | Visibility to LLM engineers  | −                          | ✓                 |
 | Visibility to IR engineers   | ✓                          | −                 |
 
-Best of both worlds is probably to keep flash-colbert as the canonical
+Best of both worlds is probably to keep late-interaction-kernels as the canonical
 place for the kernel and publish a thin Liger adapter once the Liger team
 is interested — which is what `docs/liger.md` will become: a "how to wire
 this into Liger" guide.

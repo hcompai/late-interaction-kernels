@@ -1,12 +1,12 @@
-# 8×H100 single-node dev box for flash-colbert.
-#   sky launch -c flash-colbert-dev scripts/sky_dev.yaml
+# 8×H100 single-node dev box for late-interaction-kernels.
+#   sky launch -c late-interaction-kernels-dev scripts/sky_dev.yaml
 #
 # Afterwards:
-#   sky ssh flash-colbert-dev
-#   sky stop flash-colbert-dev   # keep cluster but idle
-#   sky down flash-colbert-dev   # tear down
+#   sky ssh late-interaction-kernels-dev
+#   sky stop late-interaction-kernels-dev   # keep cluster but idle
+#   sky down late-interaction-kernels-dev   # tear down
 
-name: flash-colbert-dev
+name: late-interaction-kernels-dev
 
 resources:
   infra: kubernetes
@@ -30,7 +30,7 @@ config:
 setup: |
   set -eux
   cd ~/sky_workdir
-  pip install --no-cache-dir -e ".[dev,bench,pylate]" || pip install --no-cache-dir -e ".[dev,bench]"
+  pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
   python -c "import torch, triton; print('torch', torch.__version__, 'triton', triton.__version__); print(torch.cuda.get_device_name())"
 
 run: |

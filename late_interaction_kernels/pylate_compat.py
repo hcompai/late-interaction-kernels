@@ -2,11 +2,11 @@
 
 Usage
 -----
-    from flash_colbert.pylate_compat import patch_pylate
-    patch_pylate()             # after this, PyLate training & rerank use flash-colbert
+    from late_interaction_kernels.pylate_compat import patch_pylate
+    patch_pylate()             # after this, PyLate training & rerank use late-interaction-kernels
 
     # to revert:
-    from flash_colbert.pylate_compat import unpatch_pylate
+    from late_interaction_kernels.pylate_compat import unpatch_pylate
     unpatch_pylate()
 
 The replacement honors PyLate's exact signature:
@@ -22,7 +22,7 @@ We fall back to the original PyTorch implementation when:
   * tensors are on CPU,
   * CUDA device isn't Ampere-or-newer,
   * `d` (embedding dim) is ridiculously small (< 8) — naive is fine,
-  * the environment variable `FLASH_COLBERT_DISABLE=1` is set.
+  * the environment variable `LIK_DISABLE=1` is set.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _bool_mask(m):
 
 
 def _should_fallback(q: torch.Tensor, d: torch.Tensor) -> bool:
-    if os.environ.get("FLASH_COLBERT_DISABLE", "0") == "1":
+    if os.environ.get("LIK_DISABLE", "0") == "1":
         return True
     if not q.is_cuda or not d.is_cuda:
         return True
@@ -70,7 +70,7 @@ def _mask_as_bool(m):
     return m != 0
 
 
-def flash_colbert_scores(queries_embeddings, documents_embeddings, mask=None):
+def patched_colbert_scores(queries_embeddings, documents_embeddings, mask=None):
     """Drop-in replacement for `pylate.scores.colbert_scores` (pylate 1.2).
 
     PyLate signature: `colbert_scores(Q, D, mask=None)` where `mask` is the
@@ -88,7 +88,7 @@ def flash_colbert_scores(queries_embeddings, documents_embeddings, mask=None):
     return maxsim(Q, D, d_mask=_mask_as_bool(mask))
 
 
-def flash_colbert_kd_scores(queries_embeddings, documents_embeddings, mask=None):
+def patched_colbert_kd_scores(queries_embeddings, documents_embeddings, mask=None):
     """Drop-in replacement for `pylate.scores.colbert_kd_scores`.
 
     PyLate shape convention: `documents_embeddings` is `[Nq, Nd, Ld, d]` —
@@ -121,7 +121,7 @@ def flash_colbert_kd_scores(queries_embeddings, documents_embeddings, mask=None)
 
 
 def patch_pylate():
-    """Install flash-colbert as the default MaxSim inside `pylate.scores`."""
+    """Install late-interaction-kernels as the default MaxSim inside `pylate.scores`."""
     import pylate.scores as api  # type: ignore
     import pylate.scores.scores as s  # type: ignore
 
@@ -131,22 +131,22 @@ def patch_pylate():
     _ORIGINAL["colbert_scores"] = s.colbert_scores
     _ORIGINAL["colbert_kd_scores"] = s.colbert_kd_scores
 
-    s.colbert_scores = flash_colbert_scores
-    s.colbert_kd_scores = flash_colbert_kd_scores
-    api.colbert_scores = flash_colbert_scores
-    api.colbert_kd_scores = flash_colbert_kd_scores
+    s.colbert_scores = patched_colbert_scores
+    s.colbert_kd_scores = patched_colbert_kd_scores
+    api.colbert_scores = patched_colbert_scores
+    api.colbert_kd_scores = patched_colbert_kd_scores
 
     # Losses hold a direct reference captured at import time — patch those too.
     try:
         import pylate.losses.contrastive as c  # type: ignore
 
-        c.colbert_scores = flash_colbert_scores
+        c.colbert_scores = patched_colbert_scores
     except Exception:
         pass
     try:
         import pylate.losses.cached_contrastive as cc  # type: ignore
 
-        cc.colbert_scores = flash_colbert_scores
+        cc.colbert_scores = patched_colbert_scores
     except Exception:
         pass
 

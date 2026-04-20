@@ -1,0 +1,36 @@
+name: Performance issue
+description: The kernel is slower than expected, or slower than naive PyTorch.
+labels: ["performance"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: GPU / software
+      placeholder: |
+        H100 80 GB SXM, CUDA 12.9, torch 2.8, triton 3.6
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Measured numbers
+      description: |
+        Include what you measured, the shape, and how. Ideally use or adapt
+        one of `benchmarks/bench_*.py`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: E.g. "README claims Nx speedup at this shape but I see 0.8x."

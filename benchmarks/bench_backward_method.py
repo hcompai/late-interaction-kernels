@@ -17,7 +17,7 @@ from contextlib import nullcontext
 
 import torch
 
-from flash_colbert import maxsim, set_backward_method
+from late_interaction_kernels import maxsim, set_backward_method
 
 
 def _naive_score(Q, D):
@@ -25,18 +25,18 @@ def _naive_score(Q, D):
 
 
 SHAPES = [
-    ("train-32",     32,  32,   32,  128, 128),
-    ("train-64",     64,  64,   32,  128, 128),
-    ("train-128",   128, 128,   32,  128, 128),
-    ("train-256",   256, 256,   32,  128, 128),
-    ("train-kd",     32,   8,   32,  300, 128),
-    ("retrieval",    16, 512,   32,  300, 128),
+    ("train-32", 32, 32, 32, 128, 128),
+    ("train-64", 64, 64, 32, 128, 128),
+    ("train-128", 128, 128, 32, 128, 128),
+    ("train-256", 256, 256, 32, 128, 128),
+    ("train-kd", 32, 8, 32, 300, 128),
+    ("retrieval", 16, 512, 32, 300, 128),
     # Long-sequence regimes (ColPali-like).
-    ("long-Lq",       4,  16, 1024,   64, 128),
-    ("long-both",     4,   8,  512,  512, 128),
+    ("long-Lq", 4, 16, 1024, 64, 128),
+    ("long-both", 4, 8, 512, 512, 128),
     # Tiny Ld — low parallelism, highest atomic contention per output cell.
-    ("tiny-Ld",      64,  64,   32,   16, 128),
-    ("huge-Nd",      16, 1024,  32,  128, 128),
+    ("tiny-Ld", 64, 64, 32, 16, 128),
+    ("huge-Nd", 16, 1024, 32, 128, 128),
 ]
 
 
@@ -61,6 +61,7 @@ def _make_step(Q, D, *, hot=False):
             D.grad = None
         s = maxsim(Q, D)
         s.sum().backward()
+
     return _step
 
 
@@ -71,6 +72,7 @@ def _make_naive_step(Q, D):
             D.grad = None
         s = _naive_score(Q.float(), D.float())
         s.sum().backward()
+
     return _step
 
 
@@ -78,8 +80,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--outdir", default="benchmarks/results")
     p.add_argument("--iters", type=int, default=30)
-    p.add_argument("--include-hot", action="store_true",
-                   help="add a synthetic hot-bucket shape (worst case for atomics)")
+    p.add_argument(
+        "--include-hot", action="store_true", help="add a synthetic hot-bucket shape (worst case for atomics)"
+    )
     args = p.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
@@ -89,9 +92,11 @@ def main():
     if args.include_hot:
         shapes.append(("hot-bucket", 32, 32, 32, 128, 128))
 
-    print(f"{'shape':<12} {'Nq':>4} {'Nd':>4} {'Lq':>4} {'Ld':>5} {'d':>4}   "
-          f"{'auto ms':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
-          f"{'auto×':>5} {'pick':>6}")
+    print(
+        f"{'shape':<12} {'Nq':>4} {'Nd':>4} {'Lq':>4} {'Ld':>5} {'d':>4}   "
+        f"{'auto ms':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
+        f"{'auto×':>5} {'pick':>6}"
+    )
     for name, Nq, Nd, Lq, Ld, d in shapes:
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16, requires_grad=True)
         D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16, requires_grad=True)
@@ -122,16 +127,27 @@ def main():
             t_naive = float("nan")
 
         auto_sp = t_naive / t_auto if t_naive == t_naive else float("nan")
-        print(f"{name:<12} {Nq:>4} {Nd:>4} {Lq:>4} {Ld:>5} {d:>4}   "
-              f"{t_auto:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
-              f"{auto_sp:>5.2f} {pick:>6}")
-        rows.append({
-            "name": name, "Nq": Nq, "Nd": Nd, "Lq": Lq, "Ld": Ld, "d": d,
-            "auto_ms": t_auto, "csr_ms": t_csr, "atomic_ms": t_atomic,
-            "naive_ms": t_naive,
-            "csr_vs_atomic": t_atomic / t_csr if t_csr else None,
-            "auto_pick": pick,
-        })
+        print(
+            f"{name:<12} {Nq:>4} {Nd:>4} {Lq:>4} {Ld:>5} {d:>4}   "
+            f"{t_auto:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
+            f"{auto_sp:>5.2f} {pick:>6}"
+        )
+        rows.append(
+            {
+                "name": name,
+                "Nq": Nq,
+                "Nd": Nd,
+                "Lq": Lq,
+                "Ld": Ld,
+                "d": d,
+                "auto_ms": t_auto,
+                "csr_ms": t_csr,
+                "atomic_ms": t_atomic,
+                "naive_ms": t_naive,
+                "csr_vs_atomic": t_atomic / t_csr if t_csr else None,
+                "auto_pick": pick,
+            }
+        )
 
     # Reset to default for sanity.
     set_backward_method("auto")

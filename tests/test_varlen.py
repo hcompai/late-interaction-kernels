@@ -26,8 +26,8 @@ def _build_varlen(seqlens, d, dtype=torch.float16, device="cuda"):
     ],
 )
 def test_varlen_parity(q_lens, d_lens, d):
-    from flash_colbert import maxsim_varlen
-    from flash_colbert.reference import maxsim_reference_varlen
+    from late_interaction_kernels import maxsim_varlen
+    from late_interaction_kernels.reference import maxsim_reference_varlen
 
     Qp, cu_q = _build_varlen(q_lens, d)
     Dp, cu_d = _build_varlen(d_lens, d)
@@ -41,7 +41,7 @@ def test_varlen_parity(q_lens, d_lens, d):
 
 
 def test_varlen_empty_sequence_is_zero():
-    from flash_colbert import maxsim_varlen
+    from late_interaction_kernels import maxsim_varlen
 
     Qp, cu_q = _build_varlen([5, 0, 3], 128)  # middle query has 0 tokens
     Dp, cu_d = _build_varlen([8, 16], 128)
@@ -51,7 +51,7 @@ def test_varlen_empty_sequence_is_zero():
 
 def test_varlen_matches_padded_path():
     """Pack the docs of `maxsim` into cu_seqlens and check scores match."""
-    from flash_colbert import maxsim, maxsim_varlen
+    from late_interaction_kernels import maxsim, maxsim_varlen
 
     Nq, Nd, Lq, Ld, d = 4, 8, 32, 256, 128
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)

@@ -4,36 +4,49 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+          cache: pip
+      - run: pip install "ruff>=0.4"
       - run: ruff check .
       - run: ruff format --check .
 
-  cpu-import:
+  cpu-smoke:
+    name: CPU smoke (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Install (CPU torch)
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (CPU torch only)
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
       - name: Import check
         run: |
-          # We can import and use the reference implementation without CUDA.
-          python -c "from flash_colbert.reference import maxsim_reference; print('ok')"
-          # Triton is optional on CPU: the kernels import but must not be called.
-          python -c "import flash_colbert; print(flash_colbert.__version__)"
+          python -c "import late_interaction_kernels as lik; print(lik.__version__)"
+          python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
+      - name: Run CPU-safe tests (reference only; CUDA tests auto-skip)
+        run: pytest -q
 
-  # GPU job runs on the SkyPilot cluster via scripts/sky_test.yaml.
-  # Triggered manually: `sky jobs launch scripts/sky_test.yaml`.
+  # GPU tests live on SkyPilot — run manually or via a scheduled dispatch.
+  # See scripts/sky_test.yaml.

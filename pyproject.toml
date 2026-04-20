@@ -3,40 +3,75 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flash-colbert"
-version = "0.2.0"
-description = "Fused Triton kernels for ColBERT / ColPali late-interaction MaxSim — with masks, varlen, and training-grade backward."
+name = "late-interaction-kernels"
+version = "0.3.0"
+description = "Fused Triton kernels for late-interaction (MaxSim) scoring — ColBERT, ColPali, ModernColBERT."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
-authors = [{ name = "flash-colbert authors" }]
+authors = [
+  { name = "Aurélien Lac" },
+  { name = "Tony Wu" },
+]
+maintainers = [
+  { name = "Aurélien Lac" },
+  { name = "Tony Wu" },
+]
 keywords = [
-  "colbert", "colpali", "maxsim", "late-interaction", "triton",
-  "retrieval", "flash-attention", "kernel", "gpu",
+  "late-interaction", "maxsim", "colbert", "colpali", "moderncolbert",
+  "triton", "retrieval", "ir", "rerank", "flash-attention", "gpu-kernels",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "Environment :: GPU :: NVIDIA CUDA",
+  "Framework :: Pytest",
   "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Typing :: Typed",
 ]
 dependencies = [
   "torch>=2.1",
+  # Triton ships with CUDA torch wheels on Linux. On macOS / Windows the
+  # kernels cannot run, but the reference implementation and imports do.
   "triton>=3.0; platform_system=='Linux'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-xdist", "numpy", "ruff"]
-bench = ["pandas", "matplotlib", "tabulate"]
+# Everything needed to run tests and benchmarks locally.
+dev = [
+  "pytest>=7",
+  "pytest-xdist",
+  "numpy",
+  "ruff>=0.4",
+  "pandas",
+  "tabulate",
+]
+# PyLate integration (drop-in for `pylate.scores.colbert_scores`).
 pylate = ["pylate>=1.2"]
 
 [project.urls]
-Homepage = "https://github.com/yourorg/flash-colbert"
-Issues = "https://github.com/yourorg/flash-colbert/issues"
+Homepage = "https://github.com/hcompai/late-interaction-kernels"
+Repository = "https://github.com/hcompai/late-interaction-kernels"
+Issues = "https://github.com/hcompai/late-interaction-kernels/issues"
+Changelog = "https://github.com/hcompai/late-interaction-kernels/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/hcompai/late-interaction-kernels#readme"
 
 [tool.setuptools.packages.find]
-include = ["flash_colbert*"]
+include = ["late_interaction_kernels*"]
+
+[tool.setuptools.package-data]
+late_interaction_kernels = ["py.typed"]
 
 [tool.ruff]
 line-length = 110
@@ -44,14 +79,14 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
-# E741: `l` is the canonical logsumexp accumulator in FlashAttention / Liger
-# B023: benchmark closures intentionally capture loop vars
+# E741: `l` is the canonical logsumexp accumulator (FlashAttention / Liger).
+# B023: benchmark closures intentionally capture loop vars.
 ignore = ["E501", "B008", "E741", "B023"]
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"
 testpaths = ["tests"]
 markers = [
-  "cuda: requires CUDA device",
-  "slow: long-running perf/fuzz tests",
+  "cuda: requires a CUDA device",
+  "slow: long-running perf / fuzz tests",
 ]

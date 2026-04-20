@@ -9,8 +9,8 @@ pytestmark = pytest.mark.cuda
 
 
 def test_single_token_doc():
-    from flash_colbert import maxsim
-    from flash_colbert.reference import maxsim_reference
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
 
     Q = torch.randn(2, 8, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(3, 1, 128, device="cuda", dtype=torch.float16)
@@ -20,8 +20,8 @@ def test_single_token_doc():
 
 
 def test_single_query_token():
-    from flash_colbert import maxsim
-    from flash_colbert.reference import maxsim_reference
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
 
     Q = torch.randn(2, 1, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(3, 64, 128, device="cuda", dtype=torch.float16)
@@ -32,8 +32,8 @@ def test_single_query_token():
 
 @pytest.mark.parametrize("d", [16, 33, 37, 63, 96, 111, 250, 513])
 def test_non_power_of_two_embedding_dim(d):
-    from flash_colbert import maxsim
-    from flash_colbert.reference import maxsim_reference
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
 
     Q = torch.randn(2, 16, d, device="cuda", dtype=torch.float16)
     D = torch.randn(3, 32, d, device="cuda", dtype=torch.float16)
@@ -44,8 +44,8 @@ def test_non_power_of_two_embedding_dim(d):
 
 
 def test_non_contiguous_inputs():
-    from flash_colbert import maxsim
-    from flash_colbert.reference import maxsim_reference
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
 
     Q_big = torch.randn(4, 64, 128, device="cuda", dtype=torch.float16)
     Q = Q_big[:, ::2, :]  # stride in L dimension
@@ -57,8 +57,8 @@ def test_non_contiguous_inputs():
 
 def test_large_batch_many_docs():
     """Ensures we don't OOM or mis-compute at 'real reranking' scales."""
-    from flash_colbert import maxsim_inference
-    from flash_colbert.reference import maxsim_reference
+    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels.reference import maxsim_reference
 
     Nq, Nd, Lq, Ld, d = 1, 1000, 32, 300, 128
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)

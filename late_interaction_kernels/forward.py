@@ -45,22 +45,37 @@ from ._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
 )
 @triton.jit
 def _maxsim_fwd_kernel(
-    Q_ptr, D_ptr,
-    q_mask_ptr, d_mask_ptr,
-    scores_ptr, argmax_ptr,
-    Nq: tl.constexpr, Nd: tl.constexpr,
-    Lq: tl.constexpr, Ld: tl.constexpr,
-    d: tl.constexpr, d_pad: tl.constexpr,
-    stride_q_n, stride_q_l, stride_q_d,
-    stride_d_n, stride_d_l, stride_d_d,
-    stride_s_n, stride_s_d,
-    stride_qm_n, stride_qm_l,
-    stride_dm_n, stride_dm_l,
-    stride_a_pair, stride_a_lq,
+    Q_ptr,
+    D_ptr,
+    q_mask_ptr,
+    d_mask_ptr,
+    scores_ptr,
+    argmax_ptr,
+    Nq: tl.constexpr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    Ld: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    stride_q_n,
+    stride_q_l,
+    stride_q_d,
+    stride_d_n,
+    stride_d_l,
+    stride_d_d,
+    stride_s_n,
+    stride_s_d,
+    stride_qm_n,
+    stride_qm_l,
+    stride_dm_n,
+    stride_dm_l,
+    stride_a_pair,
+    stride_a_lq,
     has_q_mask: tl.constexpr,
     has_d_mask: tl.constexpr,
     save_argmax: tl.constexpr,
-    BLOCK_Q: tl.constexpr, BLOCK_D: tl.constexpr,
+    BLOCK_Q: tl.constexpr,
+    BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -82,17 +97,15 @@ def _maxsim_fwd_kernel(
         if has_q_mask:
             qm = tl.load(
                 q_mask_ptr + q_idx * stride_qm_n + q_off * stride_qm_l,
-                mask=q_valid, other=0,
+                mask=q_valid,
+                other=0,
             ).to(tl.int1)
             q_active = q_valid & qm
         else:
             q_active = q_valid
 
         Q_block = tl.load(
-            Q_ptr
-            + q_idx * stride_q_n
-            + q_off[:, None] * stride_q_l
-            + k_off[None, :] * stride_q_d,
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
             mask=q_valid[:, None] & k_mask[None, :],
             other=0.0,
         ).to(COMPUTE_DTYPE)
@@ -107,17 +120,15 @@ def _maxsim_fwd_kernel(
             if has_d_mask:
                 dm = tl.load(
                     d_mask_ptr + d_idx * stride_dm_n + d_off * stride_dm_l,
-                    mask=d_valid, other=0,
+                    mask=d_valid,
+                    other=0,
                 ).to(tl.int1)
                 d_active = d_valid & dm
             else:
                 d_active = d_valid
 
             D_block = tl.load(
-                D_ptr
-                + d_idx * stride_d_n
-                + d_off[:, None] * stride_d_l
-                + k_off[None, :] * stride_d_d,
+                D_ptr + d_idx * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
                 mask=d_valid[:, None] & k_mask[None, :],
                 other=0.0,
             ).to(COMPUTE_DTYPE)
@@ -168,11 +179,7 @@ def _run_forward(
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
     scores = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
-    argmax = (
-        torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32)
-        if save_argmax
-        else None
-    )
+    argmax = torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
@@ -187,15 +194,35 @@ def _run_forward(
 
     grid = (Nq * Nd,)
     _maxsim_fwd_kernel[grid](
-        Q, D, q_mask_ptr, d_mask_ptr, scores, argmax_ptr,
-        Nq, Nd, Lq, Ld, d, d_pad,
-        Q.stride(0), Q.stride(1), Q.stride(2),
-        D.stride(0), D.stride(1), D.stride(2),
-        scores.stride(0), scores.stride(1),
-        qm_strides[0], qm_strides[1],
-        dm_strides[0], dm_strides[1],
-        a_strides[0], a_strides[1],
-        has_q_mask, has_d_mask, save_argmax,
+        Q,
+        D,
+        q_mask_ptr,
+        d_mask_ptr,
+        scores,
+        argmax_ptr,
+        Nq,
+        Nd,
+        Lq,
+        Ld,
+        d,
+        d_pad,
+        Q.stride(0),
+        Q.stride(1),
+        Q.stride(2),
+        D.stride(0),
+        D.stride(1),
+        D.stride(2),
+        scores.stride(0),
+        scores.stride(1),
+        qm_strides[0],
+        qm_strides[1],
+        dm_strides[0],
+        dm_strides[1],
+        a_strides[0],
+        a_strides[1],
+        has_q_mask,
+        has_d_mask,
+        save_argmax,
         COMPUTE_DTYPE=tl_dtype,
     )
     return scores, argmax

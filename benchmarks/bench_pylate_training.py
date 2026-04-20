@@ -23,7 +23,7 @@ def _fake_embeddings(bsz, ntokens, d, device, dtype):
 
 
 def bench(batch_size, n_neg, Lq, Ld, d, iters=50, warmup=5, patch=False):
-    from flash_colbert.pylate_compat import patch_pylate, unpatch_pylate
+    from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
 
     if patch:
         patch_pylate()
@@ -31,15 +31,13 @@ def bench(batch_size, n_neg, Lq, Ld, d, iters=50, warmup=5, patch=False):
     import importlib
 
     import pylate.scores as pylate_scores
+
     importlib.reload(pylate_scores)
     colbert_scores = pylate_scores.colbert_scores
 
     q = _fake_embeddings(batch_size, Lq, d, "cuda", torch.float16).requires_grad_()
     pos = _fake_embeddings(batch_size, Ld, d, "cuda", torch.float16).requires_grad_()
-    negs = [
-        _fake_embeddings(batch_size, Ld, d, "cuda", torch.float16).requires_grad_()
-        for _ in range(n_neg)
-    ]
+    negs = [_fake_embeddings(batch_size, Ld, d, "cuda", torch.float16).requires_grad_() for _ in range(n_neg)]
     d_mask = torch.ones(batch_size, Ld, device="cuda", dtype=torch.float16)
 
     def step():
@@ -83,10 +81,12 @@ def main():
     torch.cuda.empty_cache()
     t_fast = bench(args.batch_size, args.neg, args.lq, args.ld, args.d, patch=True)
 
-    print(f"PyLate Contrastive step:  batch={args.batch_size} neg={args.neg} Lq={args.lq} Ld={args.ld} d={args.d}")
+    print(
+        f"PyLate Contrastive step:  batch={args.batch_size} neg={args.neg} Lq={args.lq} Ld={args.ld} d={args.d}"
+    )
     print(f"  vanilla:       {t_slow:.2f} ms/step")
-    print(f"  flash-colbert: {t_fast:.2f} ms/step")
-    print(f"  speedup:       {t_slow/t_fast:.2f}x")
+    print(f"  late-interaction-kernels: {t_fast:.2f} ms/step")
+    print(f"  speedup:       {t_slow / t_fast:.2f}x")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Forward-pass microbenchmark: flash-colbert vs naive einsum vs flash-maxsim.
+"""Forward-pass microbenchmark: late-interaction-kernels vs naive einsum vs flash-maxsim.
 
     python benchmarks/bench_forward.py
 
@@ -13,7 +13,7 @@ import os
 
 import torch
 
-from flash_colbert import maxsim_inference
+from late_interaction_kernels import maxsim_inference
 
 try:
     from flash_maxsim import flash_maxsim_batched  # optional
@@ -31,7 +31,7 @@ SHAPES = [
     ("visual", 1, 1000, 1024, 1024, 128),
     ("corpus-5k", 1, 5000, 32, 300, 128),
     ("corpus-10k", 1, 10000, 32, 300, 128),
-    ("train-batch", 32, 32, 32, 300, 128),   # in-batch negatives scenario
+    ("train-batch", 32, 32, 32, 300, 128),  # in-batch negatives scenario
     ("train-batch-128", 128, 128, 32, 300, 128),
     ("large-d-512", 1, 1000, 32, 300, 512),
     ("large-d-1024", 1, 500, 32, 300, 1024),
@@ -74,10 +74,10 @@ def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
 
     rows = []
 
-    # flash-colbert
+    # late-interaction-kernels
     t = _time_op(lambda: maxsim_inference(Q, D))
     m = _peak_mem(lambda: maxsim_inference(Q, D))
-    rows.append(("flash-colbert", t, m))
+    rows.append(("late-interaction-kernels", t, m))
 
     # naive
     try:
@@ -123,7 +123,9 @@ def main():
     # Pretty Markdown
     md_lines = [f"# Forward bench — {gpu} ({args.dtype})\n"]
     for r in results:
-        md_lines.append(f"## {r['name']} — shape Nq={r['shape'][0]} Nd={r['shape'][1]} Lq={r['shape'][2]} Ld={r['shape'][3]} d={r['shape'][4]}\n")
+        md_lines.append(
+            f"## {r['name']} — shape Nq={r['shape'][0]} Nd={r['shape'][1]} Lq={r['shape'][2]} Ld={r['shape'][3]} d={r['shape'][4]}\n"
+        )
         md_lines.append("| impl | time (ms) | peak mem (MB) |")
         md_lines.append("| --- | --- | --- |")
         for impl, t, m in r["rows"]:

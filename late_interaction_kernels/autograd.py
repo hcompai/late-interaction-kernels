@@ -51,7 +51,13 @@ class _MaxSimFn(torch.autograd.Function):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
         grad_Q, grad_D = maxsim_backward(
-            grad_scores, Q, D, argmax, q_mask, d_mask, method=ctx.backward_method,
+            grad_scores,
+            Q,
+            D,
+            argmax,
+            q_mask,
+            d_mask,
+            method=ctx.backward_method,
         )
         # masks receive no gradient
         return grad_Q, grad_D, None, None
