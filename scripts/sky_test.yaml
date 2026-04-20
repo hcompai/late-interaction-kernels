@@ -1,0 +1,33 @@
+# CI-style one-shot: run the full test suite on 1×H100 and exit.
+#   sky jobs launch scripts/sky_test.yaml
+
+name: flash-colbert-test
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        priorityClassName: low
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  pip install --no-cache-dir -e ".[dev,bench,pylate]" || pip install --no-cache-dir -e ".[dev,bench]"
+
+run: |
+  set -eux
+  cd ~/sky_workdir
+  python -c "import torch; print(torch.cuda.get_device_name())"
+  pytest tests/ -v --durations=20 -m "cuda"
+  python benchmarks/bench_forward.py --outdir /tmp/bench
+  python benchmarks/bench_backward.py --outdir /tmp/bench
+  ls -la /tmp/bench
+  cat /tmp/bench/*.md || true

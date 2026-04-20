@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+  cpu-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+      - name: Import check
+        run: |
+          # We can import and use the reference implementation without CUDA.
+          python -c "from flash_colbert.reference import maxsim_reference; print('ok')"
+          # Triton is optional on CPU: the kernels import but must not be called.
+          python -c "import flash_colbert; print(flash_colbert.__version__)"
+
+  # GPU job runs on the SkyPilot cluster via scripts/sky_test.yaml.
+  # Triggered manually: `sky jobs launch scripts/sky_test.yaml`.

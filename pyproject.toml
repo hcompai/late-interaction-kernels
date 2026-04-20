@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flash-colbert"
+version = "0.1.0"
+description = "Fused Triton kernels for ColBERT / ColPali late-interaction MaxSim — with masks, varlen, and training-grade backward."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "flash-colbert authors" }]
+keywords = [
+  "colbert", "colpali", "maxsim", "late-interaction", "triton",
+  "retrieval", "flash-attention", "kernel", "gpu",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "torch>=2.1",
+  "triton>=3.0; platform_system=='Linux'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-xdist", "numpy", "ruff"]
+bench = ["pandas", "matplotlib", "tabulate"]
+pylate = ["pylate>=1.2"]
+
+[project.urls]
+Homepage = "https://github.com/yourorg/flash-colbert"
+Issues = "https://github.com/yourorg/flash-colbert/issues"
+
+[tool.setuptools.packages.find]
+include = ["flash_colbert*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# E741: `l` is the canonical logsumexp accumulator in FlashAttention / Liger
+# B023: benchmark closures intentionally capture loop vars
+ignore = ["E501", "B008", "E741", "B023"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
+markers = [
+  "cuda: requires CUDA device",
+  "slow: long-running perf/fuzz tests",
+]
