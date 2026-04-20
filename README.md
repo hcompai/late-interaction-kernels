@@ -1,63 +1,83 @@
+<h1 align="center">late-interaction-kernels</h1>
 
+<p align="center">
+  <b>Fused Triton kernels for late-interaction (MaxSim) scoring.</b><br/>
+  <i>ColBERT · ColPali · ModernColBERT · ColBERTv2 · LateOn-Code · PyLate-native.</i>
+</p>
 
-# late-interaction-kernels
+<p align="center">
+  <a href="https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/hcompai/late-interaction-kernels/ci.yml?branch=main&label=CI&logo=github" alt="CI"/></a>
+  <a href="https://pypi.org/project/late-interaction-kernels/"><img src="https://img.shields.io/pypi/v/late-interaction-kernels?color=blue&label=PyPI" alt="PyPI"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.9%E2%80%933.12-blue?logo=python&logoColor=white" alt="Python"/></a>
+  <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-%E2%89%A52.1-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch"/></a>
+  <a href="https://github.com/triton-lang/triton"><img src="https://img.shields.io/badge/Triton-%E2%89%A53.0-8A2BE2" alt="Triton"/></a>
+</p>
 
-**Fused Triton kernels for late-interaction (MaxSim) scoring.**
-*ColBERT · ColPali · ModernColBERT · PyLate · ColBERTv2.*
-
-[CI](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml)
-[License](LICENSE)
-[Python](https://www.python.org/)
-[PyTorch](https://pytorch.org/)
-[Triton](https://github.com/triton-lang/triton)
-
-
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#benchmarks">Benchmarks</a> ·
+  <a href="docs/supported_models.md">Supported&nbsp;models</a> ·
+  <a href="docs/benchmarks.md">Full&nbsp;docs</a>
+</p>
 
 ---
 
 ## What this is
 
 A small library of fused Triton kernels for the **scoring math** used by
-late-interaction retrievers (ColBERT, ColPali, ModernColBERT, ColBERTv2):
+late-interaction retrievers (ColBERT, ColPali, ModernColBERT, ColBERTv2,
+LateOn-Code):
 
 - `maxsim` — the core `einsum → max → sum` pattern, fused FlashAttention-style
-so the `[Nq · Nd · Lq · Ld]` similarity tensor is never written to HBM.
+  so the `[Nq · Nd · Lq · Ld]` similarity tensor is never written to HBM.
 - Companion kernels for common variants: fused L2-normalize, top-k retrieval,
-Matryoshka multi-dim scoring, XTR-style top-k aggregation.
-- ColBERTv2-style kernels: approximate scoring over centroid codes
-(`plaid_approx_score`) and fused 2/4/8-bit residual decompression + MaxSim
-(`maxsim_residual`).
+  Matryoshka multi-dim scoring, XTR-style top-k aggregation, log-sum-exp
+  relaxation (`soft_maxsim`).
+- ColBERTv2 kernels: approximate scoring over centroid codes
+  (`plaid_approx_score`) and fused 2/4/8-bit residual decompression + MaxSim
+  (`maxsim_residual`) — **autograd-aware** since 0.5.0 (train on the
+  compressed index directly).
+- Varlen / packed kernel (`maxsim_varlen`) — **autograd-aware** since
+  0.5.0, so ragged code-retrieval batches no longer need `pad_sequence`
+  on either the forward or backward.
 - A one-line PyLate drop-in: `patch_pylate()`.
 
 ## What this is not
 
 - **Not a search engine.** There is no index, no IVF, no disk format, no
-orchestration. For end-to-end retrieval infrastructure use
-[FastPlaid](https://github.com/lightonai/fast-plaid), PLAID, or plain
-PyLate — this library is what their MaxSim math *could* compile down to.
-- **Not a new model or loss.** Every kernel is a numerically-matching drop-in
-for the corresponding PyTorch expression.
+  orchestration. For end-to-end retrieval infrastructure use
+  [FastPlaid](https://github.com/lightonai/fast-plaid),
+  [NextPlaid / ColGrep](https://github.com/lightonai/next-plaid), PLAID, or
+  plain PyLate — this library is what their MaxSim math *could* compile
+  down to.
+- **Not a new model or loss.** Every kernel is a numerically-matching
+  drop-in for the corresponding PyTorch expression.
 
 ## At a glance
 
-
-| Kernel / path                                      | Baseline (same shape)                 | Speedup                   |
-| -------------------------------------------------- | ------------------------------------- | ------------------------- |
-| `maxsim_inference` — rerank / inference            | `einsum + max + sum` (PyTorch)        | **7–23×**, ~0 scratch     |
-| `maxsim(..., normalize=True)`                      | `F.normalize + maxsim`                | **3–17×**                 |
-| `maxsim_matryoshka` (K dims at once)               | K separate MaxSim calls               | **1.6×**                  |
-| `maxsim_topk`                                      | `maxsim + torch.topk`                 | ≈ 1× (API win)            |
-| `plaid_approx_score` (ColBERTv2 IVF step)          | gather + mask + max + sum (PyTorch)   | **~20×**                  |
-| `maxsim_residual` (2/4/8-bit)                      | unpack + normalize + MaxSim (PyTorch) | **~20×**                  |
-| CachedContrastive chunked MaxSim (PyLate training) | PyLate default                        | **up to 13.8×**           |
-| Long-doc MaxSim at `Ld ≥ 8k`                       | naive einsum                          | **runs; naive OOMs**      |
-| Plain ModernColBERT training step (encoder-bound)  | vanilla PyLate                        | 1.00–1.06× (free upgrade) |
-
+| Kernel / path                                             | Baseline (same shape)                 | Speedup                   |
+| --------------------------------------------------------- | ------------------------------------- | ------------------------- |
+| `maxsim_inference` — rerank / inference                   | `einsum + max + sum` (PyTorch)        | **7–23×**, ~0 scratch     |
+| `maxsim(..., normalize=True)`                             | `F.normalize + maxsim`                | **3–17×**                 |
+| `maxsim_matryoshka` (K dims at once)                      | K separate MaxSim calls               | **1.6×**                  |
+| `maxsim_topk`                                             | `maxsim + torch.topk`                 | ≈ 1× (API win)            |
+| `plaid_approx_score` (ColBERTv2 IVF step)                 | gather + mask + max + sum (PyTorch)   | **~20×**                  |
+| `maxsim_residual` (2/4/8-bit)                             | unpack + normalize + MaxSim (PyTorch) | **~20×**                  |
+| `maxsim_residual` fwd+bwd (train on compressed, **new**)  | unpack + maxsim autograd (PyTorch)    | see `bench_backward_0_5`  |
+| `maxsim_varlen` fwd+bwd (ragged, no repad, **new**)       | pad + mask + maxsim autograd          | see `bench_backward_0_5`  |
+| CachedContrastive chunked MaxSim (PyLate training)        | PyLate default                        | **up to 13.8×**           |
+| Long-doc MaxSim at `Ld ≥ 8k`                              | naive einsum                          | **runs; naive OOMs**      |
+| Plain ModernColBERT training step (encoder-bound)         | vanilla PyLate                        | 1.00–1.06× (free upgrade) |
 
 All numbers on a single **H100 80 GB SXM**, bf16/fp16 compute, fp32
-accumulator, 50-iter averages. Every baseline is the same operation written
-in plain PyTorch — not a comparison to any other library or engine.
-Full tables, setup, and reproduction: `[docs/benchmarks.md](docs/benchmarks.md)`.
+accumulator, 50-iter averages. Every baseline is the same operation
+written in plain PyTorch — not a comparison to any other library or
+engine. Full tables, setup, and reproduction:
+[`docs/benchmarks.md`](docs/benchmarks.md). For per-model guidance
+(ColBERT v2, GTE-ModernColBERT, Reason-ModernColBERT, LateOn-Code,
+mxbai-edge, ColPali) see [`docs/supported_models.md`](docs/supported_models.md).
 
 ---
 
@@ -65,17 +85,18 @@ Full tables, setup, and reproduction: `[docs/benchmarks.md](docs/benchmarks.md)`
 
 1. [Install](#install)
 2. [Quickstart](#quickstart)
-3. [Who uses this](#who-uses-this)
-4. [When it actually helps](#when-it-actually-helps)
-5. [Benchmarks](#benchmarks)
-6. [Advanced usage](#advanced-usage)
-7. [Hardware support](#hardware-support)
-8. [Design](#design)
-9. [Development](#development)
-10. [Citation](#citation)
-11. [Authors](#authors)
-12. [Related projects](#related-projects)
-13. [License](#license)
+3. [Supported models](docs/supported_models.md)
+4. [Who uses this](#who-uses-this)
+5. [When it actually helps](#when-it-actually-helps)
+6. [Benchmarks](#benchmarks)
+7. [Advanced usage](#advanced-usage)
+8. [Hardware support](#hardware-support)
+9. [Design](#design)
+10. [Development](#development)
+11. [Citation](#citation)
+12. [Authors](#authors)
+13. [Related projects](#related-projects)
+14. [License](#license)
 
 ---
 
@@ -192,18 +213,42 @@ from late_interaction_kernels import plaid_approx_score, maxsim_residual
 #    (IVF-style prune step over centroid codes):
 scores = plaid_approx_score(query_centroid_scores, codes, doc_lengths)  # [n_docs]
 
-# 2) Exact rerank with fused 2/4/8-bit residual decompression + normalize + MaxSim:
+# 2) Exact rerank with fused 2/4/8-bit residual decompression + normalize + MaxSim.
+#    Autograd-aware on Q since 0.5.0 — train the query encoder directly on
+#    the quantized document index, no dense unpack, no [Nd, Ld, d] fp32 scratch.
+Q = Q.requires_grad_(True)
 scores = maxsim_residual(
     Q, codes, residuals, doc_lengths,
     centroids, bucket_weights,
     nbits=2, normalize=True,
 )
+scores.sum().backward()        # grad_Q is fused; codes / centroids get none
 ```
 
 These replace the `index_select → pad → mask → max → sum` and
 `decompress → F.normalize → einsum → max → sum` patterns with a single
-Triton kernel each. They let you build a ColBERTv2-style reranker in pure
-Python without hand-writing the fused ops.
+Triton kernel each. They let you build a ColBERTv2-style reranker — or
+fine-tune against an already-compressed PLAID index — in pure Python
+without hand-writing the fused ops. Use `maxsim_residual_inference` if
+you don't need gradients and want to skip the argmax save.
+
+### Varlen / packed inputs (autograd-aware since 0.5.0)
+
+Short queries + widely-varying document lengths (typical in code search
+or crawl corpora) no longer need `pad_sequence`:
+
+```python
+from late_interaction_kernels import maxsim_varlen
+
+# Q_packed: [sum(Lq_i), d]     D_packed: [sum(Ld_j), d]
+# cu_seqlens_{q,d}: [N+1] int32, FlashAttention convention
+scores = maxsim_varlen(Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d)
+scores.sum().backward()        # grad_Q and grad_D produced on the packed layout
+```
+
+`grad_Q` is row-owned (scatter-free); `grad_D` uses the same fp32
+`atomic_add` path the padded kernel uses. Use
+`maxsim_varlen_inference` to skip the argmax save on the reranker path.
 
 ---
 
@@ -353,16 +398,6 @@ scores = soft_maxsim(Q, D, beta=10.0)    # β → ∞ recovers hard max
 Denser gradient — every doc token contributes a softmax-weighted share. Use
 `β = 5..10` from scratch, `β = 20..50` for fine-tuning, fall back to `maxsim`
 for eval.
-
-### Varlen / packed inputs (no padding)
-
-```python
-from late_interaction_kernels import maxsim_varlen
-
-# Q_packed: [sum(Lq_i), d]     D_packed: [sum(Ld_j), d]
-# cu_seqlens_{q,d}: [N+1] int32, FlashAttention convention
-scores = maxsim_varlen(Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d)
-```
 
 ### Backward-path selection
 

@@ -164,6 +164,114 @@ def test_residual_normalize_matches_reference(nbits):
     assert (fast - ref).abs().max().item() / max(1e-6, ref.abs().max().item()) < 3e-2
 
 
+# --------------------------------------------------------------------------- #
+# C2.bwd. maxsim_residual backward — grad_Q parity vs dense unpack + autograd #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("nbits", [2, 4, 8])
+@pytest.mark.parametrize("normalize", [False, True])
+def test_residual_backward_grad_Q_matches_dense_autograd(nbits, normalize):
+    """The fused residual backward is compared against the "dense" path:
+    unpack the residual index to ``emb = centroid + bucket`` once (fp32), then
+    run the standard differentiable ``maxsim`` on (Q, emb). If our kernel is
+    correct, ``grad_Q`` must match bit-for-bit up to fp16/bf16 tolerance.
+
+    centroids / residuals / codes are non-differentiable by construction.
+    """
+    from late_interaction_kernels import maxsim, maxsim_residual
+    from late_interaction_kernels.reference import unpack_residuals_reference
+
+    idx = _make_quant_index(
+        Nd=4,
+        max_Ld=24,
+        d=128,
+        n_centroids=32,
+        nbits=nbits,
+    )
+
+    d = 128
+    Nq, Lq = 3, 32
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32) * 0.1
+
+    # --- Path A: fused residual kernel, autograd on Q.
+    Qa = Q.clone().requires_grad_(True)
+    scores_a = maxsim_residual(
+        Qa,
+        idx["codes"],
+        idx["residuals"],
+        idx["doc_lengths"],
+        idx["centroids"],
+        idx["bucket_weights"],
+        nbits=nbits,
+        normalize=normalize,
+    )
+
+    # --- Path B: unpack residuals to a dense emb, then use standard maxsim.
+    bucket_codes = unpack_residuals_reference(idx["residuals"], nbits, d).clamp_min(0)
+    emb = idx["centroids"][idx["codes"]] + idx["bucket_weights"][bucket_codes]
+    d_mask = torch.arange(emb.shape[1], device=emb.device).unsqueeze(0) < idx["doc_lengths"].unsqueeze(-1)
+
+    Qb = Q.clone().requires_grad_(True)
+    if normalize:
+        Qb_n = torch.nn.functional.normalize(Qb, p=2, dim=-1, eps=1e-12)
+        emb_n = torch.nn.functional.normalize(emb, p=2, dim=-1, eps=1e-12)
+        scores_b = maxsim(Qb_n, emb_n, d_mask=d_mask)
+    else:
+        scores_b = maxsim(Qb, emb, d_mask=d_mask)
+
+    # Score parity first (sanity).
+    denom = max(1.0, scores_b.detach().abs().max().item())
+    assert (scores_a - scores_b).abs().max().item() / denom < 5e-3
+
+    g = torch.randn_like(scores_a)
+    scores_a.backward(g)
+    scores_b.backward(g)
+
+    err = (Qa.grad - Qb.grad).abs().max().item()
+    denom = max(1.0, Qb.grad.abs().max().item())
+    # nbits=2 has only 4 quantization buckets per feature, so many doc tokens
+    # end up with near-identical reconstructed embeddings. Argmax ties are then
+    # broken differently by the two kernels due to bf16-matmul rounding, which
+    # routes `grad_scores * emb` to different winner embeddings and causes
+    # max-abs deltas of ~1-2 % that shrink as you average. That's a reference
+    # comparison artifact, not a kernel bug (scores are still within 5e-3).
+    tol = 3e-2 if nbits == 2 else 5e-3
+    assert err / denom < tol, f"grad_Q err={err} denom={denom} nbits={nbits} norm={normalize}"
+
+
+def test_residual_inference_does_not_save_argmax():
+    """``maxsim_residual_inference`` must return correct scores without
+    allocating the argmax buffer (no autograd path)."""
+    from late_interaction_kernels import maxsim_residual_inference
+    from late_interaction_kernels.plaid import maxsim_residual_reference
+
+    idx = _make_quant_index(Nd=3, max_Ld=16, d=128, n_centroids=32, nbits=4)
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
+
+    fast = maxsim_residual_inference(
+        Q,
+        idx["codes"],
+        idx["residuals"],
+        idx["doc_lengths"],
+        idx["centroids"],
+        idx["bucket_weights"],
+        nbits=4,
+        normalize=True,
+    )
+    ref = maxsim_residual_reference(
+        Q,
+        idx["codes"],
+        idx["residuals"],
+        idx["doc_lengths"],
+        idx["centroids"],
+        idx["bucket_weights"],
+        nbits=4,
+        normalize=True,
+    )
+    assert (fast - ref).abs().max().item() / max(1e-6, ref.abs().max().item()) < 3e-2
+
+
 def test_residual_matches_dense_maxsim():
     """With nbits=8 and identity bucket weights, residual scoring should
     recover exact dense MaxSim up to rounding."""

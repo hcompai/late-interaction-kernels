@@ -4,6 +4,52 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 — Fused backward for `maxsim_residual`, autograd-aware `maxsim_varlen`
+
+Closes the training-side gaps in the 0.4.0 kernel set. You can now train
+through every scoring path the library ships — compressed/quantized
+documents, ragged / packed batches, and the dense padded flow — without
+ever materializing the `[Nq, Nd, Lq, Ld]` similarity tensor. All changes
+are additive; the 0.4 API is unchanged.
+
+### Added
+
+- **Fused backward for `maxsim_residual`** — `grad_Q` is computed in a
+single Triton kernel that re-decompresses the winning centroid +
+residual per `(query, doc, q_tok)` in SRAM, applies the L2-norm
+Jacobian, and accumulates straight into the `grad_Q` row it owns. You
+can now train directly on 2/4/8-bit PLAID / ColBERTv2 compressed
+document embeddings with no dense unpack and no `[Nd, Ld, d]` fp32
+scratch. Only `Q` is treated as differentiable — `codes` / `residuals`
+are integer tensors, and `centroids` / `bucket_weights` are frozen
+k-means artefacts (their gradient is never needed for retriever
+fine-tuning). See `tests/test_plaid.py::test_residual_backward_*`.
+- **Autograd-aware `maxsim_varlen`** — the packed kernel now saves an
+argmax buffer when either input requires grad, and a new fused
+backward produces `grad_Q` and `grad_D` directly on the packed
+`[sum_L, d]` layout. No repad, no `pad_sequence`, no ragged → dense
+conversion round-trip. `grad_Q` is row-owned (scatter-free);
+`grad_D` uses the same fp32 `atomic_add` path the padded kernel
+already uses. See `tests/test_varlen.py::test_varlen_backward_*`.
+- **Inference-only aliases** that skip the argmax save:
+`maxsim_residual_inference(...)`, `maxsim_varlen_inference(...)`.
+- **Benchmark `benchmarks/bench_backward_0_5.py`** — fused residual
+fwd+bwd vs "dense unpack + maxsim" autograd, and fused varlen fwd+bwd
+vs the padded autograd path on equivalent ragged batches.
+- `**docs/supported_models.md**` — up-to-date list of the PyLate model
+families the library speeds up out of the box, with a dedicated entry
+for LightOn's LateOn-Code family and an honest note on where ColGrep
+fits (and does not fit) in the story.
+
+### Changed
+
+- `maxsim_residual` now returns an autograd-aware result when `Q`
+requires grad — previously it silently dropped gradient. Behavior on
+non-grad inputs is unchanged and byte-for-byte identical to 0.4.
+- `maxsim_varlen` likewise is now autograd-aware when either input
+requires grad. Previous 0.4.x callers that pass non-grad tensors see
+no change.
+
 ## 0.4.0 — New kernels: fused normalize, top-k, Matryoshka, XTR, PLAID
 
 Broadens the library from "one MaxSim kernel" to a full set of fused
@@ -13,48 +59,46 @@ reference + GPU kernel) and a benchmark. All changes are additive — the
 
 ### Added
 
-- **`normalize=True`** on `maxsim`, `maxsim_inference`, `maxsim_matryoshka`,
-  `maxsim_residual`. L2-normalization is fused into the forward kernel (no HBM
-  round-trip) and the backward correctly applies the L2-norm Jacobian.
-  Measured **3.4× – 16.7× faster** than explicit `F.normalize + maxsim`
-  on H100 (see `benchmarks/bench_normalize.py`).
-- **`maxsim_topk(Q, D, k, chunk=None)`** — `(values, indices)` top-k in one
-  call; `chunk` bounds peak memory for very large corpora.
-- **`maxsim_matryoshka(Q, D, dims=[...], normalize=False)`** — evaluate
-  MaxSim at multiple embedding-prefix dims in a single launch (1.56× on 3
-  dims vs running 3 separate kernels).
-- **`maxsim_xtr(Q, D, top_k=k, normalize_by_k=True)`** — XTR-style
-  top-k-aggregated MaxSim. `top_k=1` path dispatches to the fused MaxSim;
-  a fully-fused in-kernel heap for `top_k > 1` is on the roadmap.
-- **`plaid_approx_score(query_centroid_scores, codes, doc_lengths)`** —
-  PLAID/ColBERTv2 approximate-scoring step (gather → mask → max → sum)
-  fused in a single kernel: **~20× faster** than the dense PyTorch gather.
-- **`maxsim_residual(Q, codes, residuals, doc_lengths, centroids,
-  bucket_weights, nbits=2|4|8, normalize=True)`** — PLAID exact rerank
-  with on-the-fly 2/4/8-bit residual decompression + L2-normalize + MaxSim,
-  all in one kernel. **~20× faster** than the dense unpack+normalize+MaxSim
-  PyTorch reference.
+- `**normalize=True**` on `maxsim`, `maxsim_inference`, `maxsim_matryoshka`,
+`maxsim_residual`. L2-normalization is fused into the forward kernel (no HBM
+round-trip) and the backward correctly applies the L2-norm Jacobian.
+Measured **3.4× – 16.7× faster** than explicit `F.normalize + maxsim`
+on H100 (see `benchmarks/bench_normalize.py`).
+- `**maxsim_topk(Q, D, k, chunk=None)`** — `(values, indices)` top-k in one
+call; `chunk` bounds peak memory for very large corpora.
+- `**maxsim_matryoshka(Q, D, dims=[...], normalize=False)`** — evaluate
+MaxSim at multiple embedding-prefix dims in a single launch (1.56× on 3
+dims vs running 3 separate kernels).
+- `**maxsim_xtr(Q, D, top_k=k, normalize_by_k=True)**` — XTR-style
+top-k-aggregated MaxSim. `top_k=1` path dispatches to the fused MaxSim;
+a fully-fused in-kernel heap for `top_k > 1` is on the roadmap.
+- `**plaid_approx_score(query_centroid_scores, codes, doc_lengths)**` —
+PLAID/ColBERTv2 approximate-scoring step (gather → mask → max → sum)
+fused in a single kernel: **~20× faster** than the dense PyTorch gather.
+- `**maxsim_residual(Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits=2|4|8, normalize=True)`** — PLAID exact rerank
+with on-the-fly 2/4/8-bit residual decompression + L2-normalize + MaxSim,
+all in one kernel. **~20× faster** than the dense unpack+normalize+MaxSim
+PyTorch reference.
 - **CPU parity tests** (`tests/test_reference_cpu.py`) covering every new
-  reference so the library ships with green tests even on macOS / CPU CI.
-- **`benchmarks/run_all_benchmarks.sh`** + `scripts/sky_full.yaml` —
-  one-command "run the whole suite on an H100 and dump artifacts".
+reference so the library ships with green tests even on macOS / CPU CI.
+- `**benchmarks/run_all_benchmarks.sh`** + `scripts/sky_full.yaml` —
+one-command "run the whole suite on an H100 and dump artifacts".
 
 ### Changed
 
 - Consolidated **all PyTorch reference implementations** in
-  `late_interaction_kernels.reference` (previously scattered across
-  `plaid.py` / `xtr.py`). References are now importable on CPU-only
-  platforms without Triton.
+`late_interaction_kernels.reference` (previously scattered across
+`plaid.py` / `xtr.py`). References are now importable on CPU-only
+platforms without Triton.
 - `pylate_compat` now also patches `pylate.losses.distillation.colbert_kd_scores`
-  and accepts the PyLate signature `(queries_embeddings, documents_embeddings,
-  queries_mask=None, documents_mask=None)`.
+and accepts the PyLate signature `(queries_embeddings, documents_embeddings, queries_mask=None, documents_mask=None)`.
 
 ### Fixed
 
 - `test_pylate_colbert_scores_patched` now normalizes inputs before
-  comparison (matches real PyLate encode()) so the mask-semantics gap
-  (PyLate multiplies by 0, we use `-inf`) doesn't dominate random-data
-  tolerance.
+comparison (matches real PyLate encode()) so the mask-semantics gap
+(PyLate multiplies by 0, we use `-inf`) doesn't dominate random-data
+tolerance.
 
 ## 0.3.0 — Rename to `late-interaction-kernels`, pro-grade repo polish
 
@@ -104,24 +148,24 @@ LIK_DISABLE=1 python train.py
 
 ### Added
 
-- **`benchmarks/bench_fastplaid.py`** — microbenchmark of the shared
-  `matmul → mask → max → sum` scoring pattern used by many
-  late-interaction rerankers, at shapes typical of a 1024-candidate
-  rerank step (`Ld ∈ {200..8192}`, `Lq=32`, `d=128`, fp16). Compares a
-  PyTorch transliteration of the pattern to `maxsim_inference`. Also
-  runs `fast_plaid.search()` end-to-end on a synthetic corpus so the
-  MaxSim step can be seen in context.
+- `**benchmarks/bench_fastplaid.py**` — microbenchmark of the shared
+`matmul → mask → max → sum` scoring pattern used by many
+late-interaction rerankers, at shapes typical of a 1024-candidate
+rerank step (`Ld ∈ {200..8192}`, `Lq=32`, `d=128`, fp16). Compares a
+PyTorch transliteration of the pattern to `maxsim_inference`. Also
+runs `fast_plaid.search()` end-to-end on a synthetic corpus so the
+MaxSim step can be seen in context.
 
 ### Findings
 
 - The fused kernel vs the PyTorch `matmul + mask + max + sum` pattern:
-  **2.7–3.6×** at `Ld ≥ 1024`, launch-overhead-bound at MSMARCO-scale
-  `Ld ≈ 200`.
+**2.7–3.6×** at `Ld ≥ 1024`, launch-overhead-bound at MSMARCO-scale
+`Ld ≈ 200`.
 - A production retrieval engine's `search()` spends **< 1 %** of wall
-  time on this scoring step — indexing, IVF probe, approximate scoring,
-  and residual decompression dominate. Kernel-level fusion is most
-  useful in Python-side rerankers and long-document regimes where
-  MaxSim is actually the bottleneck.
+time on this scoring step — indexing, IVF probe, approximate scoring,
+and residual decompression dominate. Kernel-level fusion is most
+useful in Python-side rerankers and long-document regimes where
+MaxSim is actually the bottleneck.
 
 ### Docs
 
@@ -137,7 +181,7 @@ exact shapes LightOn uses to train
 (bs=64/128/256, Ld=2k/4k/8k, Lq=128, mini=32). Mirrors the chunked
 `(bs/mini)**2` Python loop in `pylate.losses.CachedContrastive` vs one
 fused flash call.
-- `**bench_pylate_moderncolbert.py --recipe reason**` drives the real
+- `**bench_pylate_moderncolbert.py --recipe reason`** drives the real
 `CachedContrastive` pipeline with `gather_across_devices`, bf16 autocast,
 and gradient checkpointing — matches LightOn's training recipe.
 
