@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
 
 pytestmark = pytest.mark.cuda
 
 pylate = pytest.importorskip("pylate")
+
+
+def _pylate_doc_mask_kwarg() -> str:
+    """Return whichever mask kwarg the installed PyLate's ``colbert_scores``
+    exposes for the document mask — ``documents_mask`` on >= 1.1, ``mask``
+    on the older releases. Tests branch on this so they work against any
+    pinned PyLate version."""
+    from pylate.scores import colbert_scores
+
+    params = inspect.signature(colbert_scores).parameters
+    if "documents_mask" in params:
+        return "documents_mask"
+    if "mask" in params:
+        return "mask"
+    pytest.skip(f"Unexpected PyLate colbert_scores signature: {list(params)}")
+
+
+def _has_queries_mask() -> bool:
+    from pylate.scores import colbert_scores
+
+    return "queries_mask" in inspect.signature(colbert_scores).parameters
 
 
 def test_pylate_colbert_scores_patched_no_mask():
@@ -25,13 +48,14 @@ def test_pylate_colbert_scores_patched_no_mask():
         torch.randn(8, 128, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
     )
     d_mask = torch.ones(8, 128, device="cuda")  # no real masking
+    doc_kw = _pylate_doc_mask_kwarg()
 
-    ref = original_fn(Q, D, documents_mask=d_mask)
+    ref = original_fn(Q, D, **{doc_kw: d_mask})
     patch_pylate()
     try:
         from pylate.scores import colbert_scores as patched_fn
 
-        out = patched_fn(Q, D, documents_mask=d_mask)
+        out = patched_fn(Q, D, **{doc_kw: d_mask})
         err = (out.float() - ref.float()).abs().max().item()
         denom = max(1.0, ref.abs().max().item())
         assert err / denom < 5e-3, f"err={err}, denom={denom}"
@@ -57,12 +81,12 @@ def test_pylate_colbert_scores_matches_our_reference():
 
     ref = maxsim_reference(Q, D, d_mask=d_mask.bool()).float()
 
+    doc_kw = _pylate_doc_mask_kwarg()
     patch_pylate()
     try:
         from pylate.scores import colbert_scores as patched_fn
 
-        # Current PyLate signature uses kwargs `queries_mask=` / `documents_mask=`.
-        out = patched_fn(Q, D, documents_mask=d_mask).float()
+        out = patched_fn(Q, D, **{doc_kw: d_mask}).float()
         err = (out - ref).abs().max().item()
         denom = max(1.0, ref.abs().max().item())
         assert err / denom < 5e-3, f"err={err}, denom={denom}"
@@ -101,9 +125,12 @@ def test_pylate_colbert_scores_accepts_legacy_mask_kwarg():
 
 def test_pylate_colbert_scores_with_both_masks():
     """When both `queries_mask` and `documents_mask` are supplied (the
-    real Contrastive/CachedContrastive call path), the patched function
-    must still match a PyTorch reference that multiplies by both masks
-    before the max-sum reduction."""
+    real Contrastive/CachedContrastive call path on PyLate ≥ 1.1), the
+    patched function must still match a PyTorch reference that multiplies
+    by both masks before the max-sum reduction. Skipped on pinned-old
+    PyLate that doesn't accept `queries_mask`."""
+    if not _has_queries_mask():
+        pytest.skip("Installed PyLate predates the `queries_mask` kwarg")
     from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
 
     Q = torch.nn.functional.normalize(

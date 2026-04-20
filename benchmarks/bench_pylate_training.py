@@ -45,7 +45,7 @@ def bench(batch_size, n_neg, Lq, Ld, d, iters=50, warmup=5, patch=False):
             if p.grad is not None:
                 p.grad = None
         scores = torch.cat(
-            [colbert_scores(q, p, d_mask) for p in [pos] + negs],
+            [colbert_scores(q, p, documents_mask=d_mask) for p in [pos] + negs],
             dim=1,
         )
         labels = torch.arange(batch_size, device="cuda")
