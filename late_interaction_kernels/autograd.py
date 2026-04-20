@@ -39,28 +39,53 @@ class _MaxSimFn(torch.autograd.Function):
     """Autograd function for fused MaxSim, 3-D shapes, with saved argmax."""
 
     @staticmethod
-    def forward(ctx, Q, D, q_mask, d_mask):
+    def forward(ctx, Q, D, q_mask, d_mask, normalize):
         # All shape-normalization happens here; we expect Q=[Nq,Lq,d], D=[Nd,Ld,d]
-        scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax=True)
+        scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax=True, normalize=normalize)
         ctx.save_for_backward(Q, D, argmax, q_mask, d_mask)
         ctx.backward_method = _BACKWARD_METHOD
+        ctx.normalize = normalize
         return scores
 
     @staticmethod
     def backward(ctx, grad_scores):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
-        grad_Q, grad_D = maxsim_backward(
-            grad_scores,
-            Q,
-            D,
-            argmax,
-            q_mask,
-            d_mask,
-            method=ctx.backward_method,
-        )
-        # masks receive no gradient
-        return grad_Q, grad_D, None, None
+
+        if ctx.normalize:
+            # The forward computed scores against Q_hat = Q / ||Q|| and D_hat = D / ||D||.
+            # We need grad w.r.t. the *unnormalized* Q and D. We get that by
+            # (a) running the existing backward against the normalized tensors to get
+            # grad_Q_hat, grad_D_hat, then (b) applying the L2-normalize Jacobian.
+            # This is a small number of extra ops per token, still fully on-GPU.
+            q_norm = torch.linalg.vector_norm(Q, dim=-1, keepdim=True).clamp_min(1e-6)
+            d_norm = torch.linalg.vector_norm(D, dim=-1, keepdim=True).clamp_min(1e-6)
+            Q_hat = Q / q_norm
+            D_hat = D / d_norm
+            grad_Qh, grad_Dh = maxsim_backward(
+                grad_scores,
+                Q_hat,
+                D_hat,
+                argmax,
+                q_mask,
+                d_mask,
+                method=ctx.backward_method,
+            )
+            # d Qhat / d Q = (I - Qhat Qhat^T) / ||Q||
+            grad_Q = (grad_Qh - (grad_Qh * Q_hat).sum(-1, keepdim=True) * Q_hat) / q_norm
+            grad_D = (grad_Dh - (grad_Dh * D_hat).sum(-1, keepdim=True) * D_hat) / d_norm
+        else:
+            grad_Q, grad_D = maxsim_backward(
+                grad_scores,
+                Q,
+                D,
+                argmax,
+                q_mask,
+                d_mask,
+                method=ctx.backward_method,
+            )
+        # masks and normalize receive no gradient
+        return grad_Q, grad_D, None, None, None
 
 
 def maxsim(
@@ -68,16 +93,22 @@ def maxsim(
     D: torch.Tensor,
     q_mask: torch.Tensor | None = None,
     d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
 ) -> torch.Tensor:
     """Differentiable fused MaxSim. Drop-in for PyLate's `colbert_scores`.
 
-    Inputs:
+    Args:
         Q: [Nq, Lq, d] or [Lq, d]
         D: [Nd, Ld, d] or [Ld, d]
         q_mask, d_mask: bool tensors matching the first two dims of Q / D.
+        normalize: if True, L2-normalize Q and D per-token inside the kernel
+            (saves one HBM round-trip vs ``F.normalize(Q) → maxsim``). The
+            gradient correctly accounts for the normalization so the op is a
+            true drop-in for ``maxsim(F.normalize(Q), F.normalize(D))``.
 
-    Output:
-        scores: [Nq, Nd], or squeezed accordingly. Always fp32.
+    Returns:
+        scores: [Nq, Nd], fp32. Squeezed to match 2-D inputs.
 
     Notes:
         * Gradients flow into Q and D. Masks are non-differentiable.
@@ -99,7 +130,7 @@ def maxsim(
     q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
     d_mask_i8 = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
 
-    scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8)
+    scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())
@@ -116,7 +147,21 @@ def maxsim_inference(
     D: torch.Tensor,
     q_mask: torch.Tensor | None = None,
     d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
 ) -> torch.Tensor:
-    """Same as `maxsim` but no autograd / no saved argmax. Use for reranking."""
-    scores, _ = maxsim_forward(Q, D, q_mask=q_mask, d_mask=d_mask, save_argmax=False)
+    """Same as ``maxsim`` but no autograd / no saved argmax. Use for reranking.
+
+    Supports ``normalize=True`` to fuse L2-norm with the MaxSim reduction —
+    this is the fast path for typical ColBERT reranking (the unnormalized
+    embeddings are dequantized or encoder-output fp16).
+    """
+    scores, _ = maxsim_forward(
+        Q,
+        D,
+        q_mask=q_mask,
+        d_mask=d_mask,
+        save_argmax=False,
+        normalize=normalize,
+    )
     return scores

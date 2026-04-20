@@ -36,9 +36,16 @@ torchrun --standalone --nproc_per_node=8 \
 
 # FastPlaid rerank-step comparison (requires `pip install fast-plaid`)
 python benchmarks/bench_fastplaid.py
+
+# v0.4 kernels: fused normalize, top-k, Matryoshka, XTR, PLAID
+python benchmarks/bench_normalize.py
+python benchmarks/bench_new_kernels.py
+
+# Everything at once (tests + all benches, writes to $OUTDIR)
+OUTDIR=benchmarks/results bash scripts/run_all_benchmarks.sh
 ```
 
-Results land in `benchmarks/results/*.json`.
+Results land in `benchmarks/results/*.json` and `*.md`.
 
 ## On a SkyPilot cluster
 
@@ -62,6 +69,45 @@ cd ~/sky_workdir && CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_forward.py
 | `Nq=1, Nd=10 000, Lq=32, Ld=300`            | 0.557 ms      | 7.112 ms     | 12.8×   | 1.8 GB → 0 |
 | `Nq=1, Nd=1000, Lq=1024, Ld=1024` (ColPali) | 1.518 ms      | 11.967 ms    | 7.9×    | 4.5 GB → 0 |
 
+
+## New kernels (v0.4)
+
+All numbers single H100, bf16 inputs, fp32 accumulator. Reference is a
+pure-PyTorch implementation of the same operation (dense einsum + masks +
+reduce + optional normalize). Reproduce with `bench_new_kernels.py` and
+`bench_normalize.py`.
+
+### Fused L2-normalize vs `F.normalize` + MaxSim
+
+| shape                                    | `F.normalize` + maxsim | fused (`normalize=True`) | speedup |
+| :--------------------------------------- | ---: | ---: | :---: |
+| text-short   (`Nq=1, Nd=1k, Ld=300`)     | 0.491 ms | 0.064 ms |  **7.7×** |
+| text-long    (`Nq=1, Nd=1k, Ld=1024`)    | 1.569 ms | 0.094 ms | **16.7×** |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)    | 0.225 ms | 0.064 ms |   3.5×    |
+| bigbatch-2k  (`Nq=8,  Nd=16, Ld=2048`)   | 0.219 ms | 0.065 ms |   3.4×    |
+| bigbatch-8k  (`Nq=8,  Nd=16, Ld=8192`)   | 0.271 ms | 0.110 ms |   2.5×    |
+| corpus-10k   (`Nq=1, Nd=10k, Ld=300`)    | 4.442 ms | 0.303 ms | **14.7×** |
+
+The fused path normalizes Q and D blocks in SRAM, eliminating the two HBM
+round-trips that `F.normalize` would otherwise require. Backward correctly
+applies the L2-norm Jacobian.
+
+### Top-K / Matryoshka / XTR / PLAID
+
+| kernel                       | PyTorch ref (ms) | late-interaction-kernels (ms) | speedup  | notes                                                           |
+| :--------------------------- | ---: | ---: | :---: | :-------------------------------------------------------------- |
+| `maxsim_topk` (1× 10k docs)  | 0.304 | 0.296 |   1.03×   | wraps fused MaxSim + `torch.topk`; main value is the API       |
+| `maxsim_matryoshka` (3 dims) | 0.738 | 0.474 |   1.56×   | one kernel call vs 3 separate MaxSim launches                   |
+| `maxsim_xtr` k=5             | 0.687 | 0.687 |   1.00×   | current `top_k > 1` path is a reference fallback (roadmap)      |
+| `maxsim_xtr` k=20            | 0.744 | 0.749 |   0.99×   | idem                                                            |
+| `plaid_approx_score` (8k×200)| 0.687 | 0.033 | **20.58×**| gather → mask → max → sum fused; mirrors FastPlaid's approx step |
+| `maxsim_residual` 2-bit      | 3.506 | 0.162 | **21.70×**| fused decompress + normalize + MaxSim                           |
+| `maxsim_residual` 4-bit      | 3.517 | 0.176 | **19.95×**| idem                                                            |
+
+`plaid_approx_score` and `maxsim_residual` together port the two hot paths
+of FastPlaid's Rust search pipeline into pure Triton. They let a
+pure-Python ColBERTv2 retriever match FastPlaid-level rerank throughput
+without a libtorch + cargo build.
 
 ## Backward paths (`atomic` vs `csr` vs `auto`)
 

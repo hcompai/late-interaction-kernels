@@ -24,6 +24,10 @@ in HBM — just the `[Nq · Nd]` scores come out.
 | Where it wins                                          | Win                          |
 | :----------------------------------------------------- | :--------------------------- |
 | Reranking / inference with pre-computed embeddings     | **7–23× faster, ~0 scratch** |
+| Fused `normalize=True` vs `F.normalize + maxsim`       | **3–17× faster**             |
+| PLAID approximate scoring (`plaid_approx_score`)       | **~20× faster** than gather+mask+max in PyTorch |
+| PLAID residual rerank (`maxsim_residual`, 2/4/8-bit)   | **~20× faster** than dense unpack + normalize + MaxSim |
+| Matryoshka multi-dim scoring (`maxsim_matryoshka`)     | **1.6× faster** than K separate MaxSim calls |
 | CachedContrastive "chunked MaxSim" step                | **up to 13.8×** faster       |
 | ModernColBERT `Ld ≥ 8k` — MaxSim step                  | **runs; naive PyTorch OOMs** |
 | FastPlaid exact rerank (`Ld ≥ 4k`)                     | **2.7–3.6×** faster          |
@@ -117,6 +121,65 @@ patch_pylate()   # swaps colbert_scores / colbert_kd_scores / Contrastive / Cach
 
 Kill-switch: `LIK_DISABLE=1` reverts to vanilla PyTorch at import time.
 
+### Fused L2-normalize (skip the HBM round-trip)
+
+```python
+# Instead of F.normalize(Q) + F.normalize(D) + maxsim(Qn, Dn):
+scores = maxsim_inference(Q, D, normalize=True)   # fused — 3–17× faster
+```
+
+Works for `maxsim`, `maxsim_inference`, `maxsim_matryoshka`, and
+`maxsim_residual`. Backward is correct (L2-norm Jacobian is applied).
+
+### Top-K retrieval
+
+```python
+from late_interaction_kernels import maxsim_topk
+
+values, indices = maxsim_topk(Q, D, k=10)          # [1, 10], [1, 10]
+# For very large corpora, chunk D to bound peak memory:
+values, indices = maxsim_topk(Q, D, k=10, chunk=2048)
+```
+
+### Matryoshka multi-dim scoring
+
+```python
+from late_interaction_kernels import maxsim_matryoshka
+
+# Scores at 32, 64, and 128 dims in a single kernel launch.
+scores = maxsim_matryoshka(Q, D, dims=[32, 64, 128], normalize=True)
+# scores.shape == [len(dims), Nq, Nd]
+```
+
+### XTR-style top-k aggregation
+
+```python
+from late_interaction_kernels import maxsim_xtr
+
+scores = maxsim_xtr(Q, D, top_k=5)    # sum of top-5 doc-token scores per query token
+```
+
+### PLAID (ColBERTv2) kernels
+
+```python
+from late_interaction_kernels import plaid_approx_score, maxsim_residual
+
+# 1) Approximate scoring via pre-computed query↔centroid scores:
+scores = plaid_approx_score(query_centroid_scores, codes, doc_lengths)  # [n_docs]
+
+# 2) Exact rerank with fused 2/4/8-bit residual decompression + normalize + MaxSim:
+scores = maxsim_residual(
+    Q, codes, residuals, doc_lengths,
+    centroids, bucket_weights,
+    nbits=2, normalize=True,
+)
+```
+
+Both are drop-in replacements for FastPlaid's
+`index_select → pad → colbert_score_reduce` and
+`decompress → F.normalize → einsum → max → sum` pipelines — fused in a
+single Triton kernel.
+
 ---
 
 ## When to reach for it
@@ -175,6 +238,24 @@ Real model: `pylate.models.ColBERT("lightonai/GTE-ModernColBERT-v1")` →
 | 8×H100 DDP, bs=4/dev,  mini=4,  Ld=8192 |  665 ms |                   662 ms |  1.00×  |     30.2 GB |
 | 8×H100 DDP, bs=16/dev, mini=16, Ld=4096 | 1078 ms |                  1047 ms |  1.03×  |     57.5 GB |
 | 8×H100 DDP, bs=32/dev, mini=32, Ld=2048 | 1020 ms |                   960 ms |  1.06×  |     57.4 GB |
+
+### New kernels (v0.4) vs PyTorch reference
+
+| kernel                       |  PyTorch ref | late-interaction-kernels |  speedup   |
+| :--------------------------- | -----------: | -----------------------: | :--------: |
+| `maxsim_matryoshka` (3 dims) |      0.74 ms |                  0.47 ms |   1.56×    |
+| `maxsim_topk` (10k docs)     |      0.30 ms |                  0.30 ms |   1.03×    |
+| `plaid_approx_score` (8k×200)|      0.69 ms |                 0.033 ms | **20.58×** |
+| `maxsim_residual` 2-bit      |      3.51 ms |                  0.16 ms | **21.70×** |
+| `maxsim_residual` 4-bit      |      3.52 ms |                  0.18 ms | **19.95×** |
+
+### Fused L2-normalize vs `F.normalize` + MaxSim
+
+| shape                                    | explicit | fused | speedup |
+| :--------------------------------------- | -------: | ----: | :-----: |
+| `Nq=1, Nd=1 000, Lq=32, Ld=300`          | 0.49 ms  | 0.064 ms | **7.7×** |
+| `Nq=1, Nd=1 000, Lq=32, Ld=1024`         | 1.57 ms  | 0.094 ms | **16.7×** |
+| `Nq=1, Nd=10 000, Lq=32, Ld=300`         | 4.44 ms  | 0.30 ms  | **14.7×** |
 
 ### Long-document MaxSim (`Ld ∈ {2k, 4k, 8k, 16k}`)
 
@@ -307,9 +388,14 @@ H Company · 2026
 
 - [FlashAttention](https://github.com/Dao-AILab/flash-attention) —
   the IO-aware tiling pattern this kernel is a strict subset of.
-- [flash-maxsim](https://github.com/xhluca/flash-maxsim) — first public
-  Triton MaxSim for ColBERT. late-interaction-kernels extends it with fused
-  masking, varlen inputs, a training-grade backward, and the PyLate drop-in.
+- [flash-maxsim](https://github.com/roipony/flash-maxsim) by IBM Research —
+  the first public Triton MaxSim kernel for ColBERT / ColPali and the direct
+  inspiration for this project. late-interaction-kernels extends it with
+  fused masking, varlen / packed inputs, a training-grade deterministic
+  backward (CSR), and the PyLate drop-in. See their README for the
+  single-query inference numbers (1920×–9438× VRAM reduction); our tables
+  quote *training-context* peak memory (argmax + grads + normalization
+  buffers) which is a smaller ratio.
 - [Liger-Kernel](https://github.com/linkedin/Liger-Kernel) — the autotune
   and `torch.autograd.Function` idioms. See
   [`docs/liger.md`](docs/liger.md) for upstream-merge thoughts.

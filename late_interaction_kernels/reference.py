@@ -30,6 +30,8 @@ def maxsim_reference(
     D: torch.Tensor,
     q_mask: torch.Tensor | None = None,
     d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
 ) -> torch.Tensor:
     """Dense reference MaxSim with full mask support.
 
@@ -40,6 +42,8 @@ def maxsim_reference(
         D: [Nd, Ld, d] or [Ld, d] document embeddings.
         q_mask: [Nq, Lq] or [Lq] boolean mask. True = keep, False = drop from sum.
         d_mask: [Nd, Ld] or [Ld] boolean mask. True = keep, False = mask out of max.
+        normalize: if True, L2-normalize Q and D per-token before the einsum
+            (equivalent to ``F.normalize(.., p=2, dim=-1)``).
 
     Returns:
         scores: [Nq, Nd] float tensor. If inputs were 2-D the matching dim is
@@ -57,7 +61,12 @@ def maxsim_reference(
     if d != d2:
         raise ValueError(f"embedding dims don't match: Q has d={d}, D has d={d2}")
 
-    S = torch.einsum("ild,jtd->ijlt", Q.float(), D.float())  # [Nq, Nd, Lq, Ld]
+    Qf = Q.float()
+    Df = D.float()
+    if normalize:
+        Qf = torch.nn.functional.normalize(Qf, p=2, dim=-1, eps=1e-12)
+        Df = torch.nn.functional.normalize(Df, p=2, dim=-1, eps=1e-12)
+    S = torch.einsum("ild,jtd->ijlt", Qf, Df)  # [Nq, Nd, Lq, Ld]
 
     if d_mask is not None:
         if d_mask.dim() == 1:
@@ -130,6 +139,140 @@ def maxsim_reference_soft(
     if d_squeeze:
         scores = scores.squeeze(-1)
     return scores
+
+
+def xtr_reference(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    top_k: int,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
+    normalize_by_k: bool = True,
+) -> torch.Tensor:
+    """XTR-style MaxSim reference: ``sum_s topk_t(Q[s] @ D[t])``.
+
+    When ``top_k=1`` this is exactly plain MaxSim. Larger ``top_k`` gives the
+    XTR (Lee et al., NeurIPS 2023) scoring variant. ``normalize_by_k=True``
+    divides each query-token's top-k sum by ``k`` (mean) — the canonical XTR
+    formulation.
+    """
+    q_squeeze = Q.dim() == 2
+    d_squeeze = D.dim() == 2
+    if q_squeeze:
+        Q = Q.unsqueeze(0)
+    if d_squeeze:
+        D = D.unsqueeze(0)
+    Qf = Q.float()
+    Df = D.float()
+    if normalize:
+        Qf = torch.nn.functional.normalize(Qf, p=2, dim=-1, eps=1e-12)
+        Df = torch.nn.functional.normalize(Df, p=2, dim=-1, eps=1e-12)
+    S = torch.einsum("ild,jtd->ijlt", Qf, Df)
+    if d_mask is not None:
+        if d_mask.dim() == 1:
+            d_mask = d_mask.unsqueeze(0)
+        S = S.masked_fill(~d_mask.bool()[None, :, None, :], NEG_INF)
+
+    Ld = S.shape[-1]
+    k = min(top_k, Ld)
+    top = S.topk(k, dim=-1).values
+    top = torch.where(torch.isfinite(top), top, torch.zeros_like(top))
+    row = top.sum(dim=-1)
+    if normalize_by_k:
+        row = row / k
+    if q_mask is not None:
+        if q_mask.dim() == 1:
+            q_mask = q_mask.unsqueeze(0)
+        row = row * q_mask.to(row.dtype)[:, None, :]
+    scores = row.sum(dim=-1)
+    if q_squeeze:
+        scores = scores.squeeze(0)
+    if d_squeeze:
+        scores = scores.squeeze(-1)
+    return scores
+
+
+def plaid_approx_score_reference(
+    query_centroid_scores: torch.Tensor,
+    codes: torch.Tensor,
+    doc_lengths: torch.Tensor,
+) -> torch.Tensor:
+    """Dense-gather PyTorch reference for PLAID-style approximate scoring.
+
+    Mirrors FastPlaid's ``index_select(query_centroid_scores) -> pad ->
+    colbert_score_reduce`` pipeline but uses a dense masked reduction so it
+    runs on any device, including CPU.
+    """
+    qcs = query_centroid_scores.float()
+    codes = codes.long()
+    B, max_Ld = codes.shape
+    flat = qcs[codes.reshape(-1)].reshape(B, max_Ld, -1)  # [B, max_Ld, Lq]
+    pos = torch.arange(max_Ld, device=codes.device).unsqueeze(0)
+    mask = pos < doc_lengths.to(codes.device).unsqueeze(-1)
+    flat = flat.masked_fill(~mask.unsqueeze(-1), NEG_INF)
+    m = flat.max(dim=1).values
+    m = torch.where(torch.isfinite(m), m, torch.zeros_like(m))
+    return m.sum(dim=-1)
+
+
+def unpack_residuals_reference(residuals: torch.Tensor, nbits: int, d: int) -> torch.Tensor:
+    """Dense CPU/GPU reference for PLAID residual bit-unpacking.
+
+    Each byte of ``residuals`` holds ``8 / nbits`` bucket codes, little-endian
+    within the byte. The output is ``[..., d]`` int32 bucket indices.
+    """
+    codes_per_byte = 8 // nbits
+    mask = (1 << nbits) - 1
+    rs = residuals.to(torch.int32)
+    feats = []
+    for f in range(d):
+        byte_idx = f // codes_per_byte
+        slot = f % codes_per_byte
+        val = (rs[..., byte_idx] >> (slot * nbits)) & mask
+        feats.append(val)
+    return torch.stack(feats, dim=-1)
+
+
+def maxsim_residual_reference(
+    Q: torch.Tensor,
+    codes: torch.Tensor,
+    residuals: torch.Tensor,
+    doc_lengths: torch.Tensor,
+    centroids: torch.Tensor,
+    bucket_weights: torch.Tensor,
+    nbits: int,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """PyTorch reference for the PLAID residual decompress + MaxSim kernel."""
+    if Q.dim() == 2:
+        Q = Q.unsqueeze(0)
+    _, _, d = Q.shape
+    _, max_Ld = codes.shape
+    centroids_f = centroids.float()
+    buckets = bucket_weights.float()
+
+    bucket_codes = unpack_residuals_reference(residuals, nbits, d)
+    bc = bucket_codes.clamp(min=0, max=buckets.numel() - 1).long()
+    bucket_vals = buckets[bc]
+    emb = centroids_f[codes.long()] + bucket_vals
+
+    if normalize:
+        emb = torch.nn.functional.normalize(emb, p=2, dim=-1, eps=1e-12)
+        Qn = torch.nn.functional.normalize(Q.float(), p=2, dim=-1, eps=1e-12)
+    else:
+        Qn = Q.float()
+
+    pos = torch.arange(max_Ld, device=codes.device).unsqueeze(0)
+    d_mask = pos < doc_lengths.to(codes.device).unsqueeze(-1)
+
+    S = torch.einsum("ild,jtd->ijlt", Qn, emb)
+    S = S.masked_fill(~d_mask.bool()[None, :, None, :], NEG_INF)
+    m = S.max(dim=-1).values
+    m = torch.where(torch.isfinite(m), m, torch.zeros_like(m))
+    return m.sum(dim=-1)
 
 
 def maxsim_reference_varlen(
