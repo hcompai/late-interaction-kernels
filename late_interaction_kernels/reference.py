@@ -201,7 +201,7 @@ def plaid_approx_score_reference(
 ) -> torch.Tensor:
     """Dense-gather PyTorch reference for PLAID-style approximate scoring.
 
-    Mirrors FastPlaid's ``index_select(query_centroid_scores) -> pad ->
+    Mirrors the ColBERTv2 ``index_select(query_centroid_scores) -> pad ->
     colbert_score_reduce`` pipeline but uses a dense masked reduction so it
     runs on any device, including CPU.
     """

@@ -71,7 +71,7 @@ MaxSim scoring kernel, not a ColBERT-specific project.
 ### Added
 
 - `py.typed` marker (PEP 561) for downstream type checking.
-- `CONTRIBUTING.md`, `SECURITY.md`, GitHub issue / PR templates.
+- `CONTRIBUTING.md`, GitHub issue / PR templates.
 - CI matrix over Python 3.10, 3.11, 3.12 on CPU; concurrency cancellation.
 - Full Apache 2.0 license text + proper authorship notice
 (Aurélien Lac, Tony Wu).
@@ -100,33 +100,32 @@ FLASH_COLBERT_DISABLE=1 python train.py
 LIK_DISABLE=1 python train.py
 ```
 
-## 0.2.2 — FastPlaid comparison, PyLate big-training analysis
+## 0.2.2 — Kernel-level microbenchmark on the `matmul → mask → max → sum` pattern
 
 ### Added
 
-- `**benchmarks/bench_fastplaid.py**` — head-to-head against LightOn's
-[FastPlaid](https://github.com/lightonai/fast-plaid) Rust engine at its
-real rerank-step shapes (1024 docs × `Ld` × 32, fp16). Measures both the
-isolated MaxSim (PyTorch proxy for FastPlaid's `tch-rs` `matmul + mask + max + sum`) and the end-to-end `fast_plaid.search()` latency on
-synthetic corpora.
+- **`benchmarks/bench_fastplaid.py`** — microbenchmark of the shared
+  `matmul → mask → max → sum` scoring pattern used by many
+  late-interaction rerankers, at shapes typical of a 1024-candidate
+  rerank step (`Ld ∈ {200..8192}`, `Lq=32`, `d=128`, fp16). Compares a
+  PyTorch transliteration of the pattern to `maxsim_inference`. Also
+  runs `fast_plaid.search()` end-to-end on a synthetic corpus so the
+  MaxSim step can be seen in context.
 
 ### Findings
 
-- FastPlaid's rerank is the same `matmul → mask → max → sum` that PyLate
-dispatches, so the kernel-level win carries 1:1: **2.7–3.6×** faster at
-`Ld ≥ 1024`, roughly **neutral** for MSMARCO-scale `Ld ≈ 200`.
-- `fast_plaid.search()` spends **< 1 %** of wall time on the exact MaxSim
-rerank at today's defaults — IVF probe, approximate scoring, and
-residual decompression dominate. late-interaction-kernels is only worth integrating
-into FastPlaid for **ModernColBERT-scale corpora** (`Ld ≥ 4k`) or when
-`n_full_scores` is pushed high enough that naive scratch OOMs.
+- The fused kernel vs the PyTorch `matmul + mask + max + sum` pattern:
+  **2.7–3.6×** at `Ld ≥ 1024`, launch-overhead-bound at MSMARCO-scale
+  `Ld ≈ 200`.
+- A production retrieval engine's `search()` spends **< 1 %** of wall
+  time on this scoring step — indexing, IVF probe, approximate scoring,
+  and residual decompression dominate. Kernel-level fusion is most
+  useful in Python-side rerankers and long-document regimes where
+  MaxSim is actually the bottleneck.
 
 ### Docs
 
-- New "FastPlaid rerank step" section in `docs/benchmarks.md` with the
-full table + decomposition + honest verdict on integration.
-- README scenario matrix now includes the two FastPlaid rows
-(`Ld ≤ 1k` neutral, `Ld ≥ 4k` 2.7–3.6× on the rerank step).
+- New kernel-level microbenchmark section in `docs/benchmarks.md`.
 
 ## 0.2.1 — Honest ModernColBERT training numbers, CachedContrastive bench
 

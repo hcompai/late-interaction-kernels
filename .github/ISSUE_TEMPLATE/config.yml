@@ -1,5 +1,1 @@
 blank_issues_enabled: false
-contact_links:
-  - name: Security vulnerability
-    url: https://github.com/hcompai/late-interaction-kernels/blob/main/SECURITY.md
-    about: Please do NOT file security issues publicly — follow SECURITY.md.

@@ -1,36 +1,42 @@
-"""FastPlaid vs late-interaction-kernels — rerank-step benchmark.
+"""Kernel-level microbenchmark on the `matmul -> mask -> max -> sum` pattern.
 
-FastPlaid (github.com/lightonai/fast-plaid) is LightOn's Rust/libtorch
-multi-vector search engine that replaces the original PLAID. Its final
-exact-rerank step is a textbook MaxSim call:
+Many late-interaction retrieval stacks — plain PyTorch rerankers, PyLate,
+and LightOn's FastPlaid (github.com/lightonai/fast-plaid) — all compute the
+MaxSim score with the same underlying pattern at their scoring step:
 
-    rust/search/search.rs:colbert_score_reduce
-        token_scores = padded_doc_embeddings.matmul(q.transpose(-2, -1))
-                       .masked_fill(~mask, -9999.0)
-        scores       = token_scores.max_dim(1).sum_dim(-1)
+    token_scores = padded_doc_embeddings.matmul(q.transpose(-2, -1))
+                   .masked_fill(~mask, -9999.0)
+    scores       = token_scores.max_dim(1).sum_dim(-1)
 
-That's the exact `matmul -> mask -> max -> sum` pattern late-interaction-kernels fuses
-into a single Triton kernel. FastPlaid's Rust/libtorch dispatches the same
-PyTorch CUDA kernels as PyLate does from Python, so the kernel-level win from
-late-interaction-kernels carries over 1:1.
+dispatched to `aten::bmm / aten::max / aten::sum`. `late-interaction-kernels`
+fuses this pattern into a single Triton kernel. This bench measures the
+effect of that fusion at the operation level, in isolation.
+
+It is NOT a comparison of two complete retrieval systems. FastPlaid is a
+full search engine (index, IVF probe, orchestration, rerank);
+`late-interaction-kernels` is a set of Triton kernels for the scoring
+math. They sit in different layers of the stack. The end-to-end numbers
+below are provided purely so you can see what fraction of `search()` the
+scoring step represents in a production pipeline.
 
 This bench does two things:
 
-1. **Isolated rerank-step MaxSim** at FastPlaid's real rerank shapes
-   (`n_full_scores // 4 = 1024` docs re-ranked per query by default), comparing:
+1. **Isolated scoring step** at typical reranker shapes
+   (`n_full_scores // 4 = 1024` candidate docs per query, which matches
+   FastPlaid's defaults), comparing:
 
-     (a) The exact ops FastPlaid's Rust runs: PyTorch matmul + masked_fill +
-         max + sum — same underlying CUDA kernels as libtorch.
-     (b) late-interaction-kernels `maxsim_inference`.
+     (a) The same ops written in PyTorch: `matmul + masked_fill + max + sum`,
+         which dispatch to the identical CUDA kernels libtorch calls.
+     (b) `late-interaction-kernels.maxsim_inference`.
 
-   This tells us the *per-query rerank MaxSim speedup* if FastPlaid's Rust
-   were to call late-interaction-kernels instead of `matmul + max + sum`.
+   This shows the operation-level effect of kernel fusion, independent of
+   which library is calling it.
 
-2. **End-to-end FastPlaid search** on a synthetic index at realistic sizes.
-   This is the total `fast_plaid.search()` wall time — IVF probe + approximate
-   scoring + residual decompression + exact rerank. The exact-rerank MaxSim
-   is only part of this; the bench reports the total so you can reason about
-   what fraction a MaxSim speedup would buy end-to-end.
+2. **End-to-end `fast_plaid.search()`** on a synthetic index at realistic
+   sizes, for context only — so you can see that the exact-rerank MaxSim
+   is a small fraction of a complete retrieval call, and understand that
+   kernel-level fusion is most valuable in Python-side rerankers and
+   long-document regimes where scoring is the bottleneck.
 
 Usage
 -----
@@ -126,7 +132,9 @@ def _peak(fn) -> float:
 
 
 def run_isolated(args) -> list[dict]:
-    print("\n=== (1) Isolated rerank MaxSim — FastPlaid Rust proxy vs late-interaction-kernels ===")
+    print(
+        "\n=== (1) Isolated scoring step — PyTorch `bmm + mask + max + sum` vs late-interaction-kernels ==="
+    )
     print("Shape: N docs reranked × Ld doc tokens × Lq=32 query tokens × d=128, fp16")
     print(
         f"{'shape':<22} {'fp_ms':>8} {'flash_ms':>10} {'speedup':>8} "
@@ -206,7 +214,7 @@ def build_synthetic_corpus(n_docs: int, ld: int, d: int, device: str):
 
 
 def run_fastplaid(args) -> list[dict]:
-    print("\n=== (2) End-to-end FastPlaid search() ===")
+    print("\n=== (2) End-to-end fast_plaid.search() (context only, not a head-to-head) ===")
     try:
         from fast_plaid import search as fps
     except ImportError as e:

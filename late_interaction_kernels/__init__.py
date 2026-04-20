@@ -11,10 +11,11 @@ Training / general MaxSim
 
 Retrieval
     * ``maxsim_topk(Q, D, k, ...)`` — top-k docs + indices in one call.
-    * ``plaid_approx_score(qcs, codes, doc_lengths)`` — FastPlaid's
+    * ``plaid_approx_score(qcs, codes, doc_lengths)`` — ColBERTv2 IVF
       approximate scoring step, fused.
-    * ``maxsim_residual(Q, codes, residuals, ...)`` — fused PLAID
-      2/4/8-bit decompression + L2-normalize + MaxSim (FastPlaid exact rerank).
+    * ``maxsim_residual(Q, codes, residuals, ...)`` — fused PLAID /
+      ColBERTv2 2/4/8-bit decompression + L2-normalize + MaxSim (exact
+      rerank step).
 
 Late-interaction variants
     * ``maxsim_matryoshka(Q, D, dims=[...])`` — multi-dim scoring in one pass.

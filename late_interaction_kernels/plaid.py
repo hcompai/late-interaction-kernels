@@ -1,18 +1,18 @@
-"""PLAID-style kernels: approximate scoring + fused residual-decompress + MaxSim.
+"""PLAID / ColBERTv2 kernels: approximate scoring + fused residual-decompress + MaxSim.
 
-These kernels port the hot paths of FastPlaid's Rust search pipeline into pure
-Triton, so pure-Python retrievers can match FastPlaid speed without libtorch.
+Two Triton kernels for the core operations of a ColBERTv2-style reranker
+(approximate scoring over centroid codes, exact rerank over packed
+residuals), so you can build one end-to-end in Python without hand-writing
+the fused ops.
 
-Two kernels are exposed:
+* :func:`plaid_approx_score` — the approximate scoring step. Gathers
+  per-token query↔centroid scores, masks padded positions, takes
+  max-over-doc-tokens and sum-over-query-tokens, all in one kernel.
 
-* :func:`plaid_approx_score` — the approximate scoring step (FastPlaid's
-  `index_select(query_centroid_scores) → pad → colbert_score_reduce`).
-  Fuses the gather, masking, max-over-doc-tokens, sum-over-query-tokens.
-
-* :func:`maxsim_residual` — the exact rerank step. Takes per-token centroid
-  codes + packed residuals (2/4/8-bit) + centroid table + bucket weights,
-  decompresses on-the-fly in SRAM, L2-normalizes, and computes MaxSim
-  against the query embedding — all in a single kernel.
+* :func:`maxsim_residual` — the exact rerank step. Takes per-token
+  centroid codes + packed residuals (2/4/8-bit) + centroid table + bucket
+  weights, decompresses on-the-fly in SRAM, L2-normalizes, and computes
+  MaxSim against the query embedding — all in a single kernel.
 """
 
 from __future__ import annotations
@@ -91,11 +91,11 @@ def plaid_approx_score(
 ) -> torch.Tensor:
     """Fused PLAID-style approximate scoring.
 
-    Matches FastPlaid's ``batch_approx_scores`` path — gather per-token centroid
-    scores, mask padded positions, max-over-doc, sum-over-query — in a single
-    kernel launch. Input codes are padded (not packed); we keep the API close
-    to what FastPlaid passes into ``colbert_score_reduce`` so it's a drop-in
-    replacement for that Rust routine.
+    Performs the ColBERTv2 IVF-prune step — gather per-token centroid
+    scores, mask padded positions, max-over-doc, sum-over-query — in a
+    single kernel launch. Input codes are padded (not bit-packed); the
+    API matches what ColBERTv2 / PLAID-style retrievers pass into their
+    ``colbert_score_reduce`` routine.
 
     Args:
         query_centroid_scores: ``[n_centroids, Lq]`` fp32.
@@ -299,9 +299,9 @@ def maxsim_residual(
 ) -> torch.Tensor:
     """Fused PLAID residual-decompression + MaxSim.
 
-    Decompresses PLAID-style compressed embeddings on-the-fly in SRAM and
-    scores them against the query — matches FastPlaid's exact rerank path
-    but in a single Triton kernel with no libtorch dependency.
+    Decompresses PLAID / ColBERTv2 compressed embeddings on-the-fly in
+    SRAM and scores them against the query — the exact-rerank step, fused
+    into a single Triton kernel callable from Python.
 
     Compressed format (following the PLAID / ColBERTv2 convention):
 
