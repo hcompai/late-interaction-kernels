@@ -57,8 +57,11 @@ dev = [
   "pandas",
   "tabulate",
 ]
-# PyLate integration (drop-in for `pylate.scores.colbert_scores`).
-pylate = ["pylate>=1.2"]
+# PyLate integration (drop-in for `pylate.scores.colbert_scores`). 1.3 is
+# the first release with the `(queries_mask, documents_mask)` signature
+# we patch against — older PyLate (1.2.x) used a single `mask=` kwarg and
+# is not supported.
+pylate = ["pylate>=1.3.3"]
 
 [project.urls]
 Homepage = "https://github.com/hcompai/late-interaction-kernels"
