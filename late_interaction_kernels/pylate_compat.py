@@ -18,6 +18,15 @@ The replacement honors PyLate's exact signature:
         documents_mask=None,       # [Nd, Ld] float/bool
     ) -> [Nq, Nd]
 
+As of PyLate 1.2.x the loss modules (``Contrastive``, ``CachedContrastive``,
+``Distillation``) call into ``colbert_scores`` with keyword arguments
+``queries_mask=`` and ``documents_mask=``. For backward compatibility we
+also accept the legacy single ``mask=`` kwarg (older PyLate versions had
+that signature) and a third positional / keyword alias that some forks
+use. In every case the document mask is the primary mask applied to the
+``max`` reduction; the query mask, when present, is applied to query
+token rows before the scatter.
+
 We fall back to the original PyTorch implementation when:
   * tensors are on CPU,
   * CUDA device isn't Ampere-or-newer,
@@ -70,59 +79,85 @@ def _mask_as_bool(m):
     return m != 0
 
 
+def _resolve_masks(queries_mask, documents_mask, legacy_mask):
+    """PyLate's signature has evolved. Accept all known shapes:
+
+    * current (>= 1.1):  ``queries_mask=``, ``documents_mask=``
+    * legacy (< 1.1):    ``mask=`` (document mask only)
+    * positional legacy: 3rd positional == document mask
+
+    Whichever arrived, hand back ``(q_mask, d_mask)`` as bool tensors.
+    """
+    if documents_mask is None and legacy_mask is not None:
+        documents_mask = legacy_mask
+    return _mask_as_bool(queries_mask), _mask_as_bool(documents_mask)
+
+
 def patched_colbert_scores(
     queries_embeddings,
     documents_embeddings,
-    mask=None,
+    queries_mask=None,
+    documents_mask=None,
+    *,
+    mask=None,  # legacy PyLate kwarg — accepted and mapped to documents_mask
 ):
     """Drop-in replacement for :func:`pylate.scores.colbert_scores`.
 
-    PyLate signature: ``colbert_scores(queries_embeddings, documents_embeddings, mask=None)``
-    where ``mask`` is the *document* mask (shape ``[Nd, Ld]``). PyLate
-    implements the mask by multiplication (``scores * mask``) — we preserve
-    the same algebraic result by masking-out doc tokens (``-inf``) so they
-    can't win the max, which matches PyLate whenever real scores are
+    PyLate current signature (>= 1.1)::
+
+        colbert_scores(Q, D, queries_mask=None, documents_mask=None)
+
+    ``Contrastive`` / ``CachedContrastive`` call this with **keyword** args
+    ``queries_mask=`` and ``documents_mask=``. We also accept the legacy
+    single ``mask=`` kwarg to stay compatible with older PyLate releases.
+
+    PyLate implements masks by multiplication (``scores * mask``); we
+    preserve the same algebraic result by masking-out tokens (``-inf``) so
+    they can't win the max, which matches PyLate whenever real scores are
     non-negative (the common case after L2-normalization).
     """
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
     Q = convert_to_tensor(queries_embeddings)
     D = convert_to_tensor(documents_embeddings)
+    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
     if _should_fallback(Q, D):
-        return _ORIGINAL["colbert_scores"](Q, D, mask)
+        return _ORIGINAL["colbert_scores"](Q, D, queries_mask=queries_mask, documents_mask=documents_mask)
 
-    return maxsim(
-        Q,
-        D,
-        q_mask=None,
-        d_mask=_mask_as_bool(mask),
-    )
+    return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
 
 
 def patched_colbert_kd_scores(
     queries_embeddings,
     documents_embeddings,
-    mask=None,
+    queries_mask=None,
+    documents_mask=None,
+    *,
+    mask=None,  # legacy
 ):
     """Drop-in replacement for :func:`pylate.scores.colbert_kd_scores`.
 
-    PyLate signature: ``colbert_kd_scores(Q, D, mask=None)``. Shape
-    convention: ``D`` is ``[Nq, Nd, Ld, d]`` — each query has its own
-    candidate list — and ``mask`` is ``[Nq, Nd, Ld]`` (doc tokens).
+    PyLate current signature (>= 1.1)::
+
+        colbert_kd_scores(Q, D, queries_mask=None, documents_mask=None)
+
+    Shape convention: ``D`` is ``[Nq, Nd, Ld, d]`` — each query has its
+    own candidate list — and ``documents_mask`` is ``[Nq, Nd, Ld]``.
+    ``queries_mask``, when supplied, is ``[Nq, Lq]``.
     """
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
     Q = convert_to_tensor(queries_embeddings)
     D = convert_to_tensor(documents_embeddings)
+    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
     if _should_fallback(Q, D):
-        return _ORIGINAL["colbert_kd_scores"](Q, D, mask)
+        return _ORIGINAL["colbert_kd_scores"](Q, D, queries_mask=queries_mask, documents_mask=documents_mask)
 
     if D.dim() != 4:
         raise ValueError(f"colbert_kd_scores expects D.dim()==4, got {D.dim()}")
 
-    d_mask = _mask_as_bool(mask)
     Nq, _Lq, _d = Q.shape
     _, Nd, _Ld, _ = D.shape
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
@@ -130,7 +165,7 @@ def patched_colbert_kd_scores(
         out[i] = maxsim(
             Q[i].unsqueeze(0),
             D[i],
-            q_mask=None,
+            q_mask=q_mask[i : i + 1] if q_mask is not None else None,
             d_mask=d_mask[i] if d_mask is not None else None,
         ).squeeze(0)
     return out

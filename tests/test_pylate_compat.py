@@ -19,23 +19,19 @@ def test_pylate_colbert_scores_patched_no_mask():
     from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
 
     Q = torch.nn.functional.normalize(
-        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32),
-        p=2,
-        dim=-1,
+        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
     )
     D = torch.nn.functional.normalize(
-        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32),
-        p=2,
-        dim=-1,
+        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
     )
     d_mask = torch.ones(8, 128, device="cuda")  # no real masking
 
-    ref = original_fn(Q, D, d_mask)
+    ref = original_fn(Q, D, documents_mask=d_mask)
     patch_pylate()
     try:
         from pylate.scores import colbert_scores as patched_fn
 
-        out = patched_fn(Q, D, d_mask)
+        out = patched_fn(Q, D, documents_mask=d_mask)
         err = (out.float() - ref.float()).abs().max().item()
         denom = max(1.0, ref.abs().max().item())
         assert err / denom < 5e-3, f"err={err}, denom={denom}"
@@ -51,14 +47,10 @@ def test_pylate_colbert_scores_matches_our_reference():
     from late_interaction_kernels.reference import maxsim_reference
 
     Q = torch.nn.functional.normalize(
-        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32),
-        p=2,
-        dim=-1,
+        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
     )
     D = torch.nn.functional.normalize(
-        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32),
-        p=2,
-        dim=-1,
+        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
     )
     d_mask = (torch.rand(8, 128, device="cuda") > 0.2).float()
     d_mask[:, 0] = 1
@@ -69,8 +61,73 @@ def test_pylate_colbert_scores_matches_our_reference():
     try:
         from pylate.scores import colbert_scores as patched_fn
 
-        # PyLate signature: (Q, D, mask) where mask is the doc mask.
-        out = patched_fn(Q, D, d_mask).float()
+        # Current PyLate signature uses kwargs `queries_mask=` / `documents_mask=`.
+        out = patched_fn(Q, D, documents_mask=d_mask).float()
+        err = (out - ref).abs().max().item()
+        denom = max(1.0, ref.abs().max().item())
+        assert err / denom < 5e-3, f"err={err}, denom={denom}"
+    finally:
+        unpatch_pylate()
+
+
+def test_pylate_colbert_scores_accepts_legacy_mask_kwarg():
+    """PyLate < 1.1 had ``colbert_scores(Q, D, mask=None)``. We keep the
+    legacy kwarg working so a pinned-old PyLate install does not break."""
+    from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Q = torch.nn.functional.normalize(
+        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
+    )
+    D = torch.nn.functional.normalize(
+        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
+    )
+    d_mask = (torch.rand(8, 128, device="cuda") > 0.2).float()
+    d_mask[:, 0] = 1
+
+    ref = maxsim_reference(Q, D, d_mask=d_mask.bool()).float()
+
+    patch_pylate()
+    try:
+        from pylate.scores import colbert_scores as patched_fn
+
+        out = patched_fn(Q, D, mask=d_mask).float()  # legacy kwarg
+        err = (out - ref).abs().max().item()
+        denom = max(1.0, ref.abs().max().item())
+        assert err / denom < 5e-3, f"err={err}, denom={denom}"
+    finally:
+        unpatch_pylate()
+
+
+def test_pylate_colbert_scores_with_both_masks():
+    """When both `queries_mask` and `documents_mask` are supplied (the
+    real Contrastive/CachedContrastive call path), the patched function
+    must still match a PyTorch reference that multiplies by both masks
+    before the max-sum reduction."""
+    from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
+
+    Q = torch.nn.functional.normalize(
+        torch.randn(4, 32, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
+    )
+    D = torch.nn.functional.normalize(
+        torch.randn(8, 128, 128, device="cuda", dtype=torch.float32), p=2, dim=-1
+    )
+    q_mask = (torch.rand(4, 32, device="cuda") > 0.2).float()
+    q_mask[:, 0] = 1
+    d_mask = (torch.rand(8, 128, device="cuda") > 0.2).float()
+    d_mask[:, 0] = 1
+
+    # PyTorch reference mirroring pylate.scores.colbert_scores exactly.
+    sims = torch.einsum("ash,bth->abst", Q, D)
+    sims = sims * q_mask.unsqueeze(1).unsqueeze(3)
+    sims = sims * d_mask.unsqueeze(0).unsqueeze(2)
+    ref = sims.max(dim=-1).values.sum(dim=-1).float()
+
+    patch_pylate()
+    try:
+        from pylate.scores import colbert_scores as patched_fn
+
+        out = patched_fn(Q, D, queries_mask=q_mask, documents_mask=d_mask).float()
         err = (out - ref).abs().max().item()
         denom = max(1.0, ref.abs().max().item())
         assert err / denom < 5e-3, f"err={err}, denom={denom}"

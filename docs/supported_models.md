@@ -87,6 +87,23 @@ scores.sum().backward()             # grad_Q is fused; codes / centroids get non
 Use `maxsim_residual_inference` if you only need reranking — it skips the
 argmax save and saves `Nq * Nd * Lq * 4` bytes of VRAM.
 
+**When does fused-backward residual actually help vs `unpack + maxsim`?**
+The fused path avoids ever materializing the dense `[Nd, Ld, d]` fp32
+embedding, so the VRAM story is unambiguous. For wall-clock time, the
+crossover we measured on H100 is roughly:
+
+- small `Nd` (≤ 128) — typical training / distillation batches —
+  fused is **~1.3–1.5×** faster at 2/4/8-bit.
+- large `Nd` (≥ 512) — reranker-scale — fused is **~2–3× slower**
+  because the decompression is re-run per query-token during backward
+  while the reference amortizes it across a single `unpack` call.
+
+If you're training, stay with the fused path (small `Nd`, VRAM wins).
+If you're scoring thousands of candidates with autograd enabled (rare —
+you probably want `maxsim_residual_inference` here), fall back to the
+dense unpack + `maxsim` autograd path. See
+`benchmarks/bench_backward_0_5.py` for the exact numbers.
+
 ## Ragged / packed batches (code search, heterogeneous doc lengths)
 
 If your documents have widely different lengths — typical in code search,

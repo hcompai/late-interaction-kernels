@@ -44,11 +44,40 @@ fits (and does not fit) in the story.
 ### Changed
 
 - `maxsim_residual` now returns an autograd-aware result when `Q`
-requires grad — previously it silently dropped gradient. Behavior on
-non-grad inputs is unchanged and byte-for-byte identical to 0.4.
+  requires grad — previously it silently dropped gradient. Behavior on
+  non-grad inputs is unchanged and byte-for-byte identical to 0.4.
 - `maxsim_varlen` likewise is now autograd-aware when either input
-requires grad. Previous 0.4.x callers that pass non-grad tensors see
-no change.
+  requires grad. Previous 0.4.x callers that pass non-grad tensors see
+  no change.
+
+### Fixed
+
+- **`patch_pylate()` signature compatibility with current PyLate.** The
+  patched `colbert_scores` / `colbert_kd_scores` now match PyLate's
+  current signature `(Q, D, queries_mask=None, documents_mask=None)`
+  exactly. Previously we only accepted a single positional `mask=` kwarg,
+  which meant `Contrastive`, `CachedContrastive`, and `Distillation`
+  (which all call into the score fn with keyword args `queries_mask=` /
+  `documents_mask=`) would raise `TypeError` after `patch_pylate()` on
+  PyLate ≥ 1.1. The old single-`mask=` kwarg is still accepted for
+  pinned-old PyLate installs. New tests:
+  `test_pylate_colbert_scores_with_both_masks`,
+  `test_pylate_colbert_scores_accepts_legacy_mask_kwarg`.
+
+### Honest performance notes
+
+- Fused residual backward is a **small wins at small `Nd` (training
+  regime)** path: ~1.3–1.5× faster than `unpack → maxsim` at
+  `Nq=8, Nd=64, Ld=300`. At rerank scale (`Nd ≥ 512`) the reference
+  `unpack`-once + `maxsim` path is faster wall-clock-wise because the
+  decompression amortizes across query tokens. The fused path still
+  wins on **VRAM** at every shape (no dense `[Nd, Ld, d]` fp32
+  scratch). If you need autograd at large `Nd` use the dense unpack
+  path; if you only need inference use `maxsim_residual_inference`.
+- Fused varlen backward is a **free win (~1.05–1.1×)** at typical code-
+  retrieval and long-doc shapes, with zero repadding. The real value
+  is correctness: ragged inputs that go in never have to come out as
+  padded.
 
 ## 0.4.0 — New kernels: fused normalize, top-k, Matryoshka, XTR, PLAID
 
