@@ -1,43 +1,34 @@
-"""late-interaction-kernels: fused Triton kernels for ColBERT / ColPali / ModernColBERT MaxSim.
+"""late-interaction-kernels: fused Triton kernels for late-interaction scoring.
 
-Top-level API
--------------
-
-    from late_interaction_kernels import maxsim, maxsim_inference, soft_maxsim, maxsim_varlen
-
-    # autograd-aware (training)
-    scores = maxsim(Q, D, q_mask=..., d_mask=...)              # [Nq, Nd]
-
-    # inference-only (no saved argmax, lighter)
-    scores = maxsim_inference(Q, D, q_mask=..., d_mask=...)
-
-    # log-sum-exp relaxation (denser gradient)
-    scores = soft_maxsim(Q, D, beta=10.0)
-
-    # packed / varlen inputs (no padding waste)
-    scores = maxsim_varlen(Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d)
-
-PyLate drop-in
+Public surface
 --------------
 
-    from late_interaction_kernels import patch_pylate, unpatch_pylate
-    patch_pylate()
+Training / general MaxSim
+    * ``maxsim(Q, D, q_mask=, d_mask=, normalize=)`` — autograd-aware.
+    * ``maxsim_inference(...)`` — no saved argmax, inference-only.
+    * ``soft_maxsim(...)`` — log-sum-exp relaxation (dense gradient).
+    * ``maxsim_varlen(...)`` — packed / ragged inputs.
 
-Backward-path selector (advanced)
----------------------------------
+Retrieval
+    * ``maxsim_topk(Q, D, k, ...)`` — top-k docs + indices in one call.
+    * ``plaid_approx_score(qcs, codes, doc_lengths)`` — ColBERTv2 IVF
+      approximate scoring step, fused.
+    * ``maxsim_residual(Q, codes, residuals, ...)`` — fused PLAID /
+      ColBERTv2 2/4/8-bit decompression + L2-normalize + MaxSim (exact
+      rerank step).
 
-    from late_interaction_kernels import set_backward_method, get_backward_method
-    set_backward_method("auto")     # default: heuristic picker
-    set_backward_method("atomic")   # fp32 atomic_add
-    set_backward_method("csr")      # sort + bucket reduce
+Late-interaction variants
+    * ``maxsim_matryoshka(Q, D, dims=[...])`` — multi-dim scoring in one pass.
+    * ``maxsim_xtr(Q, D, top_k=5)`` — XTR top-k aggregated MaxSim.
 
-Reference implementation (CPU / debugging)
-------------------------------------------
+PyLate drop-in
+    * ``patch_pylate()`` / ``unpatch_pylate()``.
 
-    from late_interaction_kernels.reference import maxsim_reference
+Advanced
+    * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and
@@ -59,20 +50,26 @@ if _HAS_TRITON:
         set_backward_method,
     )
     from .forward import maxsim_forward
+    from .matryoshka import maxsim_matryoshka
+    from .plaid import maxsim_residual, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
     from .soft import soft_maxsim
+    from .topk import maxsim_topk
     from .varlen import maxsim_varlen
+    from .xtr import maxsim_xtr
 else:  # pragma: no cover
 
     def _needs_triton(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError(
             "late-interaction-kernels's GPU kernels require Triton, which isn't installed on "
-            "this platform. Install a CUDA-enabled Triton (Linux only) or use "
-            "`late_interaction_kernels.reference.maxsim_reference` for a pure-PyTorch fallback."
+            "this platform. Install a CUDA-enabled Triton (Linux only) or use the "
+            "reference implementations in `late_interaction_kernels.reference`."
         )
 
     maxsim = maxsim_inference = maxsim_forward = _needs_triton
     soft_maxsim = maxsim_varlen = _needs_triton
+    maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
+    plaid_approx_score = maxsim_residual = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
 
@@ -80,13 +77,23 @@ from . import reference  # noqa: E402,F401  — always importable (pure PyTorch)
 
 __all__ = [
     "__version__",
+    # core MaxSim
     "maxsim",
     "maxsim_inference",
     "maxsim_forward",
     "soft_maxsim",
     "maxsim_varlen",
+    # retrieval
+    "maxsim_topk",
+    "plaid_approx_score",
+    "maxsim_residual",
+    # variants
+    "maxsim_matryoshka",
+    "maxsim_xtr",
+    # configuration
     "set_backward_method",
     "get_backward_method",
+    # pylate
     "patch_pylate",
     "unpatch_pylate",
     "reference",

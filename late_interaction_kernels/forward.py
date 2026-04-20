@@ -40,7 +40,7 @@ from ._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
 
 @triton.autotune(
     configs=forward_configs(),
-    key=["Lq", "Ld", "d_pad", "has_q_mask", "has_d_mask"],
+    key=["Lq", "Ld", "d_pad", "has_q_mask", "has_d_mask", "normalize"],
     prune_configs_by={"early_config_prune": prune_forward},
 )
 @triton.jit
@@ -74,6 +74,7 @@ def _maxsim_fwd_kernel(
     has_q_mask: tl.constexpr,
     has_d_mask: tl.constexpr,
     save_argmax: tl.constexpr,
+    normalize: tl.constexpr,
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
@@ -104,11 +105,18 @@ def _maxsim_fwd_kernel(
         else:
             q_active = q_valid
 
-        Q_block = tl.load(
+        Q_block_f32 = tl.load(
             Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
             mask=q_valid[:, None] & k_mask[None, :],
             other=0.0,
-        ).to(COMPUTE_DTYPE)
+        ).to(tl.float32)
+        if normalize:
+            # Per-row L2 normalize in registers. Matches F.normalize(..., p=2, dim=-1)
+            # with the same eps=1e-12 clamp as PyLate's upstream calls.
+            q_norm_sq = tl.sum(Q_block_f32 * Q_block_f32, axis=1)
+            q_inv = 1.0 / tl.sqrt(tl.maximum(q_norm_sq, 1e-12))
+            Q_block_f32 = Q_block_f32 * q_inv[:, None]
+        Q_block = Q_block_f32.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
         m_idx = tl.full([BLOCK_Q], 0, dtype=tl.int32)
@@ -127,11 +135,16 @@ def _maxsim_fwd_kernel(
             else:
                 d_active = d_valid
 
-            D_block = tl.load(
+            D_block_f32 = tl.load(
                 D_ptr + d_idx * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
                 mask=d_valid[:, None] & k_mask[None, :],
                 other=0.0,
-            ).to(COMPUTE_DTYPE)
+            ).to(tl.float32)
+            if normalize:
+                d_norm_sq = tl.sum(D_block_f32 * D_block_f32, axis=1)
+                d_inv = 1.0 / tl.sqrt(tl.maximum(d_norm_sq, 1e-12))
+                D_block_f32 = D_block_f32 * d_inv[:, None]
+            D_block = D_block_f32.to(COMPUTE_DTYPE)
 
             # tl.dot needs inputs with the same dtype; Q_block and D_block are
             # both COMPUTE_DTYPE. Accumulator is fp32.
@@ -167,6 +180,7 @@ def _run_forward(
     q_mask: torch.Tensor | None,
     d_mask: torch.Tensor | None,
     save_argmax: bool,
+    normalize: bool = False,
 ):
     """Launch the forward kernel. Q/D assumed 3-D, contiguous on last dim.
 
@@ -223,6 +237,7 @@ def _run_forward(
         has_q_mask,
         has_d_mask,
         save_argmax,
+        normalize,
         COMPUTE_DTYPE=tl_dtype,
     )
     return scores, argmax
@@ -235,6 +250,7 @@ def maxsim_forward(
     d_mask: torch.Tensor | None = None,
     *,
     save_argmax: bool = False,
+    normalize: bool = False,
 ):
     """Fused forward MaxSim with mask support.
 
@@ -245,6 +261,11 @@ def maxsim_forward(
         d_mask: [Nd, Ld] or [Ld] bool tensor. True=keep.
         save_argmax: if True, return the winning doc-token index per
             (q_batch, d_batch, q_token). Used by the exact backward.
+        normalize: if True, L2-normalize each Q and D row (per-token)
+            inside the kernel. Equivalent to calling ``F.normalize(.., dim=-1)``
+            on Q and D before MaxSim, but without an HBM round-trip.
+            Saves ``2 * (Nq·Lq + Nd·Ld) * d * sizeof(dtype)`` bytes of
+            bandwidth per call.
 
     Returns:
         scores: [Nq, Nd] fp32. If both inputs were 2-D returns a scalar.
@@ -268,7 +289,7 @@ def maxsim_forward(
     if d_mask is not None:
         d_mask = d_mask.contiguous().to(torch.int8)
 
-    scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax)
+    scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax, normalize)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(()), argmax

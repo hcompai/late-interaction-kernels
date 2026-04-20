@@ -70,12 +70,19 @@ def _mask_as_bool(m):
     return m != 0
 
 
-def patched_colbert_scores(queries_embeddings, documents_embeddings, mask=None):
-    """Drop-in replacement for `pylate.scores.colbert_scores` (pylate 1.2).
+def patched_colbert_scores(
+    queries_embeddings,
+    documents_embeddings,
+    mask=None,
+):
+    """Drop-in replacement for :func:`pylate.scores.colbert_scores`.
 
-    PyLate signature: `colbert_scores(Q, D, mask=None)` where `mask` is the
-    DOCUMENT mask (shape [Nd, Ld]) that gets multiplied into the similarity
-    tensor. We translate it to our `d_mask` argument.
+    PyLate signature: ``colbert_scores(queries_embeddings, documents_embeddings, mask=None)``
+    where ``mask`` is the *document* mask (shape ``[Nd, Ld]``). PyLate
+    implements the mask by multiplication (``scores * mask``) — we preserve
+    the same algebraic result by masking-out doc tokens (``-inf``) so they
+    can't win the max, which matches PyLate whenever real scores are
+    non-negative (the common case after L2-normalization).
     """
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
@@ -85,14 +92,24 @@ def patched_colbert_scores(queries_embeddings, documents_embeddings, mask=None):
     if _should_fallback(Q, D):
         return _ORIGINAL["colbert_scores"](Q, D, mask)
 
-    return maxsim(Q, D, d_mask=_mask_as_bool(mask))
+    return maxsim(
+        Q,
+        D,
+        q_mask=None,
+        d_mask=_mask_as_bool(mask),
+    )
 
 
-def patched_colbert_kd_scores(queries_embeddings, documents_embeddings, mask=None):
-    """Drop-in replacement for `pylate.scores.colbert_kd_scores`.
+def patched_colbert_kd_scores(
+    queries_embeddings,
+    documents_embeddings,
+    mask=None,
+):
+    """Drop-in replacement for :func:`pylate.scores.colbert_kd_scores`.
 
-    PyLate shape convention: `documents_embeddings` is `[Nq, Nd, Ld, d]` —
-    each query has its own candidate list — and `mask` is `[Nq, Nd, Ld]`.
+    PyLate signature: ``colbert_kd_scores(Q, D, mask=None)``. Shape
+    convention: ``D`` is ``[Nq, Nd, Ld, d]`` — each query has its own
+    candidate list — and ``mask`` is ``[Nq, Nd, Ld]`` (doc tokens).
     """
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
@@ -109,12 +126,11 @@ def patched_colbert_kd_scores(queries_embeddings, documents_embeddings, mask=Non
     Nq, _Lq, _d = Q.shape
     _, Nd, _Ld, _ = D.shape
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
-    # Each query has its own doc set, so we can't batch across Nq naively.
-    # Per-query dispatch is OK here — KD typically uses small Nd (<= 16 negatives).
     for i in range(Nq):
         out[i] = maxsim(
             Q[i].unsqueeze(0),
             D[i],
+            q_mask=None,
             d_mask=d_mask[i] if d_mask is not None else None,
         ).squeeze(0)
     return out
@@ -137,18 +153,20 @@ def patch_pylate():
     api.colbert_kd_scores = patched_colbert_kd_scores
 
     # Losses hold a direct reference captured at import time — patch those too.
-    try:
-        import pylate.losses.contrastive as c  # type: ignore
+    for mod_name, attr in (
+        ("pylate.losses.contrastive", "colbert_scores"),
+        ("pylate.losses.cached_contrastive", "colbert_scores"),
+        ("pylate.losses.distillation", "colbert_kd_scores"),
+    ):
+        try:
+            import importlib
 
-        c.colbert_scores = patched_colbert_scores
-    except Exception:
-        pass
-    try:
-        import pylate.losses.cached_contrastive as cc  # type: ignore
-
-        cc.colbert_scores = patched_colbert_scores
-    except Exception:
-        pass
+            mod = importlib.import_module(mod_name)
+            setattr(
+                mod, attr, patched_colbert_scores if attr == "colbert_scores" else patched_colbert_kd_scores
+            )
+        except Exception:
+            pass
 
 
 def unpatch_pylate():
@@ -164,17 +182,17 @@ def unpatch_pylate():
     api.colbert_scores = _ORIGINAL["colbert_scores"]
     api.colbert_kd_scores = _ORIGINAL["colbert_kd_scores"]
 
-    try:
-        import pylate.losses.contrastive as c  # type: ignore
+    for mod_name, attr, orig_key in (
+        ("pylate.losses.contrastive", "colbert_scores", "colbert_scores"),
+        ("pylate.losses.cached_contrastive", "colbert_scores", "colbert_scores"),
+        ("pylate.losses.distillation", "colbert_kd_scores", "colbert_kd_scores"),
+    ):
+        try:
+            import importlib
 
-        c.colbert_scores = _ORIGINAL["colbert_scores"]
-    except Exception:
-        pass
-    try:
-        import pylate.losses.cached_contrastive as cc  # type: ignore
-
-        cc.colbert_scores = _ORIGINAL["colbert_scores"]
-    except Exception:
-        pass
+            mod = importlib.import_module(mod_name)
+            setattr(mod, attr, _ORIGINAL[orig_key])
+        except Exception:
+            pass
 
     _ORIGINAL.clear()

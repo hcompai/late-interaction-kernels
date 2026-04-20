@@ -36,9 +36,16 @@ torchrun --standalone --nproc_per_node=8 \
 
 # FastPlaid rerank-step comparison (requires `pip install fast-plaid`)
 python benchmarks/bench_fastplaid.py
+
+# v0.4 kernels: fused normalize, top-k, Matryoshka, XTR, PLAID
+python benchmarks/bench_normalize.py
+python benchmarks/bench_new_kernels.py
+
+# Everything at once (tests + all benches, writes to $OUTDIR)
+OUTDIR=benchmarks/results bash scripts/run_all_benchmarks.sh
 ```
 
-Results land in `benchmarks/results/*.json`.
+Results land in `benchmarks/results/*.json` and `*.md`.
 
 ## On a SkyPilot cluster
 
@@ -57,11 +64,57 @@ cd ~/sky_workdir && CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_forward.py
 
 
 | shape                                       | late-interaction-kernels | naive einsum | speedup | scratch    |
-| ------------------------------------------- | ------------- | ------------ | ------- | ---------- |
-| `Nq=1, Nd=1000, Lq=32, Ld=300`              | 0.031 ms      | 0.705 ms     | 22.7×   | 183 MB → 0 |
-| `Nq=1, Nd=10 000, Lq=32, Ld=300`            | 0.557 ms      | 7.112 ms     | 12.8×   | 1.8 GB → 0 |
-| `Nq=1, Nd=1000, Lq=1024, Ld=1024` (ColPali) | 1.518 ms      | 11.967 ms    | 7.9×    | 4.5 GB → 0 |
+| ------------------------------------------- | ------------------------ | ------------ | ------- | ---------- |
+| `Nq=1, Nd=1000, Lq=32, Ld=300`              | 0.031 ms                 | 0.705 ms     | 22.7×   | 183 MB → 0 |
+| `Nq=1, Nd=10 000, Lq=32, Ld=300`            | 0.557 ms                 | 7.112 ms     | 12.8×   | 1.8 GB → 0 |
+| `Nq=1, Nd=1000, Lq=1024, Ld=1024` (ColPali) | 1.518 ms                 | 11.967 ms    | 7.9×    | 4.5 GB → 0 |
 
+
+## New kernels (v0.4)
+
+All numbers single H100, bf16 inputs, fp32 accumulator. Reference is a
+pure-PyTorch implementation of the same operation (dense einsum + masks +
+reduce + optional normalize). Reproduce with `bench_new_kernels.py` and
+`bench_normalize.py`.
+
+### Fused L2-normalize vs `F.normalize` + MaxSim
+
+
+| shape                                 | `F.normalize` + maxsim | fused (`normalize=True`) | speedup   |
+| ------------------------------------- | ---------------------- | ------------------------ | --------- |
+| text-short (`Nq=1, Nd=1k, Ld=300`)    | 0.491 ms               | 0.064 ms                 | **7.7×**  |
+| text-long (`Nq=1, Nd=1k, Ld=1024`)    | 1.569 ms               | 0.094 ms                 | **16.7×** |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`) | 0.225 ms               | 0.064 ms                 | 3.5×      |
+| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)  | 0.219 ms               | 0.065 ms                 | 3.4×      |
+| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)  | 0.271 ms               | 0.110 ms                 | 2.5×      |
+| corpus-10k (`Nq=1, Nd=10k, Ld=300`)   | 4.442 ms               | 0.303 ms                 | **14.7×** |
+
+
+The fused path normalizes Q and D blocks in SRAM, eliminating the two HBM
+round-trips that `F.normalize` would otherwise require. Backward correctly
+applies the L2-norm Jacobian.
+
+### Top-K / Matryoshka / XTR / PLAID
+
+
+| kernel                        | PyTorch ref (ms) | late-interaction-kernels (ms) | speedup    | notes                                                      |
+| ----------------------------- | ---------------- | ----------------------------- | ---------- | ---------------------------------------------------------- |
+| `maxsim_topk` (1× 10k docs)   | 0.304            | 0.296                         | 1.03×      | wraps fused MaxSim + `torch.topk`; main value is the API   |
+| `maxsim_matryoshka` (3 dims)  | 0.738            | 0.474                         | 1.56×      | one kernel call vs 3 separate MaxSim launches              |
+| `maxsim_xtr` k=5              | 0.687            | 0.687                         | 1.00×      | current `top_k > 1` path is a reference fallback (roadmap) |
+| `maxsim_xtr` k=20             | 0.744            | 0.749                         | 0.99×      | idem                                                       |
+| `plaid_approx_score` (8k×200) | 0.687            | 0.033                         | **20.58×** | gather → mask → max → sum, fused (IVF-style prune step)    |
+| `maxsim_residual` 2-bit       | 3.506            | 0.162                         | **21.70×** | fused decompress + normalize + MaxSim                      |
+| `maxsim_residual` 4-bit       | 3.517            | 0.176                         | **19.95×** | idem                                                       |
+
+
+`plaid_approx_score` and `maxsim_residual` cover the two hot patterns of a
+ColBERTv2-style pipeline (IVF prune over centroid codes, exact rerank over
+packed residuals) as fused Triton kernels. They exist so a pure-Python
+reranker can get these operations as single kernel launches, instead of
+chaining `index_select + pad + mask + max + sum` and `unpack + F.normalize
+
+- einsum + max + sum`.
 
 ## Backward paths (`atomic` vs `csr` vs `auto`)
 
@@ -93,10 +146,10 @@ relative) because `atomic_add` reduction order depends on thread scheduling.
 
 
 | batch × negs | vanilla PyLate | late-interaction-kernels | speedup |
-| ------------ | -------------- | ------------- | ------- |
-| 64 × 1       | 2.70 ms        | 0.92 ms       | 2.93×   |
-| 128 × 2      | 14.95 ms       | 4.86 ms       | 3.08×   |
-| 256 × 3      | 75.04 ms       | 26.28 ms      | 2.86×   |
+| ------------ | -------------- | ------------------------ | ------- |
+| 64 × 1       | 2.70 ms        | 0.92 ms                  | 2.93×   |
+| 128 × 2      | 14.95 ms       | 4.86 ms                  | 3.08×   |
+| 256 × 3      | 75.04 ms       | 26.28 ms                 | 2.86×   |
 
 
 ## ModernColBERT (long documents)
@@ -167,23 +220,23 @@ gradient checkpointing on the ModernBERT encoder.
 
 
 | setup                                  | vanilla PyLate | late-interaction-kernels | speedup | peak (v → f)   |
-| -------------------------------------- | -------------- | ------------- | ------- | -------------- |
-| 1 × H100, bs=8, Lq=32, Ld=2048         | 227.2 ms       | 220.6 ms      | 1.03×   | 29.2 → 29.2 GB |
-| 1 × H100, bs=8, Lq=32, Ld=4096         | 428.3 ms       | 428.7 ms      | 1.00×   | 56.3 → 56.3 GB |
-| 1 × H100, bs=4, Lq=32, Ld=8192         | 504.2 ms       | 504.1 ms      | 1.00×   | 56.2 → 56.2 GB |
-| 8 × H100 DDP, bs=4, Ld=8192 (per-rank) | 505.7 ms       | 504.7 ms      | 1.00×   | 56.8 → 56.8 GB |
+| -------------------------------------- | -------------- | ------------------------ | ------- | -------------- |
+| 1 × H100, bs=8, Lq=32, Ld=2048         | 227.2 ms       | 220.6 ms                 | 1.03×   | 29.2 → 29.2 GB |
+| 1 × H100, bs=8, Lq=32, Ld=4096         | 428.3 ms       | 428.7 ms                 | 1.00×   | 56.3 → 56.3 GB |
+| 1 × H100, bs=4, Lq=32, Ld=8192         | 504.2 ms       | 504.1 ms                 | 1.00×   | 56.2 → 56.2 GB |
+| 8 × H100 DDP, bs=4, Ld=8192 (per-rank) | 505.7 ms       | 504.7 ms                 | 1.00×   | 56.8 → 56.8 GB |
 
 
 `**losses.CachedContrastive**` (LightOn's Reason recipe: `gather_across_devices=True`, grad-ckpt, bf16):
 
 
 | setup                                     | vanilla PyLate | late-interaction-kernels | speedup | peak (per rank) |
-| ----------------------------------------- | -------------- | ------------- | ------- | --------------- |
-| 8 × H100 DDP, bs=4/dev, mini=4, Ld=8192   | 664.9 ms       | 662.1 ms      | 1.00×   | 30.2 GB         |
-| 8 × H100 DDP, bs=16/dev, mini=8, Ld=4096  | 1164.2 ms      | 1141.0 ms     | 1.02×   | 30.2 GB         |
-| 8 × H100 DDP, bs=8/dev, mini=8, Ld=8192   | 1250.4 ms      | 1243.0 ms     | 1.01×   | 57.5 GB         |
-| 8 × H100 DDP, bs=16/dev, mini=16, Ld=4096 | 1078.1 ms      | 1047.4 ms     | 1.03×   | 57.5 GB         |
-| 8 × H100 DDP, bs=32/dev, mini=32, Ld=2048 | 1020.1 ms      | 960.2 ms      | 1.06×   | 57.4 GB         |
+| ----------------------------------------- | -------------- | ------------------------ | ------- | --------------- |
+| 8 × H100 DDP, bs=4/dev, mini=4, Ld=8192   | 664.9 ms       | 662.1 ms                 | 1.00×   | 30.2 GB         |
+| 8 × H100 DDP, bs=16/dev, mini=8, Ld=4096  | 1164.2 ms      | 1141.0 ms                | 1.02×   | 30.2 GB         |
+| 8 × H100 DDP, bs=8/dev, mini=8, Ld=8192   | 1250.4 ms      | 1243.0 ms                | 1.01×   | 57.5 GB         |
+| 8 × H100 DDP, bs=16/dev, mini=16, Ld=4096 | 1078.1 ms      | 1047.4 ms                | 1.03×   | 57.5 GB         |
+| 8 × H100 DDP, bs=32/dev, mini=32, Ld=2048 | 1020.1 ms      | 960.2 ms                 | 1.06×   | 57.4 GB         |
 
 
 **What to take away:**
@@ -216,78 +269,86 @@ For plain ModernColBERT fine-tuning at current shapes, the kernel is
 essentially free: same step time, same VRAM, same numerics (within ULP),
 one `patch_pylate()` call.
 
-## FastPlaid rerank step (LightOn's Rust/libtorch engine)
+## Kernel-level microbenchmark on the `matmul → mask → max → sum` pattern
 
-[`lightonai/fast-plaid`](https://github.com/lightonai/fast-plaid) is the
-Rust multi-vector search engine replacing the original PLAID. Its final
-exact-rerank step at
-[`rust/search/search.rs:colbert_score_reduce`](https://github.com/lightonai/fast-plaid/blob/main/rust/search/search.rs)
-is the exact `matmul → masked_fill(-9999) → max_dim → sum_dim` pattern
-late-interaction-kernels fuses:
+Many retrieval stacks — plain PyTorch rerankers, PyLate, and
+[FastPlaid](https://github.com/lightonai/fast-plaid) — all eventually
+compute the late-interaction score with the same underlying pattern:
 
-```rust
-let token_scores = padded_doc_embeddings.matmul(&query.transpose(-2, -1));
-let masked       = token_scores.masked_fill(&padding_mask, -9999.0);
-let (per_doc, _) = masked.max_dim(1, false);
-per_doc.sum_dim_intlist(-1, false, Kind::Float)
+```text
+token_scores = padded_doc_embeddings @ Q.T
+token_scores = token_scores.masked_fill(~mask, -9999.0)
+score        = token_scores.max(dim=1).sum(dim=-1)
 ```
 
-FastPlaid is faster than Python PLAID because it avoids Python overhead
-and uses a `PAD_CACHE` scratch buffer — but the *underlying CUDA kernels*
-(`aten::bmm`, `aten::max`, `aten::sum`) are the same ones PyLate
-dispatches from Python, so the kernel-level speedup carries over 1:1.
+dispatched to `aten::bmm / aten::max / aten::sum` under the hood.
+`late-interaction-kernels` fuses this pattern into a single Triton
+kernel. This section measures that pattern **in isolation, written in
+PyTorch**, at shapes typical of a reranker (1024 candidate docs × `Ld` ×
+`Lq=32` × `d=128`, fp16) — so you can see the effect of fusion at the
+operation level, independent of any surrounding pipeline.
 
-At FastPlaid's default `n_full_scores=4096`, only `n_full_scores / 4 =
-1024` docs get the exact MaxSim per query. **Isolated rerank-step
-MaxSim at those shapes** (1024 docs × `Ld` × `Lq=32` × `d=128`, fp16):
+This is a **microbenchmark of a single scoring step**, not a comparison
+of two complete retrieval systems.
 
-| shape                  | libtorch (proxy) | late-interaction-kernels | speedup   | peak libtorch | peak flash  | mem×     |
-| ---------------------- | ---------------- | ------------- | --------- | ------------- | ----------- | -------- |
-| `Ld=200`  (MSMARCO)    | 0.121 ms         | 0.137 ms      | 0.89×     | 0.11 GB       | 0.08 GB     | 1.4×     |
-| `Ld=512`  (BEIR-ish)   | 0.212 ms         | 0.137 ms      | **1.55×** | 0.23 GB       | 0.16 GB     | 1.5×     |
-| `Ld=1024`              | 0.374 ms         | 0.139 ms      | **2.69×** | 0.94 GB       | 0.28 GB     | **3.3×** |
-| `Ld=4096` (ModernCol.) | 1.304 ms         | 0.368 ms      | **3.55×** | 1.97 GB       | 1.04 GB     | 1.9×     |
-| `Ld=8192` (ModernCol.) | 2.537 ms         | 0.713 ms      | **3.56×** | 3.35 GB       | 2.05 GB     | 1.6×     |
-| `Ld=4096, n_docs=256`  | 0.402 ms         | 0.138 ms      | **2.92×** | 0.89 GB       | 0.28 GB     | 3.1×     |
-| `Ld=4096, n_docs=2048` | 2.506 ms         | 0.712 ms      | **3.52×** | 3.41 GB       | 2.05 GB     | 1.7×     |
 
-**End-to-end `fast_plaid.search()`** on synthetic 10 k-doc corpora,
-100 queries, default `top_k=10, n_full_scores=4096, n_ivf_probe=8`:
+| shape                  | PyTorch `bmm → mask → max → sum` | late-interaction-kernels | speedup   | peak PyTorch | peak flash | mem×     |
+| ---------------------- | -------------------------------- | ------------------------ | --------- | ------------ | ---------- | -------- |
+| `Ld=200` (MSMARCO)     | 0.121 ms                         | 0.137 ms                 | 0.89×     | 0.11 GB      | 0.08 GB    | 1.4×     |
+| `Ld=512` (BEIR-ish)    | 0.212 ms                         | 0.137 ms                 | **1.55×** | 0.23 GB      | 0.16 GB    | 1.5×     |
+| `Ld=1024`              | 0.374 ms                         | 0.139 ms                 | **2.69×** | 0.94 GB      | 0.28 GB    | **3.3×** |
+| `Ld=4096` (ModernCol.) | 1.304 ms                         | 0.368 ms                 | **3.55×** | 1.97 GB      | 1.04 GB    | 1.9×     |
+| `Ld=8192` (ModernCol.) | 2.537 ms                         | 0.713 ms                 | **3.56×** | 3.35 GB      | 2.05 GB    | 1.6×     |
+| `Ld=4096, n_docs=256`  | 0.402 ms                         | 0.138 ms                 | **2.92×** | 0.89 GB      | 0.28 GB    | 3.1×     |
+| `Ld=4096, n_docs=2048` | 2.506 ms                         | 0.712 ms                 | **3.52×** | 3.41 GB      | 2.05 GB    | 1.7×     |
 
-| corpus            | total / 100 q | ms / query | isolated rerank MaxSim / step |
-| ----------------- | ------------- | ---------- | ----------------------------- |
-| 10 k × `Ld=200`   | 5.3 s         | 53.3 ms    | 0.12 ms (**0.2 %**)           |
-| 10 k × `Ld=512`   | 10.2 s        | 101.6 ms   | 0.21 ms (**0.2 %**)           |
-| 10 k × `Ld=1024`  | 23.2 s        | 232.2 ms   | 0.37 ms (**0.2 %**)           |
 
-**Honest verdict for a FastPlaid integration:**
+Short `Ld` is launch-overhead-bound — the kernel and the PyTorch `bmm`
+land in the same latency band. From `Ld ≥ 1024` onward, tensor-core GEMM
+and reduction traffic dominate, and fusion saves the round-trip for the
+intermediate `[n_docs · Ld · Lq]` fp32 scratch.
 
-- At today's defaults (`n_full_scores=4096`, typical `Ld ≤ 1024`) the
-  exact-rerank MaxSim is **< 1 % of `search()`** — IVF probing,
-  approximate scoring, and residual decompression dominate.
-  late-interaction-kernels would be **neutral** end-to-end even though the kernel
-  swap itself is 2.7–3.6× faster.
-- Where it *would* matter:
-  - **ModernColBERT-scale corpora** (`Ld ≥ 4k`): rerank-step MaxSim grows
-    linearly in `Ld`; at `Ld=8k` it's already 2.5 ms / query. A 3.6×
-    cut saves ~1.8 ms / query — still < 1 % of total, but the **memory
-    drop** (3.3 GB → 2.0 GB scratch) lets you push `n_full_scores`
-    without OOM.
-  - **Large `n_full_scores` for high-recall rerank** — naive scratch
-    grows as `n_full_scores · Ld · Lq · 4` bytes. At
-    `n_full_scores=16384, Ld=8192` that's **16 GB fp32**, which OOMs on
-    an H100; late-interaction-kernels needs < 100 MB.
-- **Integration cost:** non-trivial — FastPlaid's hot path is Rust /
-  `tch-rs`, so you'd have to either call Python (`py.import` round-trip
-  kills the latency win) or ship a CUDA-side rewrite of the Triton
-  kernel. Not worth the engineering effort unless ModernColBERT-scale
-  search becomes the primary use-case.
+### Context inside a full retrieval pipeline
 
-**Recommendation:** for FastPlaid's current workload,
-late-interaction-kernels is an *optional* optimization that matters for long-doc
-rerank; we don't propose upstreaming it. For PyLate / model-training
-workloads and pure inference / reranking in Python, late-interaction-kernels's
-gains are larger and immediately available via `patch_pylate()`.
+For reference, here are end-to-end numbers for `fast_plaid.search()` on
+the same hardware, synthetic 10 k-doc corpora, 100 queries,
+`top_k=10, n_full_scores=4096, n_ivf_probe=8`:
+
+
+| corpus           | total / 100 q | ms / query | exact-rerank MaxSim / step |
+| ---------------- | ------------- | ---------- | -------------------------- |
+| 10 k × `Ld=200`  | 5.3 s         | 53.3 ms    | 0.12 ms (~0.2 %)           |
+| 10 k × `Ld=512`  | 10.2 s        | 101.6 ms   | 0.21 ms (~0.2 %)           |
+| 10 k × `Ld=1024` | 23.2 s        | 232.2 ms   | 0.37 ms (~0.2 %)           |
+
+
+What this tells you in practice:
+
+- A complete retrieval engine like FastPlaid spends most of its time on
+indexing, IVF probe, approximate scoring, and residual decompression.
+The exact-rerank MaxSim is a small slice of `search()`, so even a
+large kernel speedup on that slice only moves the needle modestly
+end-to-end — the kernel wasn't the bottleneck there.
+- Kernel-level fusion *does* matter when:
+  - You're building a **Python-side reranker** where MaxSim is the
+  dominant cost (no orchestration layer below it).
+  - **Long-document regimes** (`Ld ≥ 4k`, e.g. ModernColBERT corpora)
+  where scoring grows linearly in `Ld` and the scratch tensor becomes
+  the limiting factor.
+  - **High-recall rerank** with large `n_full_scores`: naive scratch
+  grows as `n_full_scores · Ld · Lq · 4` bytes; the fused kernel
+  needs only `n_full_scores · Lq` bytes of argmax state. At
+  `n_full_scores=16384, Ld=8192` that's the difference between ~16 GB
+  scratch and a few MB.
+  - You want a **pure-Python ColBERTv2 reranker**, via
+  `plaid_approx_score` + `maxsim_residual`.
+
+This library and FastPlaid sit in different layers of the stack:
+FastPlaid is a complete search engine (index, probe, orchestrate,
+rerank); `late-interaction-kernels` is a set of Triton kernels for the
+scoring math. The numbers above are intended to show what fusion does at
+the operation level — not to position the two projects against each
+other.
 
 ## Understanding the numbers
 

@@ -1,0 +1,35 @@
+# Quick test + benchmark run on an existing cluster.
+#   sky exec flash-colbert-dev scripts/sky_quick_run.yaml --gpus H100:1
+# Uses current workdir so the running cluster always tests HEAD.
+
+name: lik-quick
+
+resources:
+  infra: kubernetes
+  accelerators: H100:1
+
+workdir: .
+
+run: |
+  set -eux
+  cd ~/sky_workdir
+
+  # Re-install from current sources.
+  pip install --no-cache-dir -e ".[dev,pylate]" --force-reinstall --no-deps || \
+  pip install --no-cache-dir -e ".[dev]" --force-reinstall --no-deps
+  python -c "import late_interaction_kernels as L; print('version', L.__version__); import triton; print('triton', triton.__version__)"
+
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  GPU=$(python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
+  ART=/tmp/artifacts/${STAMP}_${GPU}
+  mkdir -p "${ART}"
+
+  echo ">>> pytest"
+  pytest tests/ -v --durations=30 --junitxml="${ART}/tests.xml" 2>&1 | tee "${ART}/tests.log"
+
+  echo ">>> benchmarks"
+  OUTDIR="${ART}/bench" bash scripts/run_all_benchmarks.sh 2>&1 | tee "${ART}/bench.log"
+
+  echo ">>> artifact summary"
+  find "${ART}" -type f | sort
+  echo "Artifacts at: ${ART}"
