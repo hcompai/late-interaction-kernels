@@ -1,8 +1,8 @@
-"""Training-aware fused head benchmark (0.7.0).
+"""Training-aware fused head benchmark (0.8.0).
 
 Compares ``maxsim_from_hidden_train`` against the canonical unfused
-autograd path ``F.linear + F.normalize + maxsim`` on realistic
-ModernColBERT / LateOn-Code shapes.
+autograd path ``F.linear + F.normalize + maxsim`` on realistic LateOn
+/ LateOn-Code / LateOn-Code-edge shapes.
 
 Wall-clock + peak HBM (from the fused head forward + loss + backward
 on a fresh allocator each iteration) are printed side by side.
@@ -48,15 +48,17 @@ def _time_and_mem(fn, warmup=3, iters=20):
 
 SHAPES = [
     # (label, Nq, Nd, Lq, Ld, d_model, d_out)
-    ("gte-moderncolbert-B4-short", 4, 16, 32, 200, 768, 128),
-    ("gte-moderncolbert-B8-1k", 8, 32, 32, 1024, 768, 128),
-    ("gte-moderncolbert-Nd128-long", 4, 128, 32, 1024, 768, 128),
-    ("gte-moderncolbert-Nd256-long", 2, 256, 32, 1024, 768, 128),
+    # LateOn / LateOn-Code: ModernBERT-base, d_model=768, d_out=128.
+    ("lateon-B4-Ld300", 4, 16, 32, 300, 768, 128),
+    ("lateon-B8-Ld1k", 8, 32, 32, 1024, 768, 128),
+    ("lateon-code-Nd128-Ld1k", 4, 128, 32, 1024, 768, 128),
+    ("lateon-code-Nd256-Ld1k", 2, 256, 32, 1024, 768, 128),
     # Regimes where the D_proj scratch is the dominant cost: the fused
     # head only ever touches winners, so peak memory stays bounded.
-    ("long-mem-Nd512-Ld2048", 1, 512, 32, 2048, 768, 128),
-    ("long-mem-Nd1024-Ld2048", 1, 1024, 32, 2048, 768, 128),
-    ("lateon-code-edge-Nd256-bigLd", 2, 256, 32, 4096, 384, 96),
+    ("lateon-code-Nd512-Ld2k", 1, 512, 32, 2048, 768, 128),
+    ("lateon-code-Nd1024-Ld2k", 1, 1024, 32, 2048, 768, 128),
+    # LateOn-Code-edge: Ettin-17M backbone, d_model=384, d_out=96.
+    ("lateon-code-edge-Nd256-Ld4k", 2, 256, 32, 4096, 384, 96),
 ]
 
 

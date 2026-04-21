@@ -1,8 +1,8 @@
 # Benchmarks
 
-All numbers are measured on a **single H100 80 GB SXM** in bf16 compute (fp16 for
-ModernColBERT), fp32 accumulator, 50 iterations after 5 warmup, torch 2.8, Triton
-3.6, CUDA 12.9.
+All numbers are measured on a **single H100 80 GB SXM** in bf16 compute
+(fp16 for LateOn / ModernColBERT shapes), fp32 accumulator, 50
+iterations after 5 warmup, torch 2.8, Triton 3.6, CUDA 12.9.
 
 ## Reproducing
 
@@ -15,23 +15,23 @@ python benchmarks/bench_forward.py
 # backward + auto / atomic / csr sweep
 python benchmarks/bench_backward_method.py
 
-# ModernColBERT long-document regime (Ld ∈ {2k, 4k, 8k, 16k})
-python benchmarks/bench_moderncolbert.py
+# LateOn / LateOn-Code / ModernColBERT long-document regime (Ld ∈ {2k, 4k, 8k, 16k})
+python benchmarks/bench_lateon.py
 
 # MaxSim-only PyLate training step (synthetic embeddings)
 python benchmarks/bench_pylate_training.py --batch-size 128 --neg 2
 
-# The exact CachedContrastive chunked-MaxSim pattern LightOn uses for
-# Reason-ModernColBERT (bs=64..256, Ld=2k..8k)
+# The exact CachedContrastive chunked-MaxSim pattern LightOn uses
+# (bs=64..256, Ld=2k..8k)
 python benchmarks/bench_cached_maxsim.py
 
-# End-to-end PyLate ModernColBERT training — plain Contrastive
-python benchmarks/bench_pylate_moderncolbert.py --recipe contrastive \
+# End-to-end PyLate LateOn training — plain Contrastive
+python benchmarks/bench_pylate_lateon.py --recipe contrastive \
     --batch-size 4 --Ld 8192
 
-# End-to-end LightOn Reason-ModernColBERT recipe (CachedContrastive, bf16, grad-ckpt)
+# End-to-end CachedContrastive (bf16, grad-ckpt, 8×H100 DDP)
 torchrun --standalone --nproc_per_node=8 \
-    benchmarks/bench_pylate_moderncolbert.py --recipe reason \
+    benchmarks/bench_pylate_lateon.py --recipe reason \
     --batch-size 32 --mini-batch-size 32 --Ld 2048 --grad-checkpoint --ddp
 
 # FastPlaid rerank-step comparison (requires `pip install fast-plaid`)
@@ -152,10 +152,13 @@ relative) because `atomic_add` reduction order depends on thread scheduling.
 | 256 × 3      | 75.04 ms       | 26.28 ms                 | 2.86×   |
 
 
-## ModernColBERT (long documents)
+## LateOn / ModernColBERT (long documents)
 
-At 2k–4k the naive einsum still fits, so you can see real speedup *and* memory
-ratios. At 8k+ the naive path OOMs on 80 GB at any sane training batch.
+At 2k–4k the naive einsum still fits, so you can see real speedup *and*
+memory ratios. At 8k+ the naive path OOMs on 80 GB at any sane training
+batch. Numbers apply equally to `lightonai/LateOn`,
+`lightonai/GTE-ModernColBERT-v1` and `lightonai/LateOn-Code` — same
+ModernBERT-base backbone, same `d=128`.
 
 MaxSim-only (one `colbert_scores` call, fp16 inputs, `auto` backward):
 
@@ -174,21 +177,22 @@ MaxSim-only (one `colbert_scores` call, fp16 inputs, `auto` backward):
 
 At `bigbatch-4k` the MaxSim kernel alone is **4.3× faster on forward and
 2.3× faster on backward**, with **3.5× less peak memory** for that op
-(480 MB saved). `auto` picks `atomic` for every ModernColBERT shape
-(`Lq=32` ⇒ low atomic contention, `Nd < 1024` ⇒ CSR's sort overhead dominates).
+(480 MB saved). `auto` picks `atomic` for every LateOn / ModernColBERT
+shape (`Lq=32` ⇒ low atomic contention, `Nd < 1024` ⇒ CSR's sort
+overhead dominates).
 
-### Isolated MaxSim at the LightOn Reason-ModernColBERT recipe shapes
+### Isolated MaxSim at the LightOn cached-contrastive recipe shapes
 
 `pylate.losses.CachedContrastive` handles large effective batches by
 manually chunking MaxSim into `(bs / mini)**2` Python-level `colbert_scores`
 calls — see the comment in `pylate/losses/cached_contrastive.py`:
 *"We chunk the scores computation to avoid OOM because MaxSim can get
-expensive with large batch sizes/long documents"*. late-interaction-kernels replaces
-that whole double loop with **one** fused call that never materializes
-`S`.
+expensive with large batch sizes/long documents"*.
+late-interaction-kernels replaces that whole double loop with **one**
+fused call that never materializes `S`.
 
 These numbers strip out the encoder entirely and measure *just* the MaxSim
-part (`Lq=128, d=128, mini_batch_size=32`, the exact Reason-ModernColBERT
+part (`Lq=128, d=128, mini_batch_size=32`, LightOn's recipe
 hyperparams):
 
 
@@ -204,19 +208,21 @@ hyperparams):
 | `**bs=256, Ld=8192` (LightOn's real recipe)** | **64** | **915.9 ms**    | **66.3 ms**   | **13.8×** | **5.1 GB**   | **2.1 GB** | **2.4×** |
 
 
-At LightOn's exact Reason-ModernColBERT shape, vanilla PyLate is spending
-**~900 ms per step just on MaxSim fwd+bwd** — that's a full second late-interaction-kernels
-gives back. The isolation here is deliberate: it's the purest read on what
-the kernel swap alone changes.
+At LightOn's exact cached-contrastive shape, vanilla PyLate is spending
+**~900 ms per step just on MaxSim fwd+bwd** — that's a full second
+late-interaction-kernels gives back. The isolation here is deliberate:
+it's the purest read on what the kernel swap alone changes.
 
 ### End-to-end training step
 
-Measured with the actual `pylate.models.ColBERT("lightonai/GTE-ModernColBERT-v1")`
-(150 M params, 22-layer ModernBERT with flash-attention-2, 8192-token context),
-AdamW, `bf16` autocast. Per-rank peak memory. `--grad-checkpoint` enables
-gradient checkpointing on the ModernBERT encoder.
+Measured with the actual `pylate.models.ColBERT("lightonai/LateOn")`
+(149 M params, 22-layer ModernBERT with flash-attention-2, 8192-token
+context), AdamW, `bf16` autocast. Per-rank peak memory.
+`--grad-checkpoint` enables gradient checkpointing on the ModernBERT
+encoder. Numbers apply equally to `lightonai/GTE-ModernColBERT-v1` and
+`lightonai/LateOn-Code` (same backbone).
 
-**Plain `losses.Contrastive*`* (no encoder chunking):
+**Plain `losses.Contrastive`** (no encoder chunking):
 
 
 | setup                                  | vanilla PyLate | late-interaction-kernels | speedup | peak (v → f)   |
@@ -227,7 +233,8 @@ gradient checkpointing on the ModernBERT encoder.
 | 8 × H100 DDP, bs=4, Ld=8192 (per-rank) | 505.7 ms       | 504.7 ms                 | 1.00×   | 56.8 → 56.8 GB |
 
 
-`**losses.CachedContrastive**` (LightOn's Reason recipe: `gather_across_devices=True`, grad-ckpt, bf16):
+**`losses.CachedContrastive`** (LightOn's cached-contrastive recipe:
+`gather_across_devices=True`, grad-ckpt, bf16):
 
 
 | setup                                     | vanilla PyLate | late-interaction-kernels | speedup | peak (per rank) |
@@ -241,31 +248,39 @@ gradient checkpointing on the ModernBERT encoder.
 
 **What to take away:**
 
-- Per-step e2e speedup is **1.00–1.06×**. Even in the Reason recipe, the
-22-layer ModernBERT forward+backward (with FlashAttention-2 internally)
-dominates step time by ~10×.
+- Per-step e2e speedup on `LateOn` (149 M) is **1.00–1.06×**. Even in
+the cached-contrastive recipe, the 22-layer ModernBERT
+forward+backward (with FlashAttention-2 internally) dominates step
+time by ~10×.
+- Per-step e2e speedup on `LateOn-Code-edge` (17 M) is
+**1.04–1.27×** — same kernel, smaller encoder, MaxSim owns a bigger
+slice (see README “End-to-end LateOn-Code-edge training” table).
 - Peak per-rank VRAM is **activation-bound from the transformer**, not
-MaxSim. late-interaction-kernels saves GB on MaxSim scratch, but that's < 10 % of
-peak when the transformer is ~50 GB.
+MaxSim. late-interaction-kernels saves GB on MaxSim scratch, but
+that's < 10 % of peak when the transformer is ~50 GB.
 - **The full MaxSim win is real and measurable in isolation** (table
-above: up to 13.8× / 2.4× memory at the exact LightOn shape), it's just
-that the rest of the step is bigger than MaxSim on these ModernBERT
-configurations.
+above: up to 13.8× / 2.4× memory at the exact LightOn shape), it's
+just that the rest of the step is bigger than MaxSim on these
+ModernBERT configurations.
 
 ### Where late-interaction-kernels actually moves the e2e needle
 
 1. **Inference / reranking** — no encoder backward → MaxSim *is* the
   step. 7–23× (see top table).
-2. `**Ld ≥ 8k` MaxSim on smaller encoders** (ColPali, ColBERTv2 at max
+2. **Small-encoder training** (`LateOn-Code-edge`, mxbai-edge,
+  ColPali-small) — the encoder is small enough that the MaxSim slice
+  is material; end-to-end moves 1.04–1.3× at typical cached-contrastive
+  shapes.
+3. **`Ld ≥ 8k` MaxSim on smaller encoders** (ColPali, ColBERTv2 at max
   length) — encoder shrinks enough that MaxSim becomes the dominant op.
-3. `**ModernColBERT` inference at long docs** — encoding is one-time,
-  reranking is per-query; MaxSim is hit every query.
-4. **Offline knowledge-distillation scoring** — teacher + student both do
-  MaxSim, no per-step encoder cost to hide behind.
-5. **When MaxSim OOM is the limit** (`Ld ≥ 8k`, very large `Nd`) — there
+4. **`LateOn` / `ModernColBERT` inference at long docs** — encoding is
+  one-time, reranking is per-query; MaxSim is hit every query.
+5. **Offline knowledge-distillation scoring** — teacher + student both
+  do MaxSim, no per-step encoder cost to hide behind.
+6. **When MaxSim OOM is the limit** (`Ld ≥ 8k`, very large `Nd`) —
   naive doesn't run at all (see the MaxSim-only table above).
 
-For plain ModernColBERT fine-tuning at current shapes, the kernel is
+For plain `LateOn` fine-tuning at current shapes, the kernel is
 essentially free: same step time, same VRAM, same numerics (within ULP),
 one `patch_pylate()` call.
 

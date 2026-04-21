@@ -34,16 +34,19 @@ vanilla PyLate for a one-off comparison.
 
 ### Tested checkpoints
 
-| Family | Checkpoint | `d` | `max_len` | Where it helps |
-|---|---|---:|---:|---|
-| ColBERT v2 | [`colbert-ir/colbertv2.0`](https://huggingface.co/colbert-ir/colbertv2.0) | 128 | 512 | Training + Python-side reranking |
-| PyLate GTE | [`lightonai/GTE-ModernColBERT-v1`](https://huggingface.co/lightonai/GTE-ModernColBERT-v1) | 128 | 8192 | Long-context training (`Ld ∈ {4k, 8k}`) |
-| Reason | [`lightonai/Reason-ModernColBERT`](https://huggingface.co/lightonai/Reason-ModernColBERT) | 128 | 8192 | `CachedContrastive` at `bs=256, Ld=8k` |
-| mxbai edge | [`mixedbread-ai/mxbai-edge-colbert-v0-17m`](https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-17m) | 48 | 2048 | Edge / small-d (see below) |
-| mxbai edge 32m | [`mixedbread-ai/mxbai-edge-colbert-v0-32m`](https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-32m) | 64 | 2048 | Edge / small-d |
-| **LateOn-Code** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 48 | 2047 | Code-retrieval fine-tuning |
-| **LateOn-Code** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 128 | 8192 | Code-retrieval fine-tuning |
-| ColPali (via PyLate) | any ColPali checkpoint | 128 | — | VLM training through CachedContrastive |
+
+| Family               | Checkpoint                                                                                                  | `d` | `max_len` | Where it helps                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------- | --- | --------- | --------------------------------------- |
+| ColBERT v2           | `[colbert-ir/colbertv2.0](https://huggingface.co/colbert-ir/colbertv2.0)`                                   | 128 | 512       | Training + Python-side reranking        |
+| **LateOn**           | `[lightonai/LateOn](https://huggingface.co/lightonai/LateOn)`                                               | 128 | 8192      | Long-context training (`Ld ∈ {4k, 8k}`) |
+| **LateOn-Code**      | `[lightonai/LateOn-Code](https://huggingface.co/lightonai/LateOn-Code)`                                     | 128 | 8192      | Code-retrieval fine-tuning              |
+| **LateOn-Code-edge** | `[lightonai/LateOn-Code-edge](https://huggingface.co/lightonai/LateOn-Code-edge)`                           | 48  | 2048      | Edge rerank & small-d (see below)       |
+| PyLate GTE           | `[lightonai/GTE-ModernColBERT-v1](https://huggingface.co/lightonai/GTE-ModernColBERT-v1)`                   | 128 | 8192      | Same ModernBERT backbone as LateOn      |
+| Reason               | `[lightonai/Reason-ModernColBERT](https://huggingface.co/lightonai/Reason-ModernColBERT)`                   | 128 | 8192      | `CachedContrastive` at `bs=256, Ld=8k`  |
+| mxbai edge           | `[mixedbread-ai/mxbai-edge-colbert-v0-17m](https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-17m)` | 48  | 2048      | Edge / small-d                          |
+| mxbai edge 32m       | `[mixedbread-ai/mxbai-edge-colbert-v0-32m](https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-32m)` | 64  | 2048      | Edge / small-d                          |
+| ColPali (via PyLate) | any ColPali checkpoint                                                                                      | 128 | —         | VLM training through CachedContrastive  |
+
 
 ### Short-`d` regimes (LateOn-Code-edge, mxbai-edge, ColPali-small)
 
@@ -55,39 +58,44 @@ materialize the full `[Nq, Nd, Lq, Ld]` similarity tensor while
 `maxsim_inference` reduces it on the fly. Measured on H100 80 GB
 (`bench_inference_edge.py`, bf16, 50-iter avg):
 
-| Shape                                              | lik       | naive (fp32) | Speedup    | lik mem  | naive mem |
-| -------------------------------------------------- | --------- | ------------ | ---------- | -------- | --------- |
-| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48`        | 0.072 ms  | 0.380 ms     | **5.3×**   | 0.0 MB   | 314 MB    |
-| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48`        | 0.137 ms  | 1.412 ms     | **10.3×**  | 0.0 MB   | 1.2 GB    |
-| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48`        | 0.266 ms  | 2.910 ms     | **10.9×**  | 0.0 MB   | 2.5 GB    |
-| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`         | 0.252 ms  | 2.897 ms     | **11.5×**  | 0.1 MB   | 2.5 GB    |
-| mxbai-edge `Nd=1 000, Ld=4 096, d=64`              | 0.172 ms  | 1.730 ms     | **10.0×**  | 0.0 MB   | 1.5 GB    |
-| mxbai-edge `Nd=16 000, Ld=512, d=64`               | 0.331 ms  | 3.528 ms     | **10.7×**  | 0.1 MB   | 3.0 GB    |
+
+| Shape                                       | lik      | naive (fp32) | Speedup   | lik mem | naive mem |
+| ------------------------------------------- | -------- | ------------ | --------- | ------- | --------- |
+| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.072 ms | 0.380 ms     | **5.3×**  | 0.0 MB  | 314 MB    |
+| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.137 ms | 1.412 ms     | **10.3×** | 0.0 MB  | 1.2 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.266 ms | 2.910 ms     | **10.9×** | 0.0 MB  | 2.5 GB    |
+| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.252 ms | 2.897 ms     | **11.5×** | 0.1 MB  | 2.5 GB    |
+| mxbai-edge `Nd=1 000, Ld=4 096, d=64`       | 0.172 ms | 1.730 ms     | **10.0×** | 0.0 MB  | 1.5 GB    |
+| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.331 ms | 3.528 ms     | **10.7×** | 0.1 MB  | 3.0 GB    |
+
 
 Two things to read out of this table:
 
 1. At typical rerank shapes (`Nd=1k, Ld=1k`) edge models land on a
-   **5–6×** win; as soon as you push either dimension (long-context
+  **5–6×** win; as soon as you push either dimension (long-context
    rerank or high-BS serving) the lead widens to **10–11×** because
    the naive path's similarity-tensor cost scales linearly with both.
 2. The memory story is **categorical, not incremental** — `maxsim_inference`
-   stays under 1 MB across every row, while naive crosses 2.5 GB at
+  stays under 1 MB across every row, while naive crosses 2.5 GB at
    `Ld=8 192` or `Nd=16 000`. That's the difference between fitting
    your whole rerank stage on a consumer GPU and not.
 
 Training-side win is more modest: LateOn-Code-edge (17 M params) is
-encoder-bound, so `CachedContrastive` steps move ~1.01–1.03× (end-to-end
-measurement in `scripts/sky_lateon_edge.yaml`, job 75). The MaxSim step
-is already < 5 % of wall-clock at this scale — the drop-in is "free
-upgrade" territory for training and a real unlock for inference.
+encoder-bound, so `Contrastive` steps move **1.04–1.27×** end-to-end
+depending on shape (measured on 1×H100, bf16, grad-ckpt — see the
+README “End-to-end LateOn-Code-edge training” table and reproduce via
+`scripts/sky_lateon_edge.yaml`). Bigger batch × smaller `Ld` widens the
+gap, because the MaxSim slice of the step grows quadratically in `B`
+while the encoder grows linearly. The drop-in is a real upgrade for
+training *and* a categorical unlock for inference.
 
 If you want to verify on your hardware before depending on this, the
 three-command test is:
 
 ```bash
 python benchmarks/bench_inference_edge.py         # dedicated edge sweep
-python benchmarks/bench_moderncolbert.py --d 48   # or 64
-python benchmarks/bench_pylate_moderncolbert.py --model lightonai/LateOn-Code-edge
+python benchmarks/bench_lateon.py --d 48   # or 64
+python benchmarks/bench_pylate_lateon.py --model lightonai/LateOn-Code-edge
 ```
 
 ## Compressed / quantized indices (PLAID / ColBERTv2)
@@ -121,10 +129,10 @@ embedding, so the VRAM story is unambiguous. For wall-clock time, the
 crossover we measured on H100 is roughly:
 
 - small `Nd` (≤ 128) — typical training / distillation batches —
-  fused is **~1.3–1.5×** faster at 2/4/8-bit.
+fused is **~1.3–1.5×** faster at 2/4/8-bit.
 - large `Nd` (≥ 512) — reranker-scale — fused is **~2–3× slower**
-  because the decompression is re-run per query-token during backward
-  while the reference amortizes it across a single `unpack` call.
+because the decompression is re-run per query-token during backward
+while the reference amortizes it across a single `unpack` call.
 
 If you're training, stay with the fused path (small `Nd`, VRAM wins).
 If you're scoring thousands of candidates with autograd enabled (rare —
@@ -159,13 +167,13 @@ does not try to) replace any of its kernels.
 Where this library *does* apply in the ColGrep / LateOn-Code story:
 
 - **Training the LateOn-Code checkpoints themselves** — these are PyLate
-  models, trained with standard PyLate loops. `patch_pylate()` drops in
-  unchanged and accelerates the MaxSim scoring step in `Contrastive` /
-  `CachedContrastive` / `Distillation`.
+models, trained with standard PyLate loops. `patch_pylate()` drops in
+unchanged and accelerates the MaxSim scoring step in `Contrastive` /
+`CachedContrastive` / `Distillation`.
 - **Custom Python-side rerankers** over a LateOn-Code corpus (e.g. a
-  bespoke research pipeline that runs PyTorch inference directly instead
-  of via ColGrep) get the fused forward and — if you're distilling or
-  fine-tuning — the fused backward.
+bespoke research pipeline that runs PyTorch inference directly instead
+of via ColGrep) get the fused forward and — if you're distilling or
+fine-tuning — the fused backward.
 
 ColGrep's own `colgrep search` path is completely independent of this
 library and is the right tool for the CLI / agent use case.

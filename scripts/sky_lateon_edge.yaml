@@ -2,7 +2,7 @@
 #
 #   sky exec flash-colbert-dev scripts/sky_lateon_edge.yaml --gpus H100:1
 #
-# Runs `bench_pylate_moderncolbert.py` with:
+# Runs `bench_pylate_lateon.py` with:
 #   * `lightonai/LateOn-Code-edge` (d=48, max_len=2047, ModernBERT-edge,
 #     17M params — fine-tuned by LightOn for code retrieval)
 # across three recipes:
@@ -42,7 +42,7 @@ run: |
   echo "=============================================================="
   echo "  LateOn-Code-edge: contrastive, bs=16, Lq=32, Ld=2048"
   echo "=============================================================="
-  python benchmarks/bench_pylate_moderncolbert.py \
+  python benchmarks/bench_pylate_lateon.py \
       --model "${MODEL}" \
       --recipe contrastive \
       --batch-size 16 --Lq 32 --Ld 2048 \
@@ -52,7 +52,7 @@ run: |
   echo "=============================================================="
   echo "  LateOn-Code-edge: contrastive, bs=32, Lq=32, Ld=2048"
   echo "=============================================================="
-  python benchmarks/bench_pylate_moderncolbert.py \
+  python benchmarks/bench_pylate_lateon.py \
       --model "${MODEL}" \
       --recipe contrastive \
       --batch-size 32 --Lq 32 --Ld 2048 \
@@ -62,11 +62,36 @@ run: |
   echo "=============================================================="
   echo "  LateOn-Code-edge: cached, bs=64, mini=16, Lq=32, Ld=2048"
   echo "=============================================================="
-  python benchmarks/bench_pylate_moderncolbert.py \
+  python benchmarks/bench_pylate_lateon.py \
       --model "${MODEL}" \
       --recipe reason \
       --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 2048 \
       --iters 8 --warmup 2 --outdir "${ART}" \
       2>&1 | tee "${ART}/cached_bs64_mini16_ld2048.log"
+
+  # ------ Huge batch / long context: where the kernel story gets loud --------
+  # The encoder is only 17 M params, so the MaxSim slice is a much bigger
+  # fraction of the step. At these shapes the `[bs, Ld]` activation tensors
+  # also start dominating VRAM and vanilla PyLate chunks MaxSim into
+  # (bs/mini)^2 calls — that's where the end-to-end gap opens up.
+  echo "=============================================================="
+  echo "  LateOn-Code-edge: cached, bs=128, mini=16, Lq=32, Ld=2048"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_lateon.py \
+      --model "${MODEL}" \
+      --recipe reason \
+      --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+      --iters 5 --warmup 2 --outdir "${ART}" --grad-checkpoint \
+      2>&1 | tee "${ART}/cached_bs128_mini16_ld2048.log"
+
+  echo "=============================================================="
+  echo "  LateOn-Code-edge: cached, bs=64, mini=8, Lq=32, Ld=4096"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_lateon.py \
+      --model "${MODEL}" \
+      --recipe reason \
+      --batch-size 64 --mini-batch-size 8 --Lq 32 --Ld 4096 \
+      --iters 5 --warmup 2 --outdir "${ART}" --grad-checkpoint \
+      2>&1 | tee "${ART}/cached_bs64_mini8_ld4096.log"
 
   echo "Artifacts at: ${ART}"
