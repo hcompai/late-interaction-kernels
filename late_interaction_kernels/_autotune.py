@@ -21,41 +21,71 @@ Per-family SRAM budgets (KiB of shared memory the kernel can actually use):
 
 from __future__ import annotations
 
+import inspect
+
 import triton
 
 from ._utils import detect_gpu
 
 
+# Warp specialization (FA-3 style) requires Triton 3.2+. The
+# ``num_consumer_groups`` / ``num_buffers_warp_spec`` kwargs on
+# ``triton.Config`` opt a kernel into producer-consumer warp specialization
+# so loads overlap cleanly with ``tl.dot``. We feature-detect so we still
+# run on older Triton.
+try:
+    _CFG_PARAMS = set(inspect.signature(triton.Config).parameters)
+except (TypeError, ValueError):  # pragma: no cover
+    _CFG_PARAMS = set()
+_HAS_WARP_SPEC = {"num_consumer_groups", "num_buffers_warp_spec"} <= _CFG_PARAMS
+
+
+def _cfg(kwargs, *, num_warps, num_stages, warp_spec=False):
+    """Build a ``triton.Config`` and quietly opt-in to warp specialization
+    when the running Triton supports it.
+    """
+    extras = {}
+    if warp_spec and _HAS_WARP_SPEC:
+        extras["num_consumer_groups"] = 2
+        extras["num_buffers_warp_spec"] = num_stages
+    return triton.Config(kwargs, num_warps=num_warps, num_stages=num_stages, **extras)
+
+
 def _small_d_hopper():
     return [
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=3),
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=8, num_stages=3),
-        triton.Config({"BLOCK_Q": 64, "BLOCK_D": 64}, num_warps=4, num_stages=3),
-        triton.Config({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3),
-        triton.Config({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=2),
-        triton.Config({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=2),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=3),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=8, num_stages=3),
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 64}, num_warps=4, num_stages=3),
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3),
+        _cfg({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=2),
+        _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=2),
+        # Warp-specialized shortlist: producer warp group streams Q/D tiles
+        # into shared memory while consumer group(s) run back-to-back
+        # ``tl.dot`` + running-max. No-ops on Triton < 3.2.
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3, warp_spec=True),
+        _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=3, warp_spec=True),
     ]
 
 
 def _small_d_ampere():
     """Works on A100, A10, A40, 3090, and is a safe default for Ada (L4, L40, 4090)."""
     return [
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=2),
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=8, num_stages=2),
-        triton.Config({"BLOCK_Q": 64, "BLOCK_D": 64}, num_warps=4, num_stages=2),
-        triton.Config({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=2),
-        triton.Config({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=1),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=2),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=8, num_stages=2),
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 64}, num_warps=4, num_stages=2),
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=2),
+        _cfg({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=1),
     ]
 
 
 def _large_d_configs():
     """Small-block configs for d ≥ 512 — fit any GPU, any SM."""
     return [
-        triton.Config({"BLOCK_Q": 16, "BLOCK_D": 16}, num_warps=2, num_stages=2),
-        triton.Config({"BLOCK_Q": 16, "BLOCK_D": 32}, num_warps=2, num_stages=2),
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 16}, num_warps=2, num_stages=2),
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 32}, num_warps=4, num_stages=2),
-        triton.Config({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=2),
+        _cfg({"BLOCK_Q": 16, "BLOCK_D": 16}, num_warps=2, num_stages=2),
+        _cfg({"BLOCK_Q": 16, "BLOCK_D": 32}, num_warps=2, num_stages=2),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 16}, num_warps=2, num_stages=2),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 32}, num_warps=4, num_stages=2),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=2),
     ]
 
 
