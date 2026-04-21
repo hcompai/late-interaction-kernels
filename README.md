@@ -70,7 +70,8 @@ LateOn-Code):
 | `maxsim_varlen` fwd+bwd (ragged, no repad, **new**)      | pad + mask + maxsim autograd          | see `bench_backward_0_5`  |
 | CachedContrastive chunked MaxSim (PyLate training)       | PyLate default                        | **up to 13.8×**           |
 | Long-doc MaxSim at `Ld ≥ 8k`                             | naive einsum                          | **runs; naive OOMs**      |
-| Plain ModernColBERT training step (encoder-bound)        | vanilla PyLate                        | 1.00–1.06× (free upgrade) |
+| PyLate MaxSim + loss + backward (0.6.0 unified bwd)      | vanilla PyLate (same slice)           | **1.12–2.67×**            |
+| Plain ModernColBERT training step (full encoder + loss)  | vanilla PyLate                        | 1.00–1.06× (encoder-bound)|
 
 All numbers on a single **H100 80 GB SXM**, bf16 / fp16 compute, fp32
 accumulator, 50-iter averages. Every baseline is the same operation
@@ -328,15 +329,19 @@ already doing, into fewer kernel launches and less HBM traffic.
 | ModernColBERT inference at `Ld ≥ 8k`            | **runs; naive einsum OOMs**         |
 | Offline KD scoring (teacher + student)          | **5–14×** (no encoder bwd)          |
 | ColBERTv2 rerank with compressed (2-bit) docs   | **~20× vs PyTorch unpack + einsum** |
-| `CachedContrastive` training (Reason recipe)    | 1.00–1.06× (free swap)              |
-| Plain Contrastive ModernColBERT training        | 1.00× (free swap)                   |
+| `CachedContrastive` training (Reason recipe)    | 1.00–1.06× (free swap, encoder-bound) |
+| Plain Contrastive ModernColBERT training        | 1.00–1.06× (free swap, encoder-bound) |
+| PyLate MaxSim + loss + backward slice (0.6.0)   | **1.12–2.67×** (unified backward)   |
 | Any workload where `Nq · Nd · Lq · Ld` is tight | **lets you raise batch size**       |
 
-Honest summary: on a full ModernColBERT *training* step the 22-layer
-transformer dominates by ~10×, so the kernel is effectively free — same
-wall-clock, same VRAM, deterministic numerics. The real value surfaces
-on MaxSim-heavy workloads: inference, reranking, long documents, large
-negative sets, KD, and compressed-embedding rerankers.
+Honest summary: on a **full ModernColBERT training step** (forward
+through the 22-layer transformer + loss + full backward) the encoder
+dominates by ~10×, so the kernel is effectively free — same wall-clock,
+same VRAM, deterministic numerics. On the **MaxSim + loss + backward
+slice** alone (what this library owns), the 0.6.0 unified backward
+brings 1.12–2.67× across typical PyLate shapes. The real end-to-end
+value surfaces on MaxSim-heavy workloads: inference, reranking, long
+documents, large negative sets, KD, and compressed-embedding rerankers.
 
 ---
 
@@ -366,23 +371,30 @@ reproduction commands.
 paths that `flash-maxsim` does not. Reproduce with
 [`benchmarks/bench_flash_maxsim.py`](benchmarks/bench_flash_maxsim.py).
 
-### Unified backward (0.6.0) — PyLate training step wall-clock
+### Unified backward (0.6.0) — PyLate MaxSim + loss + backward slice
 
 The `"unified"` backward kernel is now the default for every shape
-below `B=256`. End-to-end PyLate `Contrastive` step (full loss +
-backward), vanilla PyLate vs monkey-patched:
+below `B=256`. This table isolates the **scoring slice** of a PyLate
+training step — `colbert_scores(...) → cross_entropy → backward`
+with **synthetic (pre-computed) embeddings, no encoder**. That is the
+subset of work this library owns end-to-end:
 
-| Shape                     | vanilla PyLate | 0.6.0 (unified) | End-to-end speedup |
-| ------------------------- | -------------- | --------------- | ------------------ |
-| `B=16,  Ld=200, d=128`    | 1.08 ms        | 0.94 ms         | **1.15×**          |
-| `B=32,  Ld=200, d=128`    | 0.95 ms        | 0.84 ms         | **1.12×**          |
-| `B=64,  Ld=200, d=128`    | 0.97 ms        | 0.84 ms         | **1.15×**          |
-| **`B=128, Ld=200, d=128`**| **3.16 ms**    | **1.19 ms**     | **2.67×**          |
-| `B=32,  Ld=1 024, d=128`  | 1.02 ms        | 0.85 ms         | **1.21×**          |
-| `B=64,  Ld=256, d=48`     | 1.07 ms        | 0.94 ms         | **1.14×**          |
+| Shape                     | vanilla PyLate | 0.6.0 (unified) | Slice speedup |
+| ------------------------- | -------------- | --------------- | ------------- |
+| `B=16,  Ld=200, d=128`    | 1.08 ms        | 0.94 ms         | **1.15×**     |
+| `B=32,  Ld=200, d=128`    | 0.95 ms        | 0.84 ms         | **1.12×**     |
+| `B=64,  Ld=200, d=128`    | 0.97 ms        | 0.84 ms         | **1.15×**     |
+| **`B=128, Ld=200, d=128`**| **3.16 ms**    | **1.19 ms**     | **2.67×**     |
+| `B=32,  Ld=1 024, d=128`  | 1.02 ms        | 0.85 ms         | **1.21×**     |
+| `B=64,  Ld=256, d=48`     | 1.07 ms        | 0.94 ms         | **1.14×**     |
 
 Reproduce with
 [`benchmarks/bench_pylate_training.py --sweep`](benchmarks/bench_pylate_training.py).
+
+For the **full end-to-end training step** (real GTE-ModernColBERT encoder
+forward + loss + full backward), the encoder dominates by ~10× so the
+overall wall-clock speedup is still 1.00–1.06× — see the
+[_End-to-end ModernColBERT training_ table below](#end-to-end-moderncolbert-training-full-encoder--loss).
 
 ### Reranking / inference
 
