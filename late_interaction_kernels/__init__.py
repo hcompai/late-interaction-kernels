@@ -12,6 +12,12 @@ Training / general MaxSim
     * ``maxsim_varlen(...)`` — packed / ragged inputs, autograd-aware.
     * ``maxsim_varlen_inference(...)`` — no saved argmax, inference-only.
 
+FP8 (Hopper / Blackwell)
+    * ``maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=, scale_D=)`` — fp8
+      tensor-core MaxSim with per-tensor or per-token scales. Auto-falls
+      back to bf16 on non-Hopper GPUs.
+    * ``quantize_fp8_per_tensor / _per_token(X)`` — helpers.
+
 Retrieval / fused heads
     * ``maxsim_from_hidden(Q, H_d, W, b=, normalize=)`` — fused D-side
       projection + L2-normalize + MaxSim, inference-only. Saves the
@@ -61,6 +67,13 @@ if _HAS_TRITON:
         set_backward_method,
     )
     from .forward import maxsim_forward
+    from .fp8 import (
+        dequantize_fp8_per_tensor,
+        dequantize_fp8_per_token,
+        maxsim_inference_fp8,
+        quantize_fp8_per_tensor,
+        quantize_fp8_per_token,
+    )
     from .fused_head import maxsim_from_hidden, maxsim_from_hidden_train
     from .matryoshka import maxsim_matryoshka
     from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
@@ -81,6 +94,9 @@ else:  # pragma: no cover
 
     maxsim = maxsim_inference = maxsim_forward = _needs_triton
     maxsim_from_hidden = maxsim_from_hidden_train = _needs_triton
+    maxsim_inference_fp8 = _needs_triton
+    quantize_fp8_per_tensor = quantize_fp8_per_token = _needs_triton
+    dequantize_fp8_per_tensor = dequantize_fp8_per_token = _needs_triton
     soft_maxsim = smooth_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
     maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
     plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
@@ -97,6 +113,11 @@ __all__ = [
     "maxsim_forward",
     "maxsim_from_hidden",
     "maxsim_from_hidden_train",
+    "maxsim_inference_fp8",
+    "quantize_fp8_per_tensor",
+    "quantize_fp8_per_token",
+    "dequantize_fp8_per_tensor",
+    "dequantize_fp8_per_token",
     "smooth_maxsim",
     "soft_maxsim",
     "maxsim_varlen",
