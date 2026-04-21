@@ -60,9 +60,22 @@ class _MaxSimFn(torch.autograd.Function):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
 
+        # Resolve "auto" once, using problem shape. Unified is the new
+        # default for almost every training shape (see
+        # benchmarks/bench_backward_unified.py); CSR only wins at very
+        # high grad_D contention (B >= 256 with typical Lq / Ld).
+        method = ctx.backward_method
+        if method == "auto":
+            Nq, Lq, _ = Q.shape
+            Nd = D.shape[0]
+            high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+            method = "csr" if high_contention else "unified"
+
         def _bwd(Qt, Dt):
-            if ctx.backward_method == "unified":
-                return maxsim_backward_unified(grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic")
+            if method == "unified":
+                return maxsim_backward_unified(
+                    grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic"
+                )
             return maxsim_backward(
                 grad_scores,
                 Qt,
@@ -70,7 +83,7 @@ class _MaxSimFn(torch.autograd.Function):
                 argmax,
                 q_mask,
                 d_mask,
-                method=ctx.backward_method,
+                method=method,
             )
 
         if ctx.normalize:
