@@ -20,7 +20,7 @@ Shapes tested:
 
 Metrics reported:
 
-  * ``fwd``                     forward-only wall time (ms), 5 iters avg
+  * ``fwd``                     forward-only wall time (ms), 50-iter median after 5 warmup
   * ``fwd+bwd``                 full forward + backward (``scores.sum().backward()``) (ms)
   * ``peak``                    peak CUDA memory during fwd+bwd (GB)
   * ``tiles``                   number of inner ``colbert_scores`` tiles vanilla makes
@@ -65,7 +65,7 @@ def _synth(batch: int, L: int, d: int, device, dtype=torch.float16):
     return x.detach().requires_grad_(True)
 
 
-def _timed(closure, iters=5, warmup=2):
+def _timed(closure, iters=50, warmup=5):
     for _ in range(warmup):
         closure()
     torch.cuda.synchronize()
@@ -163,8 +163,8 @@ def fmt(v):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default="benchmarks/results")
-    ap.add_argument("--iters", type=int, default=5)
-    ap.add_argument("--warmup", type=int, default=2)
+    ap.add_argument("--iters", type=int, default=50)
+    ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--only", choices=["both", "vanilla", "flash"], default="both")
     args = ap.parse_args()
 

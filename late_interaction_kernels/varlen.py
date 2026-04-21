@@ -296,9 +296,22 @@ def _varlen_forward(
     max_seqlen_d: int | None,
     save_argmax: bool,
 ):
-    assert Q_packed.dim() == 2 and D_packed.dim() == 2
+    if Q_packed.dim() != 2:
+        raise ValueError(
+            f"Q_packed must be 2-D [sum(Lq_i), d]; got shape {tuple(Q_packed.shape)} "
+            f"(ndim={Q_packed.dim()}). For padded inputs use `maxsim(Q, D, ...)` instead."
+        )
+    if D_packed.dim() != 2:
+        raise ValueError(
+            f"D_packed must be 2-D [sum(Ld_j), d]; got shape {tuple(D_packed.shape)} "
+            f"(ndim={D_packed.dim()}). For padded inputs use `maxsim(Q, D, ...)` instead."
+        )
     d = Q_packed.shape[1]
-    assert D_packed.shape[1] == d
+    if D_packed.shape[1] != d:
+        raise ValueError(
+            f"Q_packed and D_packed must share the embedding dim; got "
+            f"Q_packed.shape[1]={Q_packed.shape[1]} vs D_packed.shape[1]={D_packed.shape[1]}."
+        )
 
     cu_seqlens_q = cu_seqlens_q.to(torch.int32).contiguous()
     cu_seqlens_d = cu_seqlens_d.to(torch.int32).contiguous()
@@ -468,8 +481,9 @@ def maxsim_varlen(
           buffer of shape ``[Nq, Nd, max_seqlen_q]`` (int32). The fused
           backward then produces ``grad_Q`` and ``grad_D`` directly on the
           packed layout — no repad, no materialized ``[Nq, Nd, Lq, Ld]``.
-        * Use ``maxsim_varlen_inference`` for pure reranking if you want
-          to skip the argmax save.
+        * For pure reranking, just pass tensors with ``requires_grad=False``
+          — the argmax save is skipped automatically. The separate
+          ``maxsim_varlen_inference`` alias is deprecated since 0.9.0.
     """
     if Q_packed.requires_grad or D_packed.requires_grad:
         return _MaxSimVarlenFn.apply(
@@ -494,7 +508,22 @@ def maxsim_varlen_inference(
     max_seqlen_q: int | None = None,
     max_seqlen_d: int | None = None,
 ) -> torch.Tensor:
-    """Inference-only varlen MaxSim — skips the argmax save."""
+    """Deprecated alias for :func:`maxsim_varlen`.
+
+    :func:`maxsim_varlen` already skips the argmax save when neither input
+    requires gradients; this alias exists for backward compatibility only
+    and emits a :class:`DeprecationWarning`. Scheduled for removal in a
+    future release.
+    """
+    import warnings
+
+    warnings.warn(
+        "`maxsim_varlen_inference` is deprecated since 0.9.0 — use "
+        "`maxsim_varlen(...)` directly. The argmax save is skipped "
+        "automatically when neither input has `requires_grad=True`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     scores, _, _, _ = _varlen_forward(
         Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d, max_seqlen_q, max_seqlen_d, False
     )

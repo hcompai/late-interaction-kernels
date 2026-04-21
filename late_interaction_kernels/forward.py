@@ -1,31 +1,12 @@
-"""Fused Triton forward kernel for MaxSim with mask + skiplist support.
+"""Fused Triton forward kernel for MaxSim with fused masks and normalize.
 
-Design
-------
-One program per (q_batch, d_batch) pair. Inside:
+One program per ``(q_batch, d_batch)`` pair; streams tiles of ``Q`` and
+``D`` through SRAM so the full ``[Nq · Nd · Lq · Ld]`` similarity tensor
+is never materialized. Optional ``save_argmax`` writes a small
+``[Nq · Nd, Lq]`` int32 buffer used by the training backward paths.
 
-    for q_start in static_range(0, Lq, BLOCK_Q):          # O(Lq / BLOCK_Q) tiles
-        Q_block = load(Q[q_batch, q_start : q_start+BLOCK_Q, :])   # SRAM
-        m       = [-inf] * BLOCK_Q                                # registers
-        argmax  = [0]    * BLOCK_Q                                # registers
-        for d_start in range(0, Ld, BLOCK_D):             # O(Ld / BLOCK_D) tiles
-            D_block = load(D[d_batch, d_start : d_start+BLOCK_D, :])
-            S       = tl.dot(Q_block, D_block.T)          # tensor cores, SRAM only
-            mask tile tokens with -inf where ~d_mask
-            m, argmax = online_max(m, argmax, S)
-        zero-out rows where ~q_mask
-        score_acc += sum(m)
-    store(score_acc)
-    if save_argmax: store(argmax)
-
-Key differences vs flash-maxsim:
-  1. `q_mask` and `d_mask` are fused inside the kernel (no post `* mask` that
-     still touches the full similarity matrix).
-  2. `save_argmax` is optional and used by the "exact" backward path.
-     The "recompute" backward doesn't need it.
-  3. FP32 accumulator throughout — no fp16 loss of significance on sum.
-  4. Handles the empty-mask row case (whole doc masked out → score = 0,
-     not -inf).
+See :doc:`../docs/design.md` for the full walk-through of tiling, mask
+semantics, numerical accuracy, and differences vs flash-maxsim.
 """
 
 from __future__ import annotations

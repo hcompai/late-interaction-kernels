@@ -1,31 +1,14 @@
-"""CSR (scatter-free) backward for grad_D.
+"""Scatter-free CSR backward for ``grad_D`` (deterministic, zero atomics).
 
-Motivation
-----------
-The default atomic backward scatters ``gs * Q[i, s, :]`` into
-``grad_D[j, argmax[i, j, s], :]`` with ``fp32 tl.atomic_add``. When multiple
-``(i, s)`` pairs land on the same ``t = argmax[i, j, s]`` (which is the norm —
-the average bucket size is ``Nq * Lq / Ld``), the atomics contend on the same
-cache line and serialize through L2. On H100 this caps grad_D throughput to
-the atomic-add rate (~1.5 GFLOPs/SM) rather than the tensor-core or HBM rate.
+Inverts the atomic scatter: sorts ``(i, s)`` pairs by ``argmax`` to
+build per-``j`` CSR buckets, then each ``(j, t)`` program reduces its
+own bucket into one register and writes once. Wins at very high
+``grad_D`` contention (``Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64``) and when
+bitwise reproducibility across runs matters.
 
-The CSR path inverts the scatter: we build a per-``j`` CSR structure where
-``row_ptr[j, t]..row_ptr[j, t+1]`` lists every ``(i, s)`` whose argmax is
-``t``. Then each ``(j, t)`` program sums that bucket into one register
-accumulator and does a single non-atomic store. Zero contention, one write
-per output element.
-
-Cost of the CSR build is ``Nd`` independent ``sort``s over ``Nq * Lq`` int32
-keys — cub radix sort handles this in a few hundred µs for realistic sizes,
-which is still strictly less than the contention penalty removed.
-
-Determinism
------------
-The reduction order inside each bucket is the order the sort returns, which
-is data-dependent. That means CSR is **bitwise** different from the atomic
-path on the same inputs, but it is itself deterministic (same input → same
-output) because sort is deterministic. If you need bitwise reproducibility
-across runs of the CSR path itself, you already have it.
+See :doc:`../docs/design.md` for the full derivation and the
+heuristic the ``"auto"`` selector uses to pick between ``unified``,
+``csr``, and ``atomic``.
 """
 
 from __future__ import annotations

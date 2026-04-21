@@ -1,33 +1,19 @@
-"""FP8 MaxSim inference (Hopper SM90+ / Blackwell).
+"""FP8 MaxSim inference for Hopper (SM90+) and Blackwell.
 
-Motivation
-----------
-For large-corpus reranking the forward is HBM-bound: every ``D`` tile
-round-trips through L2 + HBM and tensor cores idle. FP8 halves the
-footprint and doubles the tensor-core throughput on Hopper (``WGMMA``)
-and Blackwell.
+Quantize once, score many — halves HBM footprint and doubles
+tensor-core throughput on WGMMA-class GPUs. Inference-only; training
+FP8 is a separate RFC.
 
-This module ships the inference-only FP8 path. Training-side FP8 (with
-per-output scaling + master-weight maintenance) is a separate RFC.
+Usage::
 
-API
----
-::
-
-    Q_fp8, sq = quantize_fp8_per_tensor(Q)       # or quantize_fp8_per_token(...)
+    Q_fp8, sq = quantize_fp8_per_tensor(Q)       # or _per_token(...)
     D_fp8, sd = quantize_fp8_per_tensor(D)
     scores = maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sq, scale_D=sd)
 
-The kernel assumes the standard ``torch.float8_e4m3fn`` dtype (safer
-dynamic range than ``e5m2`` for normalized embeddings). Scores are
-returned in fp32.
-
-Fallback
---------
-When the running Triton build doesn't support the ``tl.dot`` FP8 path
-— typically pre-Hopper or Triton < 3.0 — we reconstitute the kernel
-automatically in bf16 and warn once. The API contract is preserved so
-calling code never has to branch.
+Uses ``torch.float8_e4m3fn`` (better dynamic range than ``e5m2`` for
+normalized embeddings); scores returned in fp32. Falls back to bf16
+with a one-shot warning when the Triton FP8 ``tl.dot`` path is
+unavailable.
 """
 
 from __future__ import annotations

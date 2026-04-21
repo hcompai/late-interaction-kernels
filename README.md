@@ -74,7 +74,7 @@ PyLate drop-in targets **PyLate ≥ 1.3**.
 
 ## Quickstart
 
-### PyLate training, one line
+### 1. PyLate training, one line
 
 ```python
 from late_interaction_kernels import patch_pylate
@@ -84,16 +84,46 @@ patch_pylate()          # swaps colbert_scores / colbert_kd_scores /
 # ... your PyLate training code is unchanged ...
 ```
 
-`LIK_DISABLE=1` reverts to vanilla PyTorch at import time.
+`LIK_DISABLE=1` (checked per call) makes every patched entry point
+delegate back to vanilla PyLate without un-installing the patches — a
+runtime kill switch you can flip inside a job without restarting.
 
-### Reranking / inference
+### 2. Custom training — `MaxSimScorer`
+
+```python
+import torch
+from late_interaction_kernels import MaxSimScorer
+
+scorer = MaxSimScorer(normalize=True)             # nn.Module, no parameters
+
+scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)   # [Nq, Nd] fp32
+scores.mean().backward()                          # gradients flow into Q, D
+```
+
+`MaxSimScorer` is a stateless `nn.Module` that composes cleanly with any
+encoder, trainer or `torch.compile` wrapper. Defaults match
+ColBERT / ColPali / LateOn scoring semantics.
+
+### 3. Retrieval — `retrieve(Q, corpus, top_k=...)`
+
+```python
+from late_interaction_kernels import retrieve
+
+scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
+# scores, indices are both [Nq, 100] — docs ranked per query
+```
+
+`chunk=` bounds peak HBM at `Nq · (chunk + top_k)` instead of
+`Nq · Nd`, so 100 k-doc corpora fit in a single call.
+
+### 4. Reranking — raw `maxsim_inference`
 
 ```python
 import torch
 from late_interaction_kernels import maxsim_inference
 
-Q = torch.randn(32,  128, device="cuda", dtype=torch.float16)     # [Lq, d]
-D = torch.randn(1000, 300, 128, device="cuda", dtype=torch.float16)  # [Nd, Ld, d]
+Q = torch.randn(32, 128, device="cuda", dtype=torch.float16)          # [Lq, d]
+D = torch.randn(1000, 300, 128, device="cuda", dtype=torch.float16)   # [Nd, Ld, d]
 
 scores = maxsim_inference(Q, D, normalize=True)   # [1000] fp32
 top10  = scores.topk(10)
@@ -102,22 +132,10 @@ top10  = scores.topk(10)
 `normalize=True` fuses `F.normalize(Q) + F.normalize(D) + maxsim`
 into a single kernel (3–17× faster than the explicit version).
 
-### Autograd-aware training
-
-```python
-from late_interaction_kernels import maxsim
-
-scores = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
-scores.sum().backward()          # gradients flow to Q and D
-```
-
-Masked tokens are dropped *before* the `max`, so they cannot win the
-argmax (unlike PyLate's post-multiply).
-
-More patterns — top-K retrieval, Matryoshka, XTR, soft / smooth-MaxSim,
-ColBERTv2 residuals, varlen / packed — live in the [API
-reference](#api-reference) below with one-line examples and links to
-the dedicated docs.
+More patterns — Matryoshka, XTR, soft / smooth-MaxSim, ColBERTv2
+residuals, varlen / packed, FP8 — live in the
+[API reference](#api-reference) below with one-line examples and
+links to the dedicated docs.
 
 ---
 
@@ -225,22 +243,30 @@ Design details and the closed-form gradient derivation:
 
 ## API reference
 
-All public functions. Most users only need `patch_pylate()` and
-`maxsim_inference`. Everything else is for when you're writing a
-custom trainer, reranker, or research pipeline.
+Most users only need `patch_pylate()`, `MaxSimScorer` or `retrieve`.
+Everything else is for when you're writing a custom trainer,
+reranker, or research pipeline.
+
+### High-level (recommended)
+
+| Symbol                                       | What it does                                                                 |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `patch_pylate()` / `unpatch_pylate()`        | One-line PyLate drop-in. Numerically identical, `LIK_DISABLE=1` kill-switch. |
+| `MaxSimScorer(normalize=True, backward=...)` | `nn.Module` scoring layer. Autograd-aware, composes with any encoder.        |
+| `retrieve(Q, D, top_k, chunk=...)`           | Top-k retrieval in one call with optional chunking for huge corpora.         |
 
 ### Core scoring
 
-| Function                              | What it does                                                   |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `maxsim(Q, D, q_mask, d_mask, ...)`   | Autograd-aware MaxSim. Used by `patch_pylate()`.               |
-| `maxsim_inference(Q, D, ...)`         | Forward-only MaxSim (skips argmax save). Use at inference.     |
-| `maxsim_varlen(Qp, Dp, cu_q, cu_d)`   | Packed-layout MaxSim, autograd-aware. See [packed training cookbook](docs/packed_training.md). |
-| `maxsim_topk(Q, D, k=10, chunk=...)`  | MaxSim + fused `top_k`, with optional chunking for huge `Nd`.  |
-| `maxsim_matryoshka(Q, D, dims=[...])` | Score at K truncated dimensions in one kernel call.            |
-| `maxsim_xtr(Q, D, top_k=5)`           | XTR-style: sum of top-K doc tokens per query token.            |
-| `soft_maxsim(Q, D, beta=10)`          | Log-sum-exp relaxation. `β → ∞` recovers hard MaxSim.          |
-| `smooth_maxsim(Q, D, top_k=4, ...)`   | Top-K aggregate (denser grads, streaming Triton top-K).        |
+| Function                                       | What it does                                                                 |
+| ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| `maxsim(Q, D, q_mask, d_mask, *, backward=)`   | Autograd-aware MaxSim. Used by `patch_pylate()`; per-call `backward=` kwarg. |
+| `maxsim_inference(Q, D, ...)`                  | Forward-only MaxSim (skips argmax save). Use at inference.                   |
+| `maxsim_varlen(Qp, Dp, cu_q, cu_d)`            | Packed-layout MaxSim, autograd-aware. Auto-skips argmax save when no grad. See [packed training cookbook](docs/packed_training.md). |
+| `maxsim_topk(Q, D, k=10, chunk=...)`           | MaxSim + fused `top_k`, with optional chunking for huge `Nd`.                |
+| `maxsim_matryoshka(Q, D, dims=[...])`          | Score at K truncated dimensions in one kernel call.                          |
+| `maxsim_xtr(Q, D, top_k=5)`                    | XTR-style: sum of top-K doc tokens per query token.                          |
+| `soft_maxsim(Q, D, beta=10)`                   | Log-sum-exp relaxation. `β → ∞` recovers hard MaxSim.                        |
+| `smooth_maxsim(Q, D, top_k=4, ...)`            | Top-K aggregate (denser grads, streaming Triton top-K).                      |
 
 ### Fused D-side head (for custom trainers with raw hidden states)
 
@@ -295,10 +321,12 @@ Auto-falls back to dequantized bf16 on pre-Hopper GPUs. Relative error
 
 ### Knobs
 
-| Call                                      | What it controls                                              |
-| ----------------------------------------- | ------------------------------------------------------------- |
-| `set_backward_method("auto" \| "unified" \| "atomic" \| "csr")` | `grad_D` strategy. `"auto"` is good; `"csr"` for bitwise determinism. |
-| `LIK_DISABLE=1` (env)                     | `patch_pylate()` becomes a no-op — revert to vanilla PyLate.  |
+| Call                                                               | What it controls                                                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`   | **Per-call** `grad_D` strategy — safe to mix across experiments. `"auto"` is the default.               |
+| `set_backward_method(method)` / `get_backward_method()`            | Process-wide default (kept for back-compat; prefer the per-call kwarg).                                 |
+| `LIK_DISABLE=1` (env, checked per call)                            | Patched entry points delegate to vanilla PyLate. Runtime kill switch; no restart needed.                |
+| `LIK_SUPPRESS_NORM_WARN=1` (env)                                   | Silence the one-shot warning when `maxsim(..., normalize=False)` gets a clearly-unnormalized Q.         |
 
 Details on backward-method selection:
 [`docs/design.md` → Backward](docs/design.md#backward).

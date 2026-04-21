@@ -1,45 +1,14 @@
-"""Top-K argmax save for smoother MaxSim training gradients (0.7.0).
+"""Smooth MaxSim — top-K per-query-token aggregation with O(K) backward.
 
-Motivation
-----------
-Hard :func:`maxsim` writes ``grad_D`` at a single doc-token slot per
-``(query, doc, query_token)``. That works, but the training signal is
-sparse: one winner gets 100 % of the gradient, the runners-up get
-nothing. :func:`soft_maxsim` goes the other way — dense softmax over
-``Ld`` in the backward, which materializes a ``[Nq, Nd, Lq, Ld]``
-attention tensor in fp32 and breaks the O(1)-scratch promise.
+Sits between hard :func:`maxsim` (sparse: one winner gets all the
+gradient) and :func:`soft_maxsim` (dense softmax over ``Ld`` in the
+backward, materializes a ``[Nq, Nd, Lq, Ld]`` tensor). The forward
+aggregates the top-K doc tokens per query token; the backward
+distributes gradient across those K winners only — O(K) extra work on
+top of the hard backward, no ``Ld``-scale scratch.
 
-:func:`smooth_maxsim` sits in the middle: the forward computes the mean
-(or sum) of the top-K doc-token scores per query token. The backward
-distributes gradient evenly across those K winners — same cost as the
-hard backward times a tiny constant, with a smoother loss surface
-than hard MaxSim.
-
-The streaming Triton kernel tracks the top-K per-row using a packed
-``(value_bits, tile_index)`` int64 sort at each tile: the fp32 score is
-munged to a monotonic unsigned form so ``tl.sort`` orders by score
-(ties broken by index). Per-tile state is ``[BLOCK_Q, K]`` fp32 +
-``[BLOCK_Q, K]`` int32 — no Ld-scale scratch.
-
-Math
-----
-With ``S[i, j, s, t] = Q[i, s] · D[j, t]`` (masked ``-inf`` for invalid
-doc tokens):
-
-    topK[i, j, s] = top_k over t of S[i, j, s, t]     # the K highest scores
-    aggr[i, j, s] = (1/K) · sum(topK) if mean
-                  = sum(topK)         if sum
-    score[i, j]   = sum_{s ∈ q_mask} aggr[i, j, s]
-
-Backward — per winner ``t_k = topk_idx[i, j, s, k]``:
-
-    grad_Q[i, s]    += grad_scores[i, j] · scale_k · D[j, t_k]
-    grad_D[j, t_k]  += grad_scores[i, j] · scale_k · Q[i, s]
-
-where ``scale_k = 1/K`` for mean aggregation, ``1`` for sum (XTR-like).
-
-``top_k=1`` + ``sum`` aggregation is numerically identical to hard
-:func:`maxsim`.
+``top_k=1, aggregation="sum"`` is bit-identical to hard :func:`maxsim`.
+See :doc:`../docs/design.md` for the kernel structure.
 """
 
 from __future__ import annotations

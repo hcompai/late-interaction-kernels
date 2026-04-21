@@ -1,16 +1,30 @@
 """late-interaction-kernels: fused Triton kernels for late-interaction scoring.
 
+Most users only need two things::
+
+    from late_interaction_kernels import patch_pylate, MaxSimScorer
+
+    patch_pylate()                       # one-line PyLate speedup
+    scorer = MaxSimScorer(normalize=True) # nn.Module for custom training
+
 Public surface
 --------------
 
-Training / general MaxSim
-    * ``maxsim(Q, D, q_mask=, d_mask=, normalize=)`` — autograd-aware.
+High-level (recommended)
+    * ``MaxSimScorer`` / ``retrieve`` — nn.Module and top-level retrieval
+      helper. Batteries included: mask handling, chunking, normalize, mixed
+      precision.
+    * ``patch_pylate()`` / ``unpatch_pylate()`` — one-line PyLate drop-in.
+
+Core MaxSim
+    * ``maxsim(Q, D, q_mask=, d_mask=, normalize=, backward="auto")`` — autograd-aware.
     * ``maxsim_inference(...)`` — no saved argmax, inference-only.
     * ``soft_maxsim(...)`` — log-sum-exp relaxation (dense gradient).
     * ``smooth_maxsim(..., top_k=)`` — top-K argmax save with sparse
       smoother gradient (middle ground between hard max and LSE).
     * ``maxsim_varlen(...)`` — packed / ragged inputs, autograd-aware.
-    * ``maxsim_varlen_inference(...)`` — no saved argmax, inference-only.
+      Forward-only when neither input has ``requires_grad=True``; no
+      separate ``_inference`` alias is needed anymore.
 
 FP8 (Hopper / Blackwell)
     * ``maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=, scale_D=)`` — fp8
@@ -34,18 +48,20 @@ Retrieval / fused heads
       compressed doc embeddings.
     * ``maxsim_residual_inference(...)`` — no saved argmax, inference-only.
 
-Late-interaction variants
+Variants
     * ``maxsim_matryoshka(Q, D, dims=[...])`` — multi-dim scoring in one pass.
     * ``maxsim_xtr(Q, D, top_k=5)`` — XTR top-k aggregated MaxSim.
 
-PyLate drop-in
-    * ``patch_pylate()`` / ``unpatch_pylate()``.
-
 Advanced
-    * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
+    * ``set_backward_method(method)`` / ``get_backward_method()`` select
+      the process-wide default ``grad_D`` path. Valid values:
+      ``"auto" | "unified" | "csr" | "atomic"``. Since 0.6.0 ``"auto"``
+      picks between ``"unified"`` and ``"csr"`` — ``"atomic"`` is a
+      legacy two-pass fallback. Prefer the per-call ``backward=`` kwarg
+      on ``maxsim`` / ``MaxSimScorer`` over the global.
 """
 
-__version__ = "0.8.0.dev0"
+__version__ = "0.9.0.dev0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and
@@ -66,7 +82,6 @@ if _HAS_TRITON:
         maxsim_inference,
         set_backward_method,
     )
-    from .forward import maxsim_forward
     from .fp8 import (
         dequantize_fp8_per_tensor,
         dequantize_fp8_per_token,
@@ -78,6 +93,7 @@ if _HAS_TRITON:
     from .matryoshka import maxsim_matryoshka
     from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
+    from .retrieve import MaxSimScorer, retrieve
     from .smooth import smooth_maxsim
     from .soft import soft_maxsim
     from .topk import maxsim_topk
@@ -92,7 +108,7 @@ else:  # pragma: no cover
             "reference implementations in `late_interaction_kernels.reference`."
         )
 
-    maxsim = maxsim_inference = maxsim_forward = _needs_triton
+    maxsim = maxsim_inference = _needs_triton
     maxsim_from_hidden = maxsim_from_hidden_train = _needs_triton
     maxsim_inference_fp8 = _needs_triton
     quantize_fp8_per_tensor = quantize_fp8_per_token = _needs_triton
@@ -102,15 +118,47 @@ else:  # pragma: no cover
     plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
+    MaxSimScorer = retrieve = _needs_triton  # type: ignore[assignment]
 
 from . import reference  # noqa: E402,F401  — always importable (pure PyTorch)
 
+
+def __getattr__(name: str):
+    """Module-level ``__getattr__`` for deprecated / moved symbols (PEP 562)."""
+    if name == "maxsim_forward":
+        # Demoted to private in 0.9.0. The forward primitive is available as
+        # `from late_interaction_kernels.forward import maxsim_forward` for
+        # advanced users; the module-level re-export is scheduled for removal.
+        import warnings
+
+        warnings.warn(
+            "`late_interaction_kernels.maxsim_forward` is deprecated since 0.9.0 and "
+            "will be removed in a future release. It is a forward-only primitive "
+            "with no autograd — use `maxsim_inference(Q, D, ...)` for reranking "
+            "(skips the argmax save) or `maxsim(Q, D, ...)` if you need gradients. "
+            "If you really want the low-level primitive, import it from the "
+            "private module: `from late_interaction_kernels.forward import maxsim_forward`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if _HAS_TRITON:
+            from .forward import maxsim_forward as _mf
+
+            return _mf
+        return _needs_triton
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "__version__",
+    # high-level
+    "MaxSimScorer",
+    "retrieve",
+    "patch_pylate",
+    "unpatch_pylate",
     # core MaxSim
     "maxsim",
     "maxsim_inference",
-    "maxsim_forward",
     "maxsim_from_hidden",
     "maxsim_from_hidden_train",
     "maxsim_inference_fp8",
@@ -133,8 +181,5 @@ __all__ = [
     # configuration
     "set_backward_method",
     "get_backward_method",
-    # pylate
-    "patch_pylate",
-    "unpatch_pylate",
     "reference",
 ]
