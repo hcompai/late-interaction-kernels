@@ -408,39 +408,38 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         if need_b:
             b_fp.requires_grad_(True)
 
-        D_win = torch.nn.functional.linear(H_win_fp, W_fp, b_fp)  # [Nq, Nd, Lq, d_out]
-        if normalize:
-            D_win = torch.nn.functional.normalize(D_win, p=2, dim=-1, eps=1e-12)
+        # Backward is called inside a no_grad context; re-enable tracking
+        # locally so we can compose the winners-slice rebuild with autograd.
+        with torch.enable_grad():
+            D_win = torch.nn.functional.linear(H_win_fp, W_fp, b_fp)  # [Nq, Nd, Lq, d_out]
+            if normalize:
+                D_win = torch.nn.functional.normalize(D_win, p=2, dim=-1, eps=1e-12)
 
-        # score[i, j] = sum_s  D_win[i, j, s, :] · Q[i, s, :]
-        # (the fused forward already masks query tokens via q_active; we
-        # mirror it here with nothing — grad_scores respects that
-        # because masked rows contribute zero to scores in the forward)
-        contrib = (D_win * Q_fp.view(Nq, 1, Lq, d_out)).sum(dim=-1)  # [Nq, Nd, Lq]
-        scores_rebuilt = contrib.sum(dim=-1)  # [Nq, Nd]
+            contrib = (D_win * Q_fp.view(Nq, 1, Lq, d_out)).sum(dim=-1)  # [Nq, Nd, Lq]
+            scores_rebuilt = contrib.sum(dim=-1)  # [Nq, Nd]
 
-        leaves = []
-        if need_Q:
-            leaves.append(Q_fp)
-        if need_H:
-            leaves.append(H_win_fp)
-        if need_W:
-            leaves.append(W_fp)
-        if need_b:
-            leaves.append(b_fp)
+            leaves = []
+            if need_Q:
+                leaves.append(Q_fp)
+            if need_H:
+                leaves.append(H_win_fp)
+            if need_W:
+                leaves.append(W_fp)
+            if need_b:
+                leaves.append(b_fp)
 
-        grads: list[torch.Tensor] = []
-        if leaves:
-            grads = list(
-                torch.autograd.grad(
-                    scores_rebuilt,
-                    leaves,
-                    grad_outputs=grad_scores,
-                    retain_graph=False,
-                    create_graph=False,
-                    allow_unused=False,
+            grads: list[torch.Tensor] = []
+            if leaves:
+                grads = list(
+                    torch.autograd.grad(
+                        scores_rebuilt,
+                        leaves,
+                        grad_outputs=grad_scores,
+                        retain_graph=False,
+                        create_graph=False,
+                        allow_unused=False,
+                    )
                 )
-            )
 
         gQ = gH_win = gW = gb = None
         it = iter(grads)
