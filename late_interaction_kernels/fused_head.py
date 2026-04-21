@@ -1,4 +1,4 @@
-"""Fused D-side projection + normalize + MaxSim (inference).
+"""Fused D-side projection + normalize + MaxSim.
 
 Motivation
 ----------
@@ -9,26 +9,31 @@ last layer of a ModernBERT encoder) and the MaxSim dimension is
     D_proj = F.normalize(H_d @ W.T)          # [Nd, Ld, d_out]  <-- big HBM scratch
     scores = maxsim(Q, D_proj)
 
-For large corpora the ``D_proj`` intermediate can be multi-GB. This kernel
-folds projection + L2-normalize + MaxSim into a single pass, so the
-corpus only has to exist in HBM as ``[Nd, Ld, d_model]`` hidden states.
+For large corpora the ``D_proj`` intermediate can be multi-GB. The fused
+kernel folds projection + L2-normalize + MaxSim into a single pass, so
+the corpus only has to exist in HBM as ``[Nd, Ld, d_model]`` hidden
+states.
 
-Scope
------
-- **Inference only** (no backward). The symmetric training-side fused
-  head reads each ``H`` row ``Nq·Nd`` times, which is 4-6× more HBM
-  traffic than reading the already-projected ``Q`` — a net loss. The
-  training-side variant requires a persistent kernel with per-SM SMEM
-  caching and is deferred to 0.7.0. See `docs/rfc/0.6.0.md` for the
-  HBM accounting.
-- ``Q`` is expected to be already projected (cheap on the query side —
-  one small matmul per query).
-- D-side bias and ``W`` weight are loaded once per tile via Triton's
-  standard tiling; no special persistent layout.
+Scope (0.7.0)
+-------------
+- **Inference**: :func:`maxsim_from_hidden` — no ``D_proj`` ever
+  materialized, no autograd.
+- **Training**: :func:`maxsim_from_hidden_train` — autograd-aware
+  wrapper. Forward runs the same fused kernel with an extra
+  ``save_argmax`` store; backward re-materializes only the winning
+  ``D_proj`` rows (``Nq · Nd · Lq · d_out`` — typically <10 % of
+  the full ``D_proj``) and back-props into ``H_d``, ``W``, ``b``, ``Q``
+  via PyTorch autograd. Matches the unfused path numerically to fp32
+  tolerance.
+
+A full persistent-kernel training-side fusion (reads ``H`` only once
+per ``(j, t)`` across all ``Nq``) is a 0.8.0 follow-up — see
+``docs/rfc/0.7.0.md`` §5.
 
 API
 ---
 ``maxsim_from_hidden(Q, H_d, W, b=None, d_mask=None, normalize=True)``
+``maxsim_from_hidden_train(Q, H_d, W, b=None, d_mask=None, normalize=True)``
 """
 
 from __future__ import annotations
@@ -54,7 +59,7 @@ def _fused_head_configs():
 
 @triton.autotune(
     configs=_fused_head_configs(),
-    key=["Lq", "Ld", "d_out_pad", "d_model_pad", "has_bias", "has_d_mask", "normalize"],
+    key=["Lq", "Ld", "d_out_pad", "d_model_pad", "has_bias", "has_d_mask", "normalize", "save_argmax"],
 )
 @triton.jit
 def _fused_head_fwd_kernel(
@@ -64,6 +69,7 @@ def _fused_head_fwd_kernel(
     b_ptr,  # [d_out] or dummy
     d_mask_ptr,  # [Nd, Ld] or dummy
     scores_ptr,  # [Nq, Nd]
+    argmax_ptr,  # [Nq*Nd, Lq] int32 or dummy
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
@@ -84,9 +90,12 @@ def _fused_head_fwd_kernel(
     stride_s_d,
     stride_dm_n,
     stride_dm_l,
+    stride_a_pair,
+    stride_a_lq,
     has_bias: tl.constexpr,
     has_d_mask: tl.constexpr,
     normalize: tl.constexpr,
+    save_argmax: tl.constexpr,
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -118,6 +127,7 @@ def _fused_head_fwd_kernel(
         ).to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
+        m_idx = tl.full([BLOCK_Q], 0, dtype=tl.int32)
 
         for d_start in range(0, Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
@@ -172,11 +182,22 @@ def _fused_head_fwd_kernel(
             S = tl.where(d_active[None, :], S, float("-inf"))
 
             tile_max = tl.max(S, axis=1)
+            if save_argmax:
+                tile_argmax = tl.argmax(S, axis=1).to(tl.int32) + d_start
+                update = tile_max > m
+                m_idx = tl.where(update, tile_argmax, m_idx)
             m = tl.maximum(m, tile_max)
 
         m_finite = m != float("-inf")
         m = tl.where(m_finite & q_valid, m, 0.0)
         score_acc += tl.sum(m)
+
+        if save_argmax:
+            tl.store(
+                argmax_ptr + pid * stride_a_pair + q_off * stride_a_lq,
+                m_idx,
+                mask=q_valid,
+            )
 
     tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
@@ -188,7 +209,8 @@ def _fused_head_forward(
     b: torch.Tensor | None,
     d_mask: torch.Tensor | None,
     normalize: bool,
-) -> torch.Tensor:
+    save_argmax: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     Nq, Lq, d_out = Q.shape
     Nd, Ld, d_model = H_d.shape
     assert W.shape == (d_out, d_model), (
@@ -202,10 +224,13 @@ def _fused_head_forward(
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
     scores = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
+    argmax = torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     b_ptr = b if has_bias else Q
     d_mask_ptr = d_mask if has_d_mask else H_d
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)
+    argmax_ptr = argmax if save_argmax else scores
+    a_strides = (argmax.stride(0), argmax.stride(1)) if save_argmax else (0, 0)
 
     grid = (Nq * Nd,)
     _fused_head_fwd_kernel[grid](
@@ -215,6 +240,7 @@ def _fused_head_forward(
         b_ptr,
         d_mask_ptr,
         scores,
+        argmax_ptr,
         Nq,
         Nd,
         Lq,
@@ -235,12 +261,15 @@ def _fused_head_forward(
         scores.stride(1),
         dm_strides[0],
         dm_strides[1],
+        a_strides[0],
+        a_strides[1],
         has_bias,
         has_d_mask,
         normalize,
+        save_argmax,
         COMPUTE_DTYPE=tl_dtype,
     )
-    return scores
+    return scores, argmax
 
 
 def maxsim_from_hidden(
@@ -303,7 +332,200 @@ def maxsim_from_hidden(
     b_c = b.contiguous() if b is not None else None
     d_mask_c = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
 
-    scores = _fused_head_forward(Q, H_d, W, b_c, d_mask_c, normalize)
+    scores, _ = _fused_head_forward(Q, H_d, W, b_c, d_mask_c, normalize, save_argmax=False)
+    if q_was_2d:
+        return scores.squeeze(0)
+    return scores
+
+
+class _MaxSimFromHiddenFn(torch.autograd.Function):
+    """Autograd-aware fused head for training.
+
+    Forward runs the same fused kernel as inference plus an extra
+    ``argmax`` store (``[Nq*Nd, Lq]`` int32). Backward gathers only the
+    winning ``H_d`` rows, recomputes the tiny ``[Nq·Nd·Lq, d_out]``
+    winners slice of ``D_proj`` in fp32, and flows the gradient back
+    through normalize + linear via PyTorch autograd. Numerically
+    identical to the unfused path
+    (``F.normalize(F.linear(H_d, W, b)) -> maxsim(Q, D)``) to fp32
+    tolerance — gradcheck-validated.
+
+    Forward never materializes the full ``[Nd, Ld, d_out]`` ``D_proj``
+    tensor in HBM; the backward only touches it at winning positions.
+    """
+
+    @staticmethod
+    def forward(ctx, Q, H_d, W, b, d_mask, normalize):
+        scores, argmax = _fused_head_forward(Q, H_d, W, b, d_mask, normalize, save_argmax=True)
+        ctx.save_for_backward(Q, H_d, W, b, d_mask, argmax)
+        ctx.normalize = bool(normalize)
+        ctx.Nq = Q.shape[0]
+        ctx.Nd = H_d.shape[0]
+        ctx.Lq = Q.shape[1]
+        ctx.Ld = H_d.shape[1]
+        return scores
+
+    @staticmethod
+    def backward(ctx, grad_scores):
+        Q, H_d, W, b, d_mask, argmax = ctx.saved_tensors
+        normalize = ctx.normalize
+        Nq, Nd, Lq, Ld = ctx.Nq, ctx.Nd, ctx.Lq, ctx.Ld
+        d_model = H_d.shape[2]
+        d_out = Q.shape[2]
+
+        grad_scores = grad_scores.contiguous().to(torch.float32)
+
+        need_Q = ctx.needs_input_grad[0]
+        need_H = ctx.needs_input_grad[1]
+        need_W = ctx.needs_input_grad[2]
+        need_b = ctx.needs_input_grad[3] and b is not None
+
+        # argmax is [Nq*Nd, Lq] → reshape to [Nq, Nd, Lq]
+        am = argmax.view(Nq, Nd, Lq).long()
+
+        # Gather H_d at the winning doc-token positions (the only time we
+        # touch H_d during backward). Size [Nq, Nd, Lq, d_model].
+        j_idx = torch.arange(Nd, device=H_d.device).view(1, Nd, 1).expand(Nq, Nd, Lq)
+        H_win = H_d[j_idx, am]  # [Nq, Nd, Lq, d_model]
+
+        # Rebuild the tiny winners slice of D_proj in fp32 with grad tracking
+        # on whichever inputs need it. Saved tensors come back detached,
+        # so we can always set requires_grad freely.
+        H_win_fp = H_win.detach().to(torch.float32)
+        W_fp = W.detach().to(torch.float32)
+        b_fp = b.detach().to(torch.float32) if b is not None else None
+        Q_fp = Q.detach().to(torch.float32)
+        if need_Q:
+            Q_fp.requires_grad_(True)
+        if need_H:
+            H_win_fp.requires_grad_(True)
+        if need_W:
+            W_fp.requires_grad_(True)
+        if need_b:
+            b_fp.requires_grad_(True)
+
+        # Backward is called inside a no_grad context; re-enable tracking
+        # locally so we can compose the winners-slice rebuild with autograd.
+        with torch.enable_grad():
+            D_win = torch.nn.functional.linear(H_win_fp, W_fp, b_fp)  # [Nq, Nd, Lq, d_out]
+            if normalize:
+                D_win = torch.nn.functional.normalize(D_win, p=2, dim=-1, eps=1e-12)
+
+            contrib = (D_win * Q_fp.view(Nq, 1, Lq, d_out)).sum(dim=-1)  # [Nq, Nd, Lq]
+            scores_rebuilt = contrib.sum(dim=-1)  # [Nq, Nd]
+
+            leaves = []
+            if need_Q:
+                leaves.append(Q_fp)
+            if need_H:
+                leaves.append(H_win_fp)
+            if need_W:
+                leaves.append(W_fp)
+            if need_b:
+                leaves.append(b_fp)
+
+            grads: list[torch.Tensor] = []
+            if leaves:
+                grads = list(
+                    torch.autograd.grad(
+                        scores_rebuilt,
+                        leaves,
+                        grad_outputs=grad_scores,
+                        retain_graph=False,
+                        create_graph=False,
+                        allow_unused=False,
+                    )
+                )
+
+        gQ = gH_win = gW = gb = None
+        it = iter(grads)
+        if need_Q:
+            gQ = next(it)
+        if need_H:
+            gH_win = next(it)
+        if need_W:
+            gW = next(it)
+        if need_b:
+            gb = next(it)
+
+        grad_H_d = None
+        if need_H:
+            grad_H_d = torch.zeros(Nd, Ld, d_model, device=H_d.device, dtype=torch.float32)
+            for j in range(Nd):
+                idx_j = am[:, j, :]  # [Nq, Lq]
+                cont_j = gH_win[:, j, :, :]  # [Nq, Lq, d_model]
+                grad_H_d[j].index_add_(0, idx_j.reshape(-1), cont_j.reshape(-1, d_model))
+            grad_H_d = grad_H_d.to(H_d.dtype)
+
+        if need_Q:
+            gQ = gQ.to(Q.dtype)
+        if need_W:
+            gW = gW.to(W.dtype)
+        if need_b:
+            gb = gb.to(b.dtype)
+
+        return gQ, grad_H_d, gW, gb, None, None
+
+
+def maxsim_from_hidden_train(
+    Q: torch.Tensor,
+    H_d: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Autograd-aware fused MaxSim with on-the-fly D-side projection.
+
+    Forward fuses ``F.linear + F.normalize + maxsim`` into a single
+    streaming pass (no ``[Nd, Ld, d_out]`` ``D_proj`` scratch). Backward
+    gathers only the winning ``H_d`` slots and back-props through
+    normalize + linear via PyTorch autograd — numerically identical to
+    the unfused path to fp32 tolerance.
+
+    Drop-in replacement for::
+
+        D_proj = F.linear(H_d, W, b)
+        D_proj = F.normalize(D_proj, p=2, dim=-1) if normalize else D_proj
+        scores = maxsim(Q, D_proj, d_mask=d_mask)
+
+    Args match :func:`maxsim_from_hidden`. The gradient flows into
+    ``Q``, ``H_d``, ``W``, ``b`` (whichever have ``requires_grad=True``).
+
+    Notes:
+        For encoder-bound training (GTE-ModernColBERT etc.), the
+        forward kernel eliminates the ``D_proj`` intermediate entirely.
+        On the backward side we only materialize ``D_proj`` at the
+        argmax positions (<10 % of the full tensor on typical shapes).
+        A fully fused training-side backward (persistent kernel,
+        SMEM-cached ``H``) is deferred to 0.8.0 — see
+        ``docs/rfc/0.7.0.md`` §5.
+    """
+    q_was_2d = Q.dim() == 2
+    if q_was_2d:
+        Q = Q.unsqueeze(0)
+    if d_mask is not None and d_mask.dim() == 1:
+        d_mask = d_mask.unsqueeze(0)
+
+    if Q.dim() != 3:
+        raise ValueError(f"Q must be [Lq, d_out] or [Nq, Lq, d_out]; got {Q.shape}")
+    if H_d.dim() != 3:
+        raise ValueError(f"H_d must be [Nd, Ld, d_model]; got {H_d.shape}")
+    if W.dim() != 2 or W.shape != (Q.shape[-1], H_d.shape[-1]):
+        raise ValueError(f"W must be [d_out={Q.shape[-1]}, d_model={H_d.shape[-1]}]; got {W.shape}")
+    if Q.device != H_d.device or W.device != Q.device:
+        raise ValueError("Q, H_d, W must be on the same device.")
+    if b is not None and (b.dim() != 1 or b.shape[0] != Q.shape[-1]):
+        raise ValueError(f"b must be [d_out={Q.shape[-1]}]; got {tuple(b.shape) if b is not None else None}")
+
+    Q_c = Q.contiguous()
+    H_c = H_d.contiguous()
+    W_c = W.contiguous()
+    b_c = b.contiguous() if b is not None else None
+    d_mask_c = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
+
+    scores = _MaxSimFromHiddenFn.apply(Q_c, H_c, W_c, b_c, d_mask_c, normalize)
     if q_was_2d:
         return scores.squeeze(0)
     return scores
