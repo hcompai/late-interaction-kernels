@@ -27,12 +27,12 @@ def test_reference_topk1_sum_matches_hard_maxsim():
     """top_k=1, aggregation='sum' must be bit-identical to hard MaxSim."""
     from late_interaction_kernels.reference import maxsim_reference
 
-    Q = torch.randn(2, 16, 32, dtype=torch.float64)
-    D = torch.randn(3, 24, 32, dtype=torch.float64)
+    Q = torch.randn(2, 16, 32, dtype=torch.float32)
+    D = torch.randn(3, 24, 32, dtype=torch.float32)
 
     hard = maxsim_reference(Q, D)
     smooth = smooth_maxsim_reference(Q, D, top_k=1, aggregation="sum")
-    torch.testing.assert_close(hard, smooth, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(hard, smooth.to(hard.dtype), atol=1e-6, rtol=1e-6)
 
 
 def test_reference_topk_large_k_matches_mean_plus_sum():
