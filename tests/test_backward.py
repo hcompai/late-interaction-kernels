@@ -239,7 +239,9 @@ def test_auto_selects_a_valid_path(rel):
         # closest path as ground truth and check that match.
         dists = {m: rel(grads["auto"][1], grads[m][1]) for m in ("csr", "atomic", "unified")}
         closest = min(dists, key=dists.get)
-        assert dists[closest] < 1e-4, f"auto grad_D matches neither path at tight tol ({Nq=}, {Nd=}); dists={dists}"
+        assert dists[closest] < 1e-4, (
+            f"auto grad_D matches neither path at tight tol ({Nq=}, {Nd=}); dists={dists}"
+        )
 
 
 # --------------------------------------------------------------------------- #

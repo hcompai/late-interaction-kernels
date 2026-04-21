@@ -73,9 +73,7 @@ class _MaxSimFn(torch.autograd.Function):
 
         def _bwd(Qt, Dt):
             if method == "unified":
-                return maxsim_backward_unified(
-                    grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic"
-                )
+                return maxsim_backward_unified(grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic")
             return maxsim_backward(
                 grad_scores,
                 Qt,

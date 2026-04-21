@@ -26,18 +26,18 @@ from late_interaction_kernels.forward import _run_forward
 
 # (name, Nq, Nd, Lq, Ld, d)
 SHAPES = [
-    ("train-B16",           16,  16,  32,  200, 128),
-    ("train-B32",           32,  32,  32,  200, 128),     # PyLate default
-    ("train-B64",           64,  64,  32,  200, 128),
-    ("train-B128",         128, 128,  32,  200, 128),
-    ("train-B256",         256, 256,  32,  200, 128),
-    ("long-doc-B16",        16,  16,  32, 1024, 128),
-    ("long-doc-B32",        32,  32,  32, 1024, 128),
-    ("colpali-B4",           4,   4, 1024, 1024, 128),
-    ("edge-d48-B32",        32,  32,  32,  256,  48),
-    ("edge-d64-B32",        32,  32,  32,  256,  64),
-    ("large-d-256",         16,  16,  32,  200, 256),
-    ("large-d-512",          8,   8,  32,  200, 512),
+    ("train-B16", 16, 16, 32, 200, 128),
+    ("train-B32", 32, 32, 32, 200, 128),  # PyLate default
+    ("train-B64", 64, 64, 32, 200, 128),
+    ("train-B128", 128, 128, 32, 200, 128),
+    ("train-B256", 256, 256, 32, 200, 128),
+    ("long-doc-B16", 16, 16, 32, 1024, 128),
+    ("long-doc-B32", 32, 32, 32, 1024, 128),
+    ("colpali-B4", 4, 4, 1024, 1024, 128),
+    ("edge-d48-B32", 32, 32, 32, 256, 48),
+    ("edge-d64-B32", 32, 32, 32, 256, 64),
+    ("large-d-256", 16, 16, 32, 200, 256),
+    ("large-d-512", 8, 8, 32, 200, 512),
 ]
 
 
@@ -74,13 +74,13 @@ def bench(name, Nq, Nd, Lq, Ld, d, dtype):
         return maxsim_backward_unified(grad_s, Q, D, argmax, q_mask=None)
 
     t_atom, sd_atom = cuda_time(run_two_pass_atomic)
-    t_csr,  sd_csr  = cuda_time(run_two_pass_csr)
-    t_uni,  sd_uni  = cuda_time(run_unified)
+    t_csr, sd_csr = cuda_time(run_two_pass_csr)
+    t_uni, sd_uni = cuda_time(run_unified)
 
     return {
-        "atomic":  {"ms": t_atom, "sd": sd_atom},
-        "csr":     {"ms": t_csr,  "sd": sd_csr},
-        "unified": {"ms": t_uni,  "sd": sd_uni},
+        "atomic": {"ms": t_atom, "sd": sd_atom},
+        "csr": {"ms": t_csr, "sd": sd_csr},
+        "unified": {"ms": t_uni, "sd": sd_uni},
     }
 
 
@@ -115,24 +115,24 @@ def main():
             continue
 
         base = r["atomic"]["ms"]
-        speedup_uni  = base / r["unified"]["ms"]
-        speedup_csr  = base / r["csr"]["ms"]
-        print(
-            f"   atomic   {r['atomic']['ms']:6.2f} ± {r['atomic']['sd']:4.2f}  "
-            f"(baseline)"
-        )
-        print(
-            f"   csr      {r['csr']['ms']:6.2f} ± {r['csr']['sd']:4.2f}  "
-            f"{speedup_csr:5.2f}x vs atomic"
-        )
+        speedup_uni = base / r["unified"]["ms"]
+        speedup_csr = base / r["csr"]["ms"]
+        print(f"   atomic   {r['atomic']['ms']:6.2f} ± {r['atomic']['sd']:4.2f}  (baseline)")
+        print(f"   csr      {r['csr']['ms']:6.2f} ± {r['csr']['sd']:4.2f}  {speedup_csr:5.2f}x vs atomic")
         print(
             f"   unified  {r['unified']['ms']:6.2f} ± {r['unified']['sd']:4.2f}  "
             f"{speedup_uni:5.2f}x vs atomic"
         )
         print()
-        results.append({"name": name, "shape": [Nq, Nd, Lq, Ld, d], **r,
-                        "speedup_unified_vs_atomic": speedup_uni,
-                        "speedup_csr_vs_atomic": speedup_csr})
+        results.append(
+            {
+                "name": name,
+                "shape": [Nq, Nd, Lq, Ld, d],
+                **r,
+                "speedup_unified_vs_atomic": speedup_uni,
+                "speedup_csr_vs_atomic": speedup_csr,
+            }
+        )
 
     out_md = os.path.join(args.outdir, f"backward_unified_{gpu}_{args.dtype}.md")
     out_json = os.path.join(args.outdir, f"backward_unified_{gpu}_{args.dtype}.json")

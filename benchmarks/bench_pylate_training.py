@@ -67,8 +67,22 @@ def bench(batch_size, n_neg, Lq, Ld, d, iters=50, warmup=5, patch=False):
     return s.elapsed_time(e) / iters
 
 
+SWEEP = [
+    # (label, batch, neg, Lq, Ld, d)
+    ("pylate-B16-neg1", 16, 1, 32, 200, 128),
+    ("pylate-B32-neg1", 32, 1, 32, 200, 128),
+    ("pylate-B64-neg1", 64, 1, 32, 200, 128),
+    ("pylate-B128-neg1", 128, 1, 32, 200, 128),
+    ("long-doc-B32", 32, 1, 32, 1024, 128),
+    ("colpali-B4", 4, 1, 1024, 1024, 128),
+    ("edge-d48-B64", 64, 1, 32, 256, 48),
+    ("edge-d64-B64", 64, 1, 32, 256, 64),
+]
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--sweep", action="store_true", help="Run the full training-shape sweep.")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--neg", type=int, default=1)
     ap.add_argument("--lq", type=int, default=32)
@@ -76,17 +90,23 @@ def main():
     ap.add_argument("--d", type=int, default=128)
     args = ap.parse_args()
 
-    torch.cuda.empty_cache()
-    t_slow = bench(args.batch_size, args.neg, args.lq, args.ld, args.d, patch=False)
-    torch.cuda.empty_cache()
-    t_fast = bench(args.batch_size, args.neg, args.lq, args.ld, args.d, patch=True)
+    if not args.sweep:
+        cases = [("single", args.batch_size, args.neg, args.lq, args.ld, args.d)]
+    else:
+        cases = SWEEP
 
-    print(
-        f"PyLate Contrastive step:  batch={args.batch_size} neg={args.neg} Lq={args.lq} Ld={args.ld} d={args.d}"
-    )
-    print(f"  vanilla:       {t_slow:.2f} ms/step")
-    print(f"  late-interaction-kernels: {t_fast:.2f} ms/step")
-    print(f"  speedup:       {t_slow / t_fast:.2f}x")
+    print(f"{'shape':22s}  {'vanilla (ms)':>13s}  {'ours (ms)':>10s}  {'speedup':>8s}")
+    print("-" * 60)
+    for label, bsz, neg, Lq, Ld, d in cases:
+        try:
+            torch.cuda.empty_cache()
+            t_slow = bench(bsz, neg, Lq, Ld, d, patch=False)
+            torch.cuda.empty_cache()
+            t_fast = bench(bsz, neg, Lq, Ld, d, patch=True)
+        except torch.cuda.OutOfMemoryError:
+            print(f"{label:22s}  OOM")
+            continue
+        print(f"{label:22s}  {t_slow:13.2f}  {t_fast:10.2f}  {t_slow / t_fast:7.2f}x")
 
 
 if __name__ == "__main__":
