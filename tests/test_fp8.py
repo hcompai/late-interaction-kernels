@@ -21,12 +21,8 @@ SHAPE_IDS = [f"Nq{s[0]}_Nd{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}" for s in SHAPES]
 
 
 def _make(Nq, Nd, Lq, Ld, d, dtype=torch.bfloat16, device="cuda"):
-    Q = torch.nn.functional.normalize(
-        torch.randn(Nq, Lq, d, device=device, dtype=dtype), dim=-1
-    )
-    D = torch.nn.functional.normalize(
-        torch.randn(Nd, Ld, d, device=device, dtype=dtype), dim=-1
-    )
+    Q = torch.nn.functional.normalize(torch.randn(Nq, Lq, d, device=device, dtype=dtype), dim=-1)
+    D = torch.nn.functional.normalize(torch.randn(Nd, Ld, d, device=device, dtype=dtype), dim=-1)
     return Q, D
 
 
@@ -132,9 +128,7 @@ def test_maxsim_fp8_with_masks():
     ref = maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask)
     Q_fp8, sQ = quantize_fp8_per_token(Q)
     D_fp8, sD = quantize_fp8_per_token(D)
-    out = maxsim_inference_fp8(
-        Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD, q_mask=q_mask, d_mask=d_mask
-    )
+    out = maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD, q_mask=q_mask, d_mask=d_mask)
 
     denom = max(1e-6, ref.abs().max().item())
     rel = (out.float() - ref.float()).abs().max().item() / denom
@@ -150,12 +144,8 @@ def test_maxsim_fp8_2d_inputs():
         quantize_fp8_per_tensor,
     )
 
-    Q = torch.nn.functional.normalize(
-        torch.randn(32, 128, device="cuda", dtype=torch.bfloat16), dim=-1
-    )
-    D = torch.nn.functional.normalize(
-        torch.randn(128, 128, device="cuda", dtype=torch.bfloat16), dim=-1
-    )
+    Q = torch.nn.functional.normalize(torch.randn(32, 128, device="cuda", dtype=torch.bfloat16), dim=-1)
+    D = torch.nn.functional.normalize(torch.randn(128, 128, device="cuda", dtype=torch.bfloat16), dim=-1)
     Qq, sQ = quantize_fp8_per_tensor(Q)
     Dq, sD = quantize_fp8_per_tensor(D)
 

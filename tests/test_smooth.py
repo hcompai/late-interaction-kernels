@@ -7,7 +7,6 @@ import torch
 
 from late_interaction_kernels.smooth import smooth_maxsim_reference
 
-
 # (Nq, Nd, Lq, Ld, d)
 SHAPES = [
     (1, 4, 16, 32, 64),
@@ -172,8 +171,8 @@ def test_smooth_maxsim_validates_inputs():
     with pytest.raises(ValueError, match="share the embedding dim"):
         smooth_maxsim(Q, D)
     with pytest.raises(ValueError, match="aggregation"):
-        smooth_maxsim(torch.randn(1, 4, 8, device="cuda"), torch.randn(1, 4, 8, device="cuda"),
-                      aggregation="median")
+        smooth_maxsim(
+            torch.randn(1, 4, 8, device="cuda"), torch.randn(1, 4, 8, device="cuda"), aggregation="median"
+        )
     with pytest.raises(ValueError, match="top_k"):
-        smooth_maxsim(torch.randn(1, 4, 8, device="cuda"), torch.randn(1, 4, 8, device="cuda"),
-                      top_k=0)
+        smooth_maxsim(torch.randn(1, 4, 8, device="cuda"), torch.randn(1, 4, 8, device="cuda"), top_k=0)

@@ -16,7 +16,6 @@ Usage
 
 from __future__ import annotations
 
-import argparse
 import statistics
 import time
 
@@ -88,7 +87,7 @@ def main():
         torch.manual_seed(0)
         dtype = torch.bfloat16
         H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype, requires_grad=True)
-        W = (torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5)))
+        W = torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5))
         W.requires_grad_(True)
         b = (torch.randn(d_out, device="cuda", dtype=dtype) * 0.01).requires_grad_(True)
         Q = torch.nn.functional.normalize(

@@ -254,9 +254,7 @@ if _HAS_TRITON:
 
                     # Gather best_i at best_max_p.
                     at_best = k_range[None, :] == best_max_p[:, None]  # [BLOCK_Q, K]
-                    from_best = tl.sum(
-                        tl.where(at_best, best_i_work, tl.zeros_like(best_i_work)), axis=1
-                    )
+                    from_best = tl.sum(tl.where(at_best, best_i_work, tl.zeros_like(best_i_work)), axis=1)
                     from_tile = tile_max_p + d_start
                     winner_i = tl.where(use_best, from_best, from_tile)
 
@@ -371,10 +369,7 @@ if _HAS_TRITON:
             gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32) * agg_scale
             for kk in tl.static_range(0, K):
                 t = tl.load(
-                    topk_idx_ptr
-                    + (i * Nd + j) * stride_tk_pair
-                    + s * stride_tk_lq
-                    + kk * stride_tk_k
+                    topk_idx_ptr + (i * Nd + j) * stride_tk_pair + s * stride_tk_lq + kk * stride_tk_k
                 ).to(tl.int32)
                 dv = tl.load(
                     D_ptr + j * stride_d_n + t * stride_d_l + kd * stride_d_k,
@@ -526,10 +521,7 @@ class _SmoothMaxSimFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q, D, q_mask, d_mask, top_k, agg_scale, normalize):
         use_triton = (
-            _HAS_TRITON
-            and Q.is_cuda
-            and Q.dtype in (torch.float16, torch.bfloat16)
-            and D.dtype == Q.dtype
+            _HAS_TRITON and Q.is_cuda and Q.dtype in (torch.float16, torch.bfloat16) and D.dtype == Q.dtype
         )
         if use_triton:
             scores, topk_idx = _smooth_maxsim_triton_forward(
@@ -669,9 +661,7 @@ def smooth_maxsim(
     effective_k = min(top_k, Ld)
     agg_scale = (1.0 / effective_k) if aggregation == "mean" else 1.0
 
-    scores = _SmoothMaxSimFn.apply(
-        Q, D, q_mask_c, d_mask_c, effective_k, agg_scale, normalize
-    )
+    scores = _SmoothMaxSimFn.apply(Q, D, q_mask_c, d_mask_c, effective_k, agg_scale, normalize)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())

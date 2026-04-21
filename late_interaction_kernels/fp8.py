@@ -45,8 +45,7 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 from ._autotune import forward_configs, prune_forward
-from ._utils import detect_gpu, next_pow2
-
+from ._utils import next_pow2
 
 _FP8_E4M3_MAX = 448.0  # torch.finfo(torch.float8_e4m3fn).max — hard-coded for old torch compat.
 
@@ -75,11 +74,7 @@ def quantize_fp8_per_token(
     amax = X.abs().amax(dim=-1, keepdim=False).clamp_min(1e-6).to(torch.float32)
     scale = amax / _FP8_E4M3_MAX
     # Broadcast along the last axis
-    X_fp8 = (
-        (X.to(torch.float32) / scale.unsqueeze(-1))
-        .clamp(-_FP8_E4M3_MAX, _FP8_E4M3_MAX)
-        .to(dtype)
-    )
+    X_fp8 = (X.to(torch.float32) / scale.unsqueeze(-1)).clamp(-_FP8_E4M3_MAX, _FP8_E4M3_MAX).to(dtype)
     return X_fp8.contiguous(), scale
 
 
@@ -298,18 +293,14 @@ def maxsim_inference_fp8(
         d_mask = d_mask.unsqueeze(0)
 
     if Q.shape[-1] != D.shape[-1]:
-        raise ValueError(
-            f"Q and D must share the embedding dim; got {Q.shape[-1]} vs {D.shape[-1]}."
-        )
+        raise ValueError(f"Q and D must share the embedding dim; got {Q.shape[-1]} vs {D.shape[-1]}.")
     Q = Q.contiguous()
     D = D.contiguous()
 
     # Per-tensor scales are 0-d fp32; per-token scales are 2-D fp32 [N, L].
     scale_q_per_token = scale_Q.dim() >= 2
     scale_d_per_token = scale_D.dim() >= 2
-    if not (scale_q_per_token or scale_d_per_token) and (
-        scale_Q.numel() == 1 and scale_D.numel() == 1
-    ):
+    if not (scale_q_per_token or scale_d_per_token) and (scale_Q.numel() == 1 and scale_D.numel() == 1):
         scale_qd_tensor = float((scale_Q * scale_D).item())
     else:
         # Always pass the per-tensor product (used as a multiplier for the

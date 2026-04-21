@@ -30,16 +30,15 @@ from late_interaction_kernels import (
     quantize_fp8_per_token,
 )
 
-
 SHAPES = [
     # (Nq, Nd, Lq, Ld, d, label)
-    (1,   1024, 32, 128, 128, "pylate-rerank-1k"),
-    (1,   4096, 32, 128, 128, "pylate-rerank-4k"),
-    (1,   8192, 32, 256, 128, "colbert-rerank-8k"),
-    (4,   4096, 32, 256, 128, "batched-rerank-16k"),
-    (1,   2048, 32, 512, 128, "long-docs-2k"),
-    (1,   1024, 32, 128,  96, "lateon-edge-1k"),
-    (1,   4096, 32, 128,  96, "lateon-edge-4k"),
+    (1, 1024, 32, 128, 128, "pylate-rerank-1k"),
+    (1, 4096, 32, 128, 128, "pylate-rerank-4k"),
+    (1, 8192, 32, 256, 128, "colbert-rerank-8k"),
+    (4, 4096, 32, 256, 128, "batched-rerank-16k"),
+    (1, 2048, 32, 512, 128, "long-docs-2k"),
+    (1, 1024, 32, 128, 96, "lateon-edge-1k"),
+    (1, 4096, 32, 128, 96, "lateon-edge-4k"),
 ]
 
 
@@ -62,24 +61,15 @@ def main():
     print("-" * 80)
     for Nq, Nd, Lq, Ld, d, label in SHAPES:
         torch.manual_seed(0)
-        Q = torch.nn.functional.normalize(
-            torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16), dim=-1
-        )
-        D = torch.nn.functional.normalize(
-            torch.randn(Nd, Ld, d, device="cuda", dtype=torch.bfloat16), dim=-1
-        )
+        Q = torch.nn.functional.normalize(torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16), dim=-1)
+        D = torch.nn.functional.normalize(torch.randn(Nd, Ld, d, device="cuda", dtype=torch.bfloat16), dim=-1)
         Q_fp8, sQ = quantize_fp8_per_token(Q)
         D_fp8, sD = quantize_fp8_per_token(D)
 
         t_bf16, _ = _time_ms(lambda: maxsim_inference(Q, D))
-        t_fp8, _ = _time_ms(
-            lambda: maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD)
-        )
+        t_fp8, _ = _time_ms(lambda: maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD))
         shape_str = f"Nd={Nd} Lq={Lq} Ld={Ld} d={d}"
-        print(
-            f"{shape_str:<20} {t_bf16:>10.3f} {t_fp8:>10.3f} "
-            f"{t_bf16 / t_fp8:>9.2f}x  {label}"
-        )
+        print(f"{shape_str:<20} {t_bf16:>10.3f} {t_fp8:>10.3f} {t_bf16 / t_fp8:>9.2f}x  {label}")
 
 
 if __name__ == "__main__":

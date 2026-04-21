@@ -49,7 +49,7 @@ def test_fused_head_train_forward_parity(normalize):
     dtype = torch.bfloat16
     torch.manual_seed(0)
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype)
-    W = (torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5)))
+    W = torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5))
     b = torch.randn(d_out, device="cuda", dtype=dtype) * 0.01
     Q = torch.nn.functional.normalize(
         torch.randn(Nq, Lq, d_out, device="cuda", dtype=dtype).float(), dim=-1
@@ -80,7 +80,7 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
 
     def _make():
         H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype)
-        W = (torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5)))
+        W = torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5))
         b = torch.randn(d_out, device="cuda", dtype=dtype) * 0.01
         Q = torch.nn.functional.normalize(
             torch.randn(Nq, Lq, d_out, device="cuda", dtype=dtype).float(), dim=-1
@@ -133,9 +133,13 @@ def test_fused_head_train_only_active_grads_filled():
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 8, 16, 128, 64
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
     W = torch.randn(d_out, d_model, device="cuda", dtype=torch.bfloat16) * (1.0 / (d_model**0.5))
-    Q = torch.nn.functional.normalize(
-        torch.randn(Nq, Lq, d_out, device="cuda", dtype=torch.bfloat16).float(), dim=-1
-    ).to(torch.bfloat16).requires_grad_(True)
+    Q = (
+        torch.nn.functional.normalize(
+            torch.randn(Nq, Lq, d_out, device="cuda", dtype=torch.bfloat16).float(), dim=-1
+        )
+        .to(torch.bfloat16)
+        .requires_grad_(True)
+    )
     # Only Q needs grad.
     out = maxsim_from_hidden_train(Q, H_d, W, normalize=True)
     out.sum().backward()

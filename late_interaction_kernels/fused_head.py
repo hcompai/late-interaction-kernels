@@ -224,9 +224,7 @@ def _fused_head_forward(
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
     scores = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
-    argmax = (
-        torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
-    )
+    argmax = torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     b_ptr = b if has_bias else Q
     d_mask_ptr = d_mask if has_d_mask else H_d
@@ -358,9 +356,7 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, Q, H_d, W, b, d_mask, normalize):
-        scores, argmax = _fused_head_forward(
-            Q, H_d, W, b, d_mask, normalize, save_argmax=True
-        )
+        scores, argmax = _fused_head_forward(Q, H_d, W, b, d_mask, normalize, save_argmax=True)
         ctx.save_for_backward(Q, H_d, W, b, d_mask, argmax)
         ctx.normalize = bool(normalize)
         ctx.Nq = Q.shape[0]
@@ -521,10 +517,7 @@ def maxsim_from_hidden_train(
     if Q.device != H_d.device or W.device != Q.device:
         raise ValueError("Q, H_d, W must be on the same device.")
     if b is not None and (b.dim() != 1 or b.shape[0] != Q.shape[-1]):
-        raise ValueError(
-            f"b must be [d_out={Q.shape[-1]}]; got "
-            f"{tuple(b.shape) if b is not None else None}"
-        )
+        raise ValueError(f"b must be [d_out={Q.shape[-1]}]; got {tuple(b.shape) if b is not None else None}")
 
     Q_c = Q.contiguous()
     H_c = H_d.contiguous()

@@ -27,7 +27,6 @@ import triton
 
 from ._utils import detect_gpu
 
-
 # Warp specialization (FA-3 style) requires Triton 3.2+. The
 # ``num_consumer_groups`` / ``num_buffers_warp_spec`` kwargs on
 # ``triton.Config`` opt a kernel into producer-consumer warp specialization
