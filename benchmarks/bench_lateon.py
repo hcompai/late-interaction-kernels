@@ -1,7 +1,16 @@
-"""ModernColBERT-scale benchmark: long-document (Ld=8192) regimes.
+"""LateOn-scale benchmark: ModernBERT-base ColBERT across doc lengths.
 
-ModernColBERT extends ColBERT to 8k-token contexts. Typical shape is
-`Lq=32` (short query) × `Ld=8192` (long document). We measure:
+Covers the LateOn family (all ModernBERT-base, 149 M params, d=128):
+
+  * ``lightonai/LateOn``         — Ld native 300, short-to-medium rerank
+  * ``lightonai/LateOn-Code``    — Ld native 8192, long-context code retrieval
+
+Also valid for the predecessor ``lightonai/GTE-ModernColBERT-v1`` (same
+architecture and d=128). The kernel is sequence-length-agnostic; this
+bench sweeps synthetic Ld ∈ {300, 2k, 4k, 8k, 16k} to characterize the
+full envelope.
+
+We measure:
 
   * Forward throughput vs naive einsum (for inference / reranking).
   * Full forward + backward step (training).
@@ -11,12 +20,12 @@ ModernColBERT extends ColBERT to 8k-token contexts. Typical shape is
 Shapes
 ------
 
-  cb-rerank-1k   Nq= 1, Nd=1000, Lq= 32, Ld= 300   : baseline short-doc rerank
-  cb-rerank-8k   Nq= 1, Nd= 256, Lq= 32, Ld=8192   : ModernColBERT reranking
-  cb-train-8k    Nq= 8, Nd=  16, Lq= 32, Ld=8192   : ModernColBERT training step
+  cb-rerank-300  Nq= 1, Nd=1000, Lq= 32, Ld= 300   : LateOn native reranking
+  cb-rerank-8k   Nq= 1, Nd= 256, Lq= 32, Ld=8192   : LateOn-Code reranking
+  cb-train-8k    Nq= 8, Nd=  16, Lq= 32, Ld=8192   : LateOn-Code training step
   cb-bigbatch-8k Nq=16, Nd=  32, Lq= 32, Ld=8192   : pushing batch at 8k
   cb-symm-4k     Nq= 4, Nd=   8, Lq= 32, Ld=4096   : halfway (common checkpoint length)
-  cb-huge-doc   Nq= 1, Nd=  32, Lq= 32, Ld=16384   : stretch goal, 16k
+  cb-huge-doc    Nq= 1, Nd=  32, Lq= 32, Ld=16384  : stretch goal, 16k
 
 The naive path will OOM at the largest shapes on an 80 GB H100 — that
 is itself the story.
@@ -35,7 +44,7 @@ from late_interaction_kernels import maxsim, maxsim_inference, set_backward_meth
 SHAPES = [
     # name             Nq    Nd    Lq    Ld
     # Baseline short-doc rerank.
-    ("cb-rerank-1k", 1, 1000, 32, 300),
+    ("cb-rerank-300", 1, 1000, 32, 300),
     # 2k-4k: naive einsum still fits, so we get real speedup + memory ratios.
     ("cb-train-2k", 8, 16, 32, 2048),
     ("cb-train-4k", 8, 16, 32, 4096),
@@ -188,7 +197,7 @@ def main():
         )
 
     set_backward_method("auto")
-    out = os.path.join(args.outdir, f"moderncolbert_{gpu}.json")
+    out = os.path.join(args.outdir, f"lateon_{gpu}.json")
     with open(out, "w") as f:
         json.dump(rows, f, indent=2)
     print(f"\nwrote {out}")

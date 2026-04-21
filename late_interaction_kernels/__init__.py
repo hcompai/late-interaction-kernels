@@ -45,7 +45,7 @@ Advanced
     * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
 """
 
-__version__ = "0.7.0.dev0"
+__version__ = "0.8.0.dev0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and

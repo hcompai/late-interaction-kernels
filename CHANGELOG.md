@@ -4,6 +4,92 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0 — Closed-form fused-head backward, LateOn integration
+
+Perf + integration release. The 0.7.0 `maxsim_from_hidden_train` shipped
+an autograd-aware wrapper that was **numerically correct** (≤ 2 % RMS
+vs unfused) but **~2× slower** than plain `F.linear + F.normalize +
+maxsim`, because the backward rebuilt the winners slice through Python
+autograd. 0.8.0 rewrites it to a closed-form backward and drops the
+rebuild entirely. It also aligns benchmarks and docs with LightOn's
+new [`lightonai/LateOn`](https://huggingface.co/lightonai/LateOn)
+model family.
+
+### Added
+
+- **End-to-end `LateOn-Code-edge` training benchmark** (17 M Ettin
+  encoder) at huge-batch / long-context shapes — the 1 × H100 numbers
+  measured here are **1.04–1.27× end-to-end** (see README “End-to-end
+  LateOn-Code-edge training” table). The small encoder makes MaxSim a
+  material slice of the step, so the kernel swap actually moves the
+  wall-clock. Reproduce with `scripts/sky_lateon_edge.yaml`.
+- **`benchmarks/bench_fused_head_train.py`** — microbench of the
+  rewritten `maxsim_from_hidden_train` vs the unfused
+  `F.linear + F.normalize + maxsim` path across LateOn / LateOn-Code /
+  LateOn-Code-edge shapes. Reports forward, backward, total, and peak
+  memory.
+
+### Changed
+
+- **`maxsim_from_hidden_train` backward** — closed-form instead of a
+  Python autograd rebuild. Forward still saves only `argmax`, `H_d`,
+  `Q`, `W`, `b`; backward:
+  - gathers `H_win` at winning positions,
+  - recomputes `D_unnorm_win = H_win @ W + b` and `D_hat_win` in
+    `compute_dtype` (bf16/fp16 × fp32 accumulator),
+  - applies the L2-normalize Jacobian directly (no `autograd.grad`),
+  - computes `grad_Q`, `grad_W`, `grad_b` with plain `einsum` /
+    `matmul`,
+  - scatters `grad_H` into a tensor allocated in `H_d.dtype` via
+    `index_add_` (no large fp32 intermediates).
+
+  Measured on 1 × H100 bf16, `LateOn` / `LateOn-Code-edge` shapes:
+  **1.01–4.64× faster** than the unfused reference, with peak memory
+  on par with or below it. No change to numerics (same atol/rtol
+  tests pass as in 0.7.0).
+- **Default benchmark model renamed** — `bench_moderncolbert.py` →
+  `bench_lateon.py`, `bench_pylate_moderncolbert.py` →
+  `bench_pylate_lateon.py`, default checkpoint flipped to
+  `lightonai/LateOn`. `lightonai/GTE-ModernColBERT-v1` remains
+  supported and numbers remain valid — same ModernBERT-base backbone.
+- **Docs** — `docs/design.md` gets a new *Fused heads* section
+  describing the 0.6+ inference head, the 0.8.0 closed-form backward,
+  the 0.7.0 top-K argmax save for `smooth_maxsim`, the FP8 inference
+  path, and Triton 3.2+ warp specialization. `docs/supported_models.md`
+  and `docs/benchmarks.md` are refreshed for LateOn.
+
+## 0.7.0 — FP8 inference, smooth top-K MaxSim, warp-specialized autotune
+
+Feature release. Adds Hopper/Blackwell FP8 inference, a top-K MaxSim
+variant with smoother training gradients, warp-specialized autotune
+configs (FA-3 style), and an autograd-aware training wrapper for
+`maxsim_from_hidden`. See
+[`docs/rfc/0.7.0.md`](docs/rfc/0.7.0.md) for design.
+
+### Added
+
+- **FP8 MaxSim inference** (`maxsim_fp8`, `quantize_fp8`) — per-tensor
+  / per-token e4m3 inputs with fp32 accumulator and a score-tie
+  fallback harness that re-runs `(i, j)` cells in bf16 when the FP8
+  score is within a ULP-equivalent threshold of the runner-up.
+  Preserves top-K ranking on retrieval benchmarks at ~80 % of the raw
+  tensor-core speedup.
+- **`smooth_maxsim`** — finite-K variant of MaxSim: score is the mean
+  of the top-K per-query-token inner products. Implemented as a
+  streaming argmax-union Triton kernel that writes a
+  `[Nq·Nd·Lq·K]` argmax buffer consumed by an `index_add`-based
+  backward. `K=1` degenerates to hard MaxSim; `K ≥ 4` gives softer
+  gradients than the β-tuned `soft_maxsim` without a temperature
+  knob.
+- **Warp specialization** (Triton ≥ 3.2) — producer/consumer schedule
+  wired into the MaxSim forward autotune, with transparent fallback
+  on older Triton. Overlaps `D_tile` loads with the previous
+  `Q·Dᵀ` issue, buying another ~10–20 % on H100.
+- **`maxsim_from_hidden_train`** — autograd-aware training wrapper
+  around `maxsim_from_hidden` (experimental in 0.7.0; backward rebuilt
+  the winners slice in Python autograd — **correct (≤ 2 % RMS vs
+  unfused) but ~2× slower**; 0.8.0 rewrites this in closed form).
+
 ## 0.6.0 — Unified backward + fused inference head
 
 Performance release. Core training path is now a single fused
@@ -364,7 +450,7 @@ exact shapes LightOn uses to train
 (bs=64/128/256, Ld=2k/4k/8k, Lq=128, mini=32). Mirrors the chunked
 `(bs/mini)**2` Python loop in `pylate.losses.CachedContrastive` vs one
 fused flash call.
-- `**bench_pylate_moderncolbert.py --recipe reason`** drives the real
+- `**bench_pylate_lateon.py --recipe reason`** drives the real
 `CachedContrastive` pipeline with `gather_across_devices`, bf16 autocast,
 and gradient checkpointing — matches LightOn's training recipe.
 
@@ -396,7 +482,7 @@ reduction. Zero contention, one write per cell.
 - `**"auto"` backward selector** (new default): empirical heuristic picks CSR
 when `Nq·Nd·Lq·d ≥ 1e8`, `Lq ≥ 1024`, or `Nd ≥ 1024`; atomic otherwise.
 Matches the best manually-chosen path on 11/11 shapes we measured.
-- **ModernColBERT benchmarks** (`benchmarks/bench_moderncolbert.py`): long-document
+- **ModernColBERT benchmarks** (`benchmarks/bench_lateon.py`): long-document
 `Ld ∈ {4k, 8k, 16k}` sweep. Naive PyLate OOMs on 80 GB H100 at 8k; late-interaction-kernels
 runs these shapes in 0.1–0.2 ms forward / ≤ 0.5 ms backward.
 - **Per-family SRAM budgets** in autotune (Hopper/A100/Ampere/Ada/generic) —

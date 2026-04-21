@@ -1,7 +1,14 @@
-"""End-to-end PyLate ModernColBERT training-step benchmark.
+"""End-to-end PyLate training-step benchmark on the LateOn family.
 
-Drives a *real* PyLate `models.ColBERT` forward + (`Contrastive` or
-`CachedContrastive`) backward on long-document inputs. Measures:
+Drives a *real* PyLate ``models.ColBERT`` forward + (``Contrastive`` or
+``CachedContrastive``) backward on the full LateOn line-up:
+
+  * ``lightonai/LateOn`` (default) — SOTA ColBERT on BEIR, 149 M params
+  * ``lightonai/LateOn-Code`` — same backbone, long-context code retrieval
+  * ``lightonai/LateOn-Code-edge`` — 17 M edge variant, d=48
+  * ``lightonai/GTE-ModernColBERT-v1`` — predecessor, same ModernBERT-base
+
+Measures:
 
   * step time (ms)
   * peak GPU memory (GB)
@@ -11,30 +18,32 @@ Drives a *real* PyLate `models.ColBERT` forward + (`Contrastive` or
 Two recipes are baked in:
 
 ``--recipe contrastive``  (default)
-    Plain `losses.Contrastive`. The simplest PyLate loss. Transformer forward
-    dominates the step here, so late-interaction-kernels is ~1× end-to-end. Useful as a
-    baseline.
+    Plain ``losses.Contrastive``. The simplest PyLate loss. Transformer
+    forward dominates the step here, so late-interaction-kernels is ~1×
+    end-to-end. Useful as a baseline.
 
 ``--recipe reason``
-    Mirrors LightOn's own *Reason-ModernColBERT* training recipe:
-    `CachedContrastive`, `batch_size=256`, `mini_batch_size=32`, `Lq=128`,
-    `Ld=8192`, grad-checkpointing on. PyLate's CachedContrastive manually
-    chunks MaxSim into `(bs/mini)**2` Python-level calls to avoid OOM —
-    that is exactly what late-interaction-kernels lets you skip.
+    Mirrors LightOn's own cached-contrastive training recipe:
+    ``CachedContrastive``, ``batch_size=256``, ``mini_batch_size=32``,
+    ``Lq=128``, ``Ld=8192``, grad-checkpointing on. PyLate's
+    ``CachedContrastive`` manually chunks MaxSim into ``(bs/mini)**2``
+    Python-level calls to avoid OOM — that is exactly what
+    late-interaction-kernels lets you skip.
 
 Usage
 -----
-    # Simple contrastive step on one GPU
-    python benchmarks/bench_pylate_moderncolbert.py --recipe contrastive \\
+    # Simple contrastive step on one GPU (default model: lightonai/LateOn)
+    python benchmarks/bench_pylate_lateon.py --recipe contrastive \\
         --batch-size 4 --Ld 8192
 
-    # The real LightOn Reason-ModernColBERT recipe, one GPU
-    python benchmarks/bench_pylate_moderncolbert.py --recipe reason \\
-        --batch-size 64 --mini-batch-size 32 --Ld 8192 --grad-checkpoint
+    # LateOn-Code long-context training, one GPU
+    python benchmarks/bench_pylate_lateon.py --recipe reason \\
+        --model lightonai/LateOn-Code --batch-size 64 \\
+        --mini-batch-size 32 --Ld 8192 --grad-checkpoint
 
     # DDP 8× H100 at the full recipe
     torchrun --standalone --nproc_per_node=8 \\
-        benchmarks/bench_pylate_moderncolbert.py --recipe reason \\
+        benchmarks/bench_pylate_lateon.py --recipe reason \\
         --batch-size 64 --mini-batch-size 32 --Ld 8192 --grad-checkpoint --ddp
 """
 # ruff: noqa: F821  -- closures over `loss_fn` / `optim` confuse ruff's scope analysis
@@ -52,7 +61,7 @@ from dataclasses import dataclass
 
 import torch
 
-MODEL_NAME_DEFAULT = "lightonai/GTE-ModernColBERT-v1"
+MODEL_NAME_DEFAULT = "lightonai/LateOn"
 
 
 # --------------------------------------------------------------------------- #
@@ -302,7 +311,7 @@ def main():
         "--recipe",
         choices=["contrastive", "reason"],
         default="contrastive",
-        help="'contrastive' = plain losses.Contrastive, 'reason' = LightOn's Reason-ModernColBERT recipe (CachedContrastive)",
+        help="'contrastive' = plain losses.Contrastive, 'reason' = LightOn's cached-contrastive recipe (CachedContrastive)",
     )
     ap.add_argument(
         "--mini-batch-size",

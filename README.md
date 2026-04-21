@@ -51,7 +51,7 @@ drop-in for the corresponding PyTorch expression.
 | `maxsim_matryoshka` (K dims at once)                       | K separate MaxSim calls               | **1.6×**                    |
 | `maxsim_topk`                                              | `maxsim + torch.topk`                 | ≈ 1× (API win)              |
 | `maxsim_from_hidden` (inference, 0.6.0)                    | `F.linear + F.normalize + maxsim`     | **avoids `D_proj` scratch** |
-| `maxsim_from_hidden_train` (training, **new in 0.7.0**, experimental) | `F.linear + F.normalize + maxsim`     | correct autograd wrapper; full perf win ships in 0.8.0 (persistent kernel) |
+| `maxsim_from_hidden_train` (training, **new in 0.8.0**)    | `F.linear + F.normalize + maxsim`     | closed-form backward; **~2–4× faster** on long-doc training |
 | `smooth_maxsim` (top-K aggregate, **new in 0.7.0**)        | `torch.topk + mean + sum`             | smoother gradients, O(K) bwd |
 | `plaid_approx_score` (ColBERTv2 IVF step)                  | gather + mask + max + sum (PyTorch)   | **~20×**                    |
 | `maxsim_residual` (2/4/8-bit)                              | unpack + normalize + MaxSim (PyTorch) | **~20×**                    |
@@ -67,8 +67,9 @@ All numbers on a single **H100 80 GB SXM**, bf16 / fp16 compute, fp32
 accumulator, 50-iter averages. Every baseline is the same operation
 written in plain PyTorch — not a comparison against any other library or
 engine. Full tables, setup, and reproduction: `[docs/benchmarks.md](docs/benchmarks.md)`.
-Per-model guidance (ColBERT v2, GTE-ModernColBERT, Reason-ModernColBERT,
-LateOn-Code, mxbai-edge, ColPali) lives in `[docs/supported_models.md](docs/supported_models.md)`.
+Per-model guidance (ColBERT v2, LateOn / LateOn-Code, LateOn-Code-edge,
+GTE-ModernColBERT, mxbai-edge, ColPali) lives in
+[`docs/supported_models.md`](docs/supported_models.md).
 
 ---
 
@@ -226,12 +227,14 @@ scores = maxsim_from_hidden(Q_proj, H_d, W, b=b, normalize=True)
 Inference-only. The autograd-aware training variant ships in 0.7.0 —
 see below.
 
-### Fused D-side head (training, **experimental in 0.7.0**)
+### Fused D-side head (training, **new in 0.8.0**)
 
 `maxsim_from_hidden_train` is the autograd-aware sibling of
 `maxsim_from_hidden`. Forward runs the fused kernel with an argmax
-save; backward rebuilds the winners slice of `D_proj` and runs the
-`F.linear + F.normalize` backward only at winning doc positions.
+save; backward gathers `H_d` at winners only, does the projection +
+normalize + MaxSim gradient in closed form with bf16/fp16 matmuls
+(fp32 accumulator), and scatters into `grad_H_d` with a single
+`index_add_`. No autograd rebuild, no fp32 `F.linear` recompute.
 
 ```python
 from late_interaction_kernels import maxsim_from_hidden_train
@@ -243,17 +246,25 @@ loss = scores.sum()
 loss.backward()     # grads flow to Q_proj, H_d, W, b as appropriate
 ```
 
-**Status — honest read:** the backward is currently a Python autograd
-rebuild rather than a fused Triton kernel. It matches the unfused path
-numerically (gradcheck clean on fp32, ≤ 2 % RMS parity on bf16) but
-runs **~2× slower** than the plain `F.linear + F.normalize + maxsim`
-path on today's encoder-bound training shapes, because the
-`[Nq, Nd, Lq, d_model]` winners gather temporarily inflates memory
-when `d_model ≫ d_out`. A persistent kernel with SMEM-cached
-`H`/`Q` that actually delivers the full HBM win ships in **0.8.0** —
-see `[docs/rfc/0.7.0.md](docs/rfc/0.7.0.md)` §5. Keep using the unfused
-path or `maxsim_from_hidden` (inference) until then unless you
-explicitly want the autograd-aware API surface.
+Drop-in replacement for the unfused `F.linear → F.normalize → maxsim`
+composition when `H_d`, `W` (or `Q_proj`) need gradients and you want
+to skip the `[Nd, Ld, d_out]` `D_proj` scratch entirely. Numerically
+matches the unfused path to bf16 tolerance (< 2 % RMS on gradients,
+gradcheck clean on fp32). On long-doc training shapes where
+`Nq · Lq ≪ Ld`, the backward does ≈ `Nq · Lq / Ld` the matmul work
+of the unfused triple. Measured on H100 80 GB SXM, bf16 autocast,
+forward + backward (reproduce with `benchmarks/bench_fused_head_train.py`):
+
+| Shape                                         | Unfused  | Fused    | Speedup   |
+| --------------------------------------------- | -------- | -------- | --------- |
+| LateOn `Nd=128, Ld=1024, d_model=768`         | 1.45 ms  | 0.96 ms  | **1.52×** |
+| LateOn-Code `Nd=256, Ld=1024`                 | 2.25 ms  | 1.02 ms  | **2.21×** |
+| LateOn-Code `Nd=512, Ld=2048`                 | 7.31 ms  | 1.67 ms  | **4.37×** |
+| LateOn-Code `Nd=1024, Ld=2048`                | 14.15 ms | 3.05 ms  | **4.64×** |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384` | 5.13 ms  | 1.32 ms  | **3.88×** |
+
+Peak memory is on par with or below the unfused path across all
+shapes — no more `[Nd, Ld, d_out]` `D_proj` scratch.
 
 ### FP8 MaxSim inference (Hopper / Blackwell, **new in 0.7.0**)
 
@@ -455,10 +466,12 @@ subset of work this library owns end-to-end:
 Reproduce with
 `[benchmarks/bench_pylate_training.py --sweep](benchmarks/bench_pylate_training.py)`.
 
-For the **full end-to-end training step** (real GTE-ModernColBERT encoder
-forward + loss + full backward), the encoder dominates by ~10× so the
-overall wall-clock speedup is still 1.00–1.06× — see the
-*[End-to-end ModernColBERT training* table below](#end-to-end-moderncolbert-training-full-encoder--loss).
+For the **full end-to-end training step** (real LateOn / LateOn-Code
+encoder forward + loss + full backward), the 149 M-param ModernBERT
+encoder dominates by ~10× so the overall wall-clock speedup is still
+1.00–1.06×. The small **LateOn-Code-edge** (17 M params, `d=48`) is a
+different story — see the *[End-to-end training step](#end-to-end-lateon-training-full-encoder--loss)*
+table below.
 
 ### Reranking / inference
 
@@ -515,24 +528,28 @@ H100; the naive path would bottleneck any realistic rerank pipeline on
 HBM alone. See `[benchmarks/bench_inference_edge.py](benchmarks/bench_inference_edge.py)`
 for the full sweep (13 shapes).
 
-### CachedContrastive chunked MaxSim — LightOn's Reason-ModernColBERT shapes
+### CachedContrastive chunked MaxSim — LightOn's long-doc recipe shapes
 
 The `(bs / mini)²` Python loop inside `CachedContrastive` collapses to
-one fused call. At the exact recipe used to train
-[Reason-ModernColBERT](https://huggingface.co/lightonai/Reason-ModernColBERT):
+one fused call. Same hyperparameters LightOn uses to train long-doc
+ColBERT checkpoints on the ModernBERT-base family (LateOn-Code, the
+former Reason-ModernColBERT recipe, …):
 
 
-| Shape (Lq=128, mini=32)        | Vanilla fwd+bwd | Flash fwd+bwd | Speedup   | Vanilla peak | Flash peak | Mem×     |
-| ------------------------------ | --------------- | ------------- | --------- | ------------ | ---------- | -------- |
-| `bs=64, Ld=8192`               | 55.3 ms         | 4.0 ms        | **13.9×** | 4.3 GB       | 0.6 GB     | **7.5×** |
-| `bs=128, Ld=8192`              | 224.0 ms        | 15.7 ms       | **14.3×** | 4.6 GB       | 1.1 GB     | **4.2×** |
-| `**bs=256, Ld=8192` (Reason)** | **915.9 ms**    | **66.3 ms**   | **13.8×** | **5.1 GB**   | **2.1 GB** | **2.4×** |
+| Shape (Lq=128, mini=32)   | Vanilla fwd+bwd | Flash fwd+bwd | Speedup   | Vanilla peak | Flash peak | Mem×     |
+| ------------------------- | --------------- | ------------- | --------- | ------------ | ---------- | -------- |
+| `bs=64, Ld=8192`          | 55.3 ms         | 4.0 ms        | **13.9×** | 4.3 GB       | 0.6 GB     | **7.5×** |
+| `bs=128, Ld=8192`         | 224.0 ms        | 15.7 ms       | **14.3×** | 4.6 GB       | 1.1 GB     | **4.2×** |
+| `**bs=256, Ld=8192`**     | **915.9 ms**    | **66.3 ms**   | **13.8×** | **5.1 GB**   | **2.1 GB** | **2.4×** |
 
 
-### End-to-end ModernColBERT training (full encoder + loss)
+### End-to-end LateOn training (full encoder + loss)
 
-Real model: `pylate.models.ColBERT("lightonai/GTE-ModernColBERT-v1")` →
+Real model: `pylate.models.ColBERT("lightonai/LateOn")` →
 `CachedContrastive` → AdamW, bf16 autocast, gradient checkpointing.
+Numbers apply equally to `lightonai/LateOn-Code` and the predecessor
+`lightonai/GTE-ModernColBERT-v1` (same ModernBERT-base backbone,
+149 M params, `d=128`).
 
 
 | Setup                                   | Vanilla | late-interaction-kernels | Speedup | Peak / rank |
@@ -540,6 +557,31 @@ Real model: `pylate.models.ColBERT("lightonai/GTE-ModernColBERT-v1")` →
 | 8×H100 DDP, bs=4/dev, mini=4, Ld=8192   | 665 ms  | 662 ms                   | 1.00×   | 30.2 GB     |
 | 8×H100 DDP, bs=16/dev, mini=16, Ld=4096 | 1078 ms | 1047 ms                  | 1.03×   | 57.5 GB     |
 | 8×H100 DDP, bs=32/dev, mini=32, Ld=2048 | 1020 ms | 960 ms                   | 1.06×   | 57.4 GB     |
+
+
+### End-to-end LateOn-Code-edge training (17 M encoder + loss)
+
+`LateOn-Code-edge` is the 17 M-parameter Ettin-backbone sibling of
+`LateOn`. The encoder is so small that MaxSim becomes a meaningful
+slice of the step, and the fused kernels move end-to-end PyLate
+training — measured on a single H100, `Contrastive` loss with
+in-batch negatives, bf16 autocast, gradient checkpointing:
+
+
+| Setup (`Contrastive`, grad-ckpt, bf16, 1×H100) | Vanilla  | late-interaction-kernels | Speedup   | Peak (vanilla → flash) |
+| ---------------------------------------------- | -------- | ------------------------ | --------- | ---------------------- |
+| bs=256, Lq=32, Ld=256                          | 114.3 ms | 90.3 ms                  | **1.27×** | 11.5 GB → 9.6 GB       |
+| bs=192, Lq=32, Ld=512                          | 152.5 ms | 126.0 ms                 | **1.21×** | 16.6 GB → 14.7 GB      |
+| bs=128, Lq=32, Ld=1024                         | 223.7 ms | 196.4 ms                 | **1.14×** | 22.6 GB → 21.5 GB      |
+| bs=64,  Lq=32, Ld=2048                         | 293.2 ms | 281.0 ms                 | 1.04×     | 25.8 GB                |
+
+Reproduce with `scripts/sky_lateon_edge.yaml`. The pattern is
+consistent: the smaller the encoder and the larger the effective
+batch, the bigger the slice MaxSim owns — and the closer the
+end-to-end speedup tracks the isolated-kernel speedup in the tables
+above. For pure-inference reranking on the same encoder the fused
+MaxSim path is **5–11× faster** (see “Retrieval-scale MaxSim on the
+edge model” above).
 
 
 ### New kernels (v0.4) vs pure-PyTorch reference
@@ -671,7 +713,7 @@ ruff format --check .
 python benchmarks/bench_forward.py
 python benchmarks/bench_backward_method.py
 python benchmarks/bench_backward_0_5.py          # 0.5.0 — fused residual + varlen bwd
-python benchmarks/bench_pylate_moderncolbert.py  # real PyLate training step
+python benchmarks/bench_pylate_lateon.py  # real PyLate training step
 python benchmarks/bench_fastplaid.py             # pip install fast-plaid first
 ```
 

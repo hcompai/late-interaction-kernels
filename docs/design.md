@@ -206,3 +206,70 @@ loss after the GEMM.
 Parity tests enforce `max |out − ref| / max |ref| < 5 × 10⁻³` for fp16 and
 `2 × 10⁻²` for bf16 inputs, matching the expected ULP drift of a
 tensor-core GEMM of the given shape.
+
+## Fused heads (v0.6+)
+
+Two fused heads sit on top of the core MaxSim kernel and exist because the
+naive `F.linear → F.normalize → maxsim` pipeline does three extra HBM
+round-trips:
+
+- **`maxsim_from_hidden`** (inference). Streams the hidden state
+  `H ∈ ℝ^{Nd·Ld·d_model}` through a single kernel that fuses
+  `D = H @ W + b`, L2-normalize, and MaxSim in one pass. `D_proj` is
+  never written to HBM; for `d_model=768, d_out=128, Ld=8192` that
+  saves 4 × `Nd·Ld·d_out` bytes of read traffic. Two-stage pipeline
+  (load `H_tile` → project → normalize → score) keeps SMEM pressure
+  under the H100 budget.
+- **`maxsim_from_hidden_train`** (training, autograd-aware). Same
+  forward as inference but saves the argmax-gather `H_win` instead of
+  the whole `D_proj`, and in 0.8.0 computes the backward in **closed
+  form** — no autograd rebuild:
+
+  ```
+  grad_D_hat_win  = einsum('ijs,jsv->ijsv', grad_scores, Q)         # bf16 GEMM
+  grad_D_unnorm   = normalize_vjp(grad_D_hat_win, D_hat_win, ‖D_unnorm‖)  # elementwise
+  grad_Q          = einsum('ijsv,ijsv->isv', grad_D_hat_win, D_hat_win) ← trivial
+  grad_H_win      = grad_D_unnorm @ Wᵀ                              # bf16 GEMM, fp32 acc
+  grad_W, grad_b  = H_winᵀ @ grad_D_unnorm ,  grad_D_unnorm.sum(0)
+  grad_H          = zeros[H_d.dtype].index_add_(argmax_flat, grad_H_win)
+  ```
+
+  The only fp32 allocations are small reductions (`grad_W`, `grad_Q`,
+  per-token norms). `grad_H` lives in the input dtype and is scattered
+  with `index_add_`, so peak memory is on par with or below the
+  unfused path at long `Ld`.
+
+## Smooth MaxSim & top-K save (v0.7)
+
+`smooth_maxsim` is a finite-K variant of `maxsim`:
+
+    score_smooth[i, j] = Σ_s  mean( topK_t ⟨Q[i,s], D[j,t]⟩ )
+
+For `K=1` it degenerates to hard MaxSim; for larger `K` it behaves like
+a truncated log-sum-exp without the `β` tuning knob, and the backward
+shares the gradient evenly across the `K` winners. The kernel is a
+streaming argmax-union loop: at each `BLOCK_D` tile we run `K` rounds
+of `tl.argmax`, masking out previously picked indices. The `[Nq·Nd·Lq·K]`
+argmax buffer is written once in the forward and consumed by an
+`index_add`-based backward.
+
+## FP8 inference path (v0.7)
+
+On Hopper/Blackwell the `Q·Dᵀ` GEMM can be issued in FP8 (e4m3) with
+per-tensor or per-token scales, with the fp32 accumulator re-used
+unchanged. The streaming max is unaffected. We provide `quantize_fp8`
+helpers that pick a conservative power-of-two scale and a score-tie
+fallback harness that re-runs a given `(i, j)` in bf16 when the FP8
+score is within a configurable ULP-equivalent threshold of the runner
+up — this preserves top-K ranking on retrieval benchmarks while
+keeping ~80 % of the raw tensor-core speedup.
+
+## Warp specialization (v0.7, Triton ≥ 3.2)
+
+On Triton 3.2+ we compile the MaxSim forward with a warp-specialized
+producer/consumer schedule (load-half / compute-half) via the
+`tl.async_copy` and explicit `num_consumer_groups` hints, mirroring the
+FA-3 pattern. On H100 this overlaps the `D_tile` load with the
+previous `Q·Dᵀ` issue, buying another 10–20 % over the FA-2-style
+pipeline. We fall back to the default schedule on older Triton
+transparently.
