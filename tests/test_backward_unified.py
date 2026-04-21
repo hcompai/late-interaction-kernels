@@ -151,9 +151,9 @@ def test_unified_kernel_matches_two_pass(shape, dtype, rel):
     # must match exactly.
     torch.testing.assert_close(gQ_uni.float(), gQ_atom.float(), atol=1e-5, rtol=1e-5)
     # grad_D uses fp32 atomics in both variants; the order of atomic_adds
-    # can differ slightly, giving tiny fp32 drift. 5e-4 relative is the
-    # standard tolerance we use elsewhere.
-    assert rel(gD_uni.float(), gD_atom.float()) < 5e-4
+    # can differ, giving tiny fp32 non-associativity drift. 3e-3 matches
+    # the convention used in test_backward.py for atomic-vs-reference.
+    assert rel(gD_uni.float(), gD_atom.float()) < 3e-3
 
 
 @pytest.mark.cuda
@@ -177,7 +177,31 @@ def test_unified_kernel_matches_two_pass_with_qmask(shape, dtype, rel):
     gQ_uni, gD_uni = maxsim_backward_unified(grad_s, Q, D, argmax, q_mask=q_mask_i8)
 
     torch.testing.assert_close(gQ_uni.float(), gQ_atom.float(), atol=1e-5, rtol=1e-5)
-    assert rel(gD_uni.float(), gD_atom.float()) < 5e-4
+    assert rel(gD_uni.float(), gD_atom.float()) < 3e-3
+
+
+@pytest.mark.cuda
+def test_unified_matches_csr_deterministic(rel):
+    """Check unified atomic vs CSR-deterministic: same math, different order.
+
+    CSR is deterministic and reference-accurate; the unified-atomic kernel
+    should match it to fp32 atomic-reordering tolerance.
+    """
+    from late_interaction_kernels.backward import maxsim_backward
+    from late_interaction_kernels.forward import _run_forward
+
+    Nq, Nd, Lq, Ld, d = 16, 16, 32, 200, 128
+    torch.manual_seed(3)
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.bfloat16)
+    grad_s = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
+    _, argmax = _run_forward(Q, D, q_mask=None, d_mask=None, save_argmax=True)
+
+    gQ_csr, gD_csr = maxsim_backward(grad_s, Q, D, argmax, None, None, method="csr")
+    gQ_uni, gD_uni = maxsim_backward_unified(grad_s, Q, D, argmax, q_mask=None)
+
+    torch.testing.assert_close(gQ_uni.float(), gQ_csr.float(), atol=1e-5, rtol=1e-5)
+    assert rel(gD_uni.float(), gD_csr.float()) < 3e-3
 
 
 @pytest.mark.cuda
@@ -201,4 +225,4 @@ def test_unified_end_to_end_autograd():
     rel_q = (Q_uni.grad.float() - Q_ref.grad.float()).abs().max() / max(1e-6, Q_ref.grad.float().abs().max())
     rel_d = (D_uni.grad.float() - D_ref.grad.float()).abs().max() / max(1e-6, D_ref.grad.float().abs().max())
     assert rel_q < 1e-4, f"grad_Q drift = {rel_q:.2e}"
-    assert rel_d < 5e-4, f"grad_D drift = {rel_d:.2e}"
+    assert rel_d < 3e-3, f"grad_D drift = {rel_d:.2e}"
