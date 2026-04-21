@@ -256,6 +256,14 @@ scores.sum().backward()        # grad_Q and grad_D produced on the packed layout
 `atomic_add` path the padded kernel uses. Use
 `maxsim_varlen_inference` to skip the argmax save on the reranker path.
 
+Wiring this into a heterogeneous-length training loop needs a packed
+collator and a varlen-aware encoder forward. The padded kernel (what
+`patch_pylate()` installs) stays the zero-config path; packing is opt-in
+and pays off mainly on long-tailed corpora like code or crawl data. See
+[`docs/packed_training.md`](docs/packed_training.md) for a cookbook and
+[`examples/packed_training.py`](examples/packed_training.py) for a
+runnable padded-vs-packed comparison.
+
 ---
 
 ## Who uses this
@@ -484,8 +492,7 @@ python benchmarks/bench_pylate_moderncolbert.py  # real PyLate training step
 python benchmarks/bench_fastplaid.py             # pip install fast-plaid first
 ```
 
-Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) and
-our [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
@@ -538,8 +545,7 @@ The late-interaction ecosystem this library slots into:
 - [**FlashAttention**](https://github.com/Dao-AILab/flash-attention) —
   the IO-aware tiling pattern this kernel is a strict subset of.
 - [**Liger-Kernel**](https://github.com/linkedin/Liger-Kernel) — source
-  of the autotune / `torch.autograd.Function` idioms used here. See
-  [`docs/liger.md`](docs/liger.md) for thoughts on upstreaming.
+  of the autotune / `torch.autograd.Function` idioms used here.
 
 ---
 

@@ -4,6 +4,40 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — Packed-training cookbook, repo trim
+
+Documentation and repo-hygiene release. No kernel changes. All 0.5.0 APIs
+are unchanged and numerically identical.
+
+### Added
+
+- **`docs/packed_training.md`** — cookbook for wiring `maxsim_varlen` into a
+  heterogeneous-length training loop: when packing is worth it (a
+  padding-waste rule of thumb), the three pieces a packed pipeline needs
+  (collator, varlen-aware encoder forward, packed loss), correctness
+  checks against the padded path, and caveats around `torch.compile`,
+  gradient checkpointing, and distributed training.
+- **`examples/packed_training.py`** — runnable padded-vs-packed
+  comparison on synthetic long-tailed data. Reports per-step loss,
+  wall-clock, and peak memory so the padding-waste vs packing-win
+  tradeoff is visible on your hardware. Runs on CPU for smoke-testing.
+
+### Removed
+
+- `CODE_OF_CONDUCT.md`, `SECURITY.md` — redundant boilerplate for a
+  small kernel library. Apache-2.0 `LICENSE` and `CONTRIBUTING.md` stay
+  as the canonical contributor-facing docs.
+- `docs/liger.md` — speculative upstreaming essay; the Related projects
+  section in the README keeps the short factual reference to Liger.
+
+### Changed
+
+- `README.md`: dropped the `CODE_OF_CONDUCT.md` / `docs/liger.md` links,
+  added a pointer from the Varlen section to `docs/packed_training.md`
+  and `examples/packed_training.py`.
+- `.github/ISSUE_TEMPLATE/config.yml`: replaced the SECURITY contact
+  link with a Packed-training docs entry.
+
 ## 0.5.0 — Fused backward for `maxsim_residual`, autograd-aware `maxsim_varlen`
 
 Closes the training-side gaps in the 0.4.0 kernel set. You can now train

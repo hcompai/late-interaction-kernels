@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "late-interaction-kernels"
-version = "0.5.0"
+version = "0.5.1"
 description = "Fused Triton kernels for late-interaction (MaxSim) scoring — ColBERT, ColPali, ModernColBERT."
 readme = "README.md"
 requires-python = ">=3.9"
