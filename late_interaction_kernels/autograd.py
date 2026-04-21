@@ -5,29 +5,37 @@ from __future__ import annotations
 import torch
 
 from .backward import maxsim_backward
+from .backward_unified import maxsim_backward_unified
 from .forward import _run_forward, maxsim_forward
 
 _BACKWARD_METHOD = "auto"  # module-level toggle, flipped by `set_backward_method`
 
+_VALID_METHODS = ("auto", "atomic", "csr", "unified")
+
 
 def set_backward_method(method: str) -> None:
-    """Select the grad_D path used by ``maxsim.backward``.
+    """Select the backward path used by ``maxsim.backward``.
 
     Valid values:
 
-    * ``"auto"`` (default) — pick ``csr`` vs ``atomic`` based on workload
-      size (``Nq * Nd * Lq * d`` vs 1e8 on H100). Best default for both
-      small-batch and large-batch training.
-    * ``"csr"`` — scatter-free bucketed reduction. Faster on large/long
-      shapes (train-256+, ColPali-style, large corpora).
-    * ``"atomic"`` — fp32 ``tl.atomic_add``. Faster on common PyLate shapes
-      (train-32..128) on H100 thanks to its hardware-accelerated atomics.
+    * ``"auto"`` (default) — pick based on workload size. See implementation
+      for the heuristic. Best default for both small-batch and large-batch
+      training.
+    * ``"atomic"`` — two-pass, fp32 ``tl.atomic_add`` grad_D. Fastest on
+      common PyLate shapes (train-32..128) on H100.
+    * ``"csr"`` — two-pass, scatter-free bucketed reduction. Fastest on
+      large/long shapes (train-256+, ColPali, large corpora) or on GPUs
+      with slow atomics.
+    * ``"unified"`` — **single-pass fused grad_Q + grad_D** (0.6.0). Halves
+      HBM read traffic vs the two-pass variants on MaxSim-dominant shapes.
+      Atomic-based grad_D (CSR-unified variant planned for a later release).
 
-    Process-wide — intended for benchmarking, not per-call configuration.
+    Process-wide — intended for benchmarking and advanced tuning, not
+    per-call configuration.
     """
     global _BACKWARD_METHOD
-    if method not in ("csr", "atomic", "auto"):
-        raise ValueError(f"method must be 'csr', 'atomic', or 'auto', got {method!r}")
+    if method not in _VALID_METHODS:
+        raise ValueError(f"method must be one of {_VALID_METHODS}, got {method!r}")
     _BACKWARD_METHOD = method
 
 
@@ -52,38 +60,45 @@ class _MaxSimFn(torch.autograd.Function):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
 
+        # Resolve "auto" once, using problem shape. Unified is the new
+        # default for almost every training shape (see
+        # benchmarks/bench_backward_unified.py); CSR only wins at very
+        # high grad_D contention (B >= 256 with typical Lq / Ld).
+        method = ctx.backward_method
+        if method == "auto":
+            Nq, Lq, _ = Q.shape
+            Nd = D.shape[0]
+            high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+            method = "csr" if high_contention else "unified"
+
+        def _bwd(Qt, Dt):
+            if method == "unified":
+                return maxsim_backward_unified(grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic")
+            return maxsim_backward(
+                grad_scores,
+                Qt,
+                Dt,
+                argmax,
+                q_mask,
+                d_mask,
+                method=method,
+            )
+
         if ctx.normalize:
             # The forward computed scores against Q_hat = Q / ||Q|| and D_hat = D / ||D||.
             # We need grad w.r.t. the *unnormalized* Q and D. We get that by
             # (a) running the existing backward against the normalized tensors to get
             # grad_Q_hat, grad_D_hat, then (b) applying the L2-normalize Jacobian.
-            # This is a small number of extra ops per token, still fully on-GPU.
             q_norm = torch.linalg.vector_norm(Q, dim=-1, keepdim=True).clamp_min(1e-6)
             d_norm = torch.linalg.vector_norm(D, dim=-1, keepdim=True).clamp_min(1e-6)
             Q_hat = Q / q_norm
             D_hat = D / d_norm
-            grad_Qh, grad_Dh = maxsim_backward(
-                grad_scores,
-                Q_hat,
-                D_hat,
-                argmax,
-                q_mask,
-                d_mask,
-                method=ctx.backward_method,
-            )
+            grad_Qh, grad_Dh = _bwd(Q_hat, D_hat)
             # d Qhat / d Q = (I - Qhat Qhat^T) / ||Q||
             grad_Q = (grad_Qh - (grad_Qh * Q_hat).sum(-1, keepdim=True) * Q_hat) / q_norm
             grad_D = (grad_Dh - (grad_Dh * D_hat).sum(-1, keepdim=True) * D_hat) / d_norm
         else:
-            grad_Q, grad_D = maxsim_backward(
-                grad_scores,
-                Q,
-                D,
-                argmax,
-                q_mask,
-                d_mask,
-                method=ctx.backward_method,
-            )
+            grad_Q, grad_D = _bwd(Q, D)
         # masks and normalize receive no gradient
         return grad_Q, grad_D, None, None, None
 

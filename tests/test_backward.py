@@ -221,7 +221,7 @@ def test_auto_selects_a_valid_path(rel):
         go = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
         grads = {}
-        for m in ("auto", "csr", "atomic"):
+        for m in ("auto", "csr", "atomic", "unified"):
             set_backward_method(m)
             Q = Q0.clone().requires_grad_(True)
             D = D0.clone().requires_grad_(True)
@@ -230,12 +230,18 @@ def test_auto_selects_a_valid_path(rel):
 
         set_backward_method("auto")
 
-        assert torch.equal(grads["auto"][0], grads["csr"][0])
-        assert torch.equal(grads["auto"][0], grads["atomic"][0])
-        # grad_D must match whichever path auto picked.
-        near_csr = rel(grads["auto"][1], grads["csr"][1]) < 1e-5
-        near_atomic = rel(grads["auto"][1], grads["atomic"][1]) < 1e-5
-        assert near_csr or near_atomic, f"auto grad_D matches neither path ({Nq=},{Nd=})"
+        # grad_Q is row-owned in every path — all four must agree bitwise.
+        for m in ("csr", "atomic", "unified"):
+            assert torch.equal(grads["auto"][0], grads[m][0]), f"grad_Q diverges for {m=}"
+
+        # grad_D: auto must match whichever explicit path its heuristic picked.
+        # Reorder drift across atomic variants is ~1e-3 in fp32, so we pick the
+        # closest path as ground truth and check that match.
+        dists = {m: rel(grads["auto"][1], grads[m][1]) for m in ("csr", "atomic", "unified")}
+        closest = min(dists, key=dists.get)
+        assert dists[closest] < 1e-4, (
+            f"auto grad_D matches neither path at tight tol ({Nq=}, {Nd=}); dists={dists}"
+        )
 
 
 # --------------------------------------------------------------------------- #

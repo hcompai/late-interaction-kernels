@@ -10,7 +10,10 @@ Training / general MaxSim
     * ``maxsim_varlen(...)`` — packed / ragged inputs, autograd-aware.
     * ``maxsim_varlen_inference(...)`` — no saved argmax, inference-only.
 
-Retrieval
+Retrieval / fused heads
+    * ``maxsim_from_hidden(Q, H_d, W, b=, normalize=)`` — fused D-side
+      projection + L2-normalize + MaxSim, inference-only. Saves the
+      ``[Nd, Ld, d_out]`` scratch from materializing ``D_proj``.
     * ``maxsim_topk(Q, D, k, ...)`` — top-k docs + indices in one call.
     * ``plaid_approx_score(qcs, codes, doc_lengths)`` — ColBERTv2 IVF
       approximate scoring step, fused.
@@ -31,7 +34,7 @@ Advanced
     * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
 """
 
-__version__ = "0.5.1"
+__version__ = "0.6.0.dev0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and
@@ -53,6 +56,7 @@ if _HAS_TRITON:
         set_backward_method,
     )
     from .forward import maxsim_forward
+    from .fused_head import maxsim_from_hidden
     from .matryoshka import maxsim_matryoshka
     from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
@@ -70,6 +74,7 @@ else:  # pragma: no cover
         )
 
     maxsim = maxsim_inference = maxsim_forward = _needs_triton
+    maxsim_from_hidden = _needs_triton
     soft_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
     maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
     plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
@@ -84,6 +89,7 @@ __all__ = [
     "maxsim",
     "maxsim_inference",
     "maxsim_forward",
+    "maxsim_from_hidden",
     "soft_maxsim",
     "maxsim_varlen",
     "maxsim_varlen_inference",
