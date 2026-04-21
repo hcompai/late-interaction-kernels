@@ -61,7 +61,8 @@ pytest -q
 - [ ] New behavior has tests; bug fixes have a regression test
 - [ ] Numerical changes include a parity test vs `reference.maxsim_reference`
 - [ ] Benchmarks included if the change is performance-motivated
-- [ ] CHANGELOG.md updated under "Unreleased"
+- [ ] CHANGELOG.md updated (add a new `## <next-version> — Unreleased` block
+      at the top if one doesn't exist, or append to the existing in-flight one)
 - [ ] Public API changes documented in the README
 
 ## Style

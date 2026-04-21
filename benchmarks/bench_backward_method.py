@@ -1,11 +1,16 @@
-"""Compare grad_D paths: CSR (scatter-free) vs atomic vs naive PyTorch.
+"""Compare grad_D paths: ``auto`` (default) vs ``unified`` vs ``csr`` vs ``atomic`` vs naive.
 
-Measures end-to-end backward time (forward + backward). The forward is
-identical for both flash paths, so the delta isolates the grad_D kernel.
+Measures end-to-end step time (forward + backward). The forward is
+identical for all flash paths, so the delta isolates the ``grad_D``
+path. Since 0.6.0 ``"auto"`` picks between ``"unified"`` (default for
+almost every shape) and ``"csr"`` (high-contention shapes);
+``"atomic"`` is still benched as a legacy reference but is never
+selected by ``"auto"`` anymore.
 
-Shapes match ``bench_backward.py`` plus a stressful retrieval shape and a
-"hot bucket" synthetic where every query's argmax collapses to a single
-doc-token — the worst case for atomics, a stress case for CSR.
+Shapes match ``bench_backward.py`` plus a stressful retrieval shape
+and a "hot bucket" synthetic where every query's argmax collapses to
+a single doc-token — the worst case for atomics, a stress case for
+CSR.
 """
 
 from __future__ import annotations
@@ -94,8 +99,8 @@ def main():
 
     print(
         f"{'shape':<12} {'Nq':>4} {'Nd':>4} {'Lq':>4} {'Ld':>5} {'d':>4}   "
-        f"{'auto ms':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
-        f"{'auto×':>5} {'pick':>6}"
+        f"{'auto ms':>8} {'unified':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
+        f"{'auto×':>5} {'pick':>8}"
     )
     for name, Nq, Nd, Lq, Ld, d in shapes:
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16, requires_grad=True)
@@ -111,9 +116,15 @@ def main():
 
         set_backward_method("auto")
         t_auto = _bench(step, iters=args.iters)
-        big = (Nq * Nd * Lq * d) >= 100_000_000
-        long_seq = Lq >= 1024 and Nq * Nd >= 16
-        pick = "csr" if (big or long_seq or Nd >= 1024) else "atom"
+        # The real selector lives in `_MaxSimFn.backward` (autograd.py).
+        # Since 0.6.0 `auto` picks between `unified` (default) and `csr`
+        # for very high-contention batches. `atomic` is never picked by
+        # auto anymore; this bench still reports it for comparison.
+        high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+        pick = "csr" if high_contention else "unified"
+
+        set_backward_method("unified")
+        t_unified = _bench(step, iters=args.iters)
 
         set_backward_method("csr")
         t_csr = _bench(step, iters=args.iters)
@@ -129,8 +140,8 @@ def main():
         auto_sp = t_naive / t_auto if t_naive == t_naive else float("nan")
         print(
             f"{name:<12} {Nq:>4} {Nd:>4} {Lq:>4} {Ld:>5} {d:>4}   "
-            f"{t_auto:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
-            f"{auto_sp:>5.2f} {pick:>6}"
+            f"{t_auto:>8.2f} {t_unified:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
+            f"{auto_sp:>5.2f} {pick:>8}"
         )
         rows.append(
             {
@@ -141,10 +152,12 @@ def main():
                 "Ld": Ld,
                 "d": d,
                 "auto_ms": t_auto,
+                "unified_ms": t_unified,
                 "csr_ms": t_csr,
                 "atomic_ms": t_atomic,
                 "naive_ms": t_naive,
                 "csr_vs_atomic": t_atomic / t_csr if t_csr else None,
+                "unified_vs_csr": t_csr / t_unified if t_unified else None,
                 "auto_pick": pick,
             }
         )

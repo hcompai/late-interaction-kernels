@@ -99,57 +99,70 @@ care about.
 `grad_Q` is embarrassingly parallel: one program per `(i, s)` loops over
 `j ∈ Nd`, gathers `D[j, argmax[i,j,s], :]`, weighted sum, write.
 
-`grad_D` has output contention: the same `(j, t)` slot receives contributions
-from many `(i, s)` pairs. We provide two implementations selected by
-`set_backward_method`:
+`grad_D` has output contention: the same `(j, t)` slot receives
+contributions from many `(i, s)` pairs. Three implementations live in
+the codebase, selected by `set_backward_method(...)` (process-wide) or
+per-call via `maxsim(..., backward="...")`:
 
-1. **Atomic** (`"atomic"`) — `tl.atomic_add` in **fp32** (not fp16 like
-   `flash-maxsim`'s backward). H100 fp32 atomics run at ~1 cycle / element.
-   The reduction order depends on thread scheduling, so the path is **not
-   strictly bitwise-reproducible across runs**, but the fp32 ULP drift is
-   bounded by ~1e-6 relative (far below fp16 / bf16 input noise). Argmax
-   selection itself is fully deterministic (`tl.argmax` is stable).
+1. **Unified** (`"unified"`, default for almost every training shape
+   since 0.6.0) — single-pass fused `grad_Q` + `grad_D` in one Triton
+   kernel, FlashAttention-2 style. Hoists `Q[i, s, :]` out of the
+   inner doc-batch loop, roughly halving HBM read traffic versus the
+   two-pass variants. `grad_D` accumulates with `tl.atomic_add` in
+   fp32 (same numerical characteristics as `"atomic"` below). This is
+   what you want for virtually all in-batch contrastive training.
 
-2. **CSR** (`"csr"`) — scatter-free bucketed reduction. We sort the argmax
-   per doc-batch into a CSR structure `(row_ptr, perm)` where
-   `perm[j, row_ptr[j, t] : row_ptr[j, t+1]]` lists every `(i, s)` whose
-   argmax is `t`. Each `(j, t)` program then reduces its own bucket into a
-   register accumulator and writes once — no atomics at all. Build cost is
-   `Nd` independent cub radix-sorts of `Nq · Lq` int32 keys plus a batched
-   `searchsorted`; typically a few hundred µs.
+2. **CSR** (`"csr"`, wins at very high `grad_D` contention) —
+   scatter-free bucketed reduction. We sort the argmax per doc-batch
+   into a CSR structure `(row_ptr, perm)` where
+   `perm[j, row_ptr[j, t] : row_ptr[j, t+1]]` lists every `(i, s)`
+   whose argmax is `t`. Each `(j, t)` program reduces its bucket in
+   registers and writes once — no atomics at all, **bitwise-reproducible
+   across runs**. Build cost is `Nd` independent cub radix-sorts of
+   `Nq · Lq` int32 keys plus a batched `searchsorted`; typically a few
+   hundred µs. Wins when `Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`.
 
-3. **Auto** (`"auto"`, default) — pick atomic vs CSR based on workload:
+3. **Atomic** (`"atomic"`, legacy two-pass) — the pre-0.6.0 path, kept
+   for comparison and as a fallback on GPUs where `tl.atomic_add(fp32)`
+   is degraded. Reduction order depends on thread scheduling
+   (≤ 1e-6 relative ULP drift, far below fp16 / bf16 input noise).
 
-   ```python
-   csr_wins = (
-       Nq * Nd * Lq * d >= 1e8      # sheer atomic volume
-       or (Lq >= 1024 and Nq*Nd >= 16)   # long-sequence (ColPali-like)
-       or Nd >= 1024                 # huge corpus
-   )
-   ```
+### The `"auto"` selector
 
-   This is empirical from a sweep on 1×H100 (see
-   `benchmarks/bench_backward_method.py`). In **every other case**, H100's
-   hardware-accelerated fp32 atomic_add beats CSR because CSR's fixed cost
-   (sort + empty-bucket stores for the `Nd · Ld` grid) dominates when the
-   atomic workload is modest. That's a surprising result — we expected CSR
-   to always win — and flipped the default accordingly.
+`maxsim(..., backward="auto")` (the default) picks between `"unified"`
+and `"csr"` based on problem shape:
 
-Measured on H100 80 GB (ms per forward+backward step, fp16):
+```python
+# late_interaction_kernels/autograd.py, _MaxSimFn.backward
+high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+method = "csr" if high_contention else "unified"
+```
 
-| shape                       | atomic | CSR  | auto | auto picks |
-| --------------------------- | :----: | :--: | :--: | :--------: |
-| train-32  (32 × 32, Lq=32)  | 0.48   | 0.66 | 0.49 | atomic     |
-| train-128 (128 × 128)       | 0.50   | 0.65 | 0.51 | atomic     |
-| train-256 (256 × 256)       | 1.85   | 1.25 | 1.25 | **CSR**    |
-| retrieval (16 × 512, L=300) | 0.47   | 0.65 | 0.48 | atomic     |
-| long-Lq (Lq=1024)           | 0.85   | 0.65 | 0.66 | **CSR**    |
-| huge-Nd (Nd=1024)           | 0.66   | 0.65 | 0.65 | **CSR**    |
+The heuristic is empirical from a sweep on 1×H100; in every other case,
+`"unified"` dominates because a single fused pass over `Q/D/argmax`
+beats CSR's sort + empty-bucket overhead even at modest contention.
+See `benchmarks/bench_backward_unified.py` for the sweep.
 
-**Alternative backward path** (future work — toggle `save_argmax=False`):
-redo the forward max in the backward, picking the winner on the fly. Saves
-the argmax buffer at the cost of one extra GEMM. Analogous to
-FlashAttention's recompute backward.
+`"atomic"` is **never picked by `"auto"`** since 0.6.0 — it exists for
+pinned-method benchmarking and as a manual fallback.
+
+### Numerical determinism
+
+| method     | bitwise-reproducible across runs | notes                            |
+| ---------- | :------------------------------: | -------------------------------- |
+| `unified`  | ✗ (`atomic_add`, ≤ 1e-6 rel.)   | fastest training default          |
+| `csr`      | ✓                                | choose for regression reproducibility |
+| `atomic`   | ✗ (`atomic_add`, ≤ 1e-6 rel.)   | legacy two-pass                   |
+
+Argmax selection itself is fully deterministic (`tl.argmax` is stable)
+in all three paths — only the `grad_D` reduction order differs.
+
+### Alternative backward path (roadmap)
+
+Recompute-style backward — toggle `save_argmax=False`, redo the forward
+`max` in the backward and pick the winner on the fly. Saves the argmax
+buffer at the cost of one extra GEMM. Analogous to FlashAttention's
+recompute backward. Not yet shipped.
 
 ## Varlen / packed path
 

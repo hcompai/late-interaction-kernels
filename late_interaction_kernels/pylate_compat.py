@@ -188,20 +188,44 @@ def patch_pylate():
     api.colbert_kd_scores = patched_colbert_kd_scores
 
     # Losses hold a direct reference captured at import time — patch those too.
+    # If a future PyLate refactor moves these symbols, we warn (loudly, once)
+    # so the user isn't silently running unpatched loss modules while
+    # believing they're getting the speedup.
+    import importlib
+    import warnings
+
+    missed: list[str] = []
     for mod_name, attr in (
         ("pylate.losses.contrastive", "colbert_scores"),
         ("pylate.losses.cached_contrastive", "colbert_scores"),
         ("pylate.losses.distillation", "colbert_kd_scores"),
     ):
         try:
-            import importlib
-
             mod = importlib.import_module(mod_name)
+            if not hasattr(mod, attr):
+                missed.append(f"{mod_name}.{attr}")
+                continue
             setattr(
                 mod, attr, patched_colbert_scores if attr == "colbert_scores" else patched_colbert_kd_scores
             )
-        except Exception:
-            pass
+        except ImportError:
+            # Loss module doesn't exist in this PyLate version — not a bug.
+            continue
+        except Exception as exc:  # noqa: BLE001 — surface the failure verbatim
+            missed.append(f"{mod_name}.{attr} ({type(exc).__name__}: {exc})")
+
+    if missed:
+        warnings.warn(
+            "late-interaction-kernels: `patch_pylate()` could not reach the "
+            "following loss-module symbols: "
+            + ", ".join(missed)
+            + ". The top-level `pylate.scores.colbert_scores` hook is installed, "
+            "but any loss module that captured the un-patched symbol at import "
+            "time will keep using vanilla PyLate. This usually means PyLate was "
+            "refactored — check you're on a supported version (pylate>=1.3.3).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def unpatch_pylate():

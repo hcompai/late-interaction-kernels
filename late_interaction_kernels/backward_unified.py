@@ -1,45 +1,12 @@
-"""Unified backward — single-pass ``grad_Q`` + ``grad_D`` kernel (0.6.0).
+"""Single-pass fused ``grad_Q`` + ``grad_D`` kernel (FA-2 style).
 
-Motivation
-----------
-The 0.5.x backward runs two Triton kernels back-to-back. Each one
-re-reads Q, D, argmax, and grad_scores from HBM. Merging both
-accumulations into one pass, FlashAttention-2 style, roughly halves
-HBM read traffic:
+Hoists ``Q[i, s, :]`` out of the doc-batch loop, roughly halving HBM
+read traffic versus the two-pass backward. Row-owned ``grad_Q``
+accumulation (no atomic) + ``tl.atomic_add`` for ``grad_D``. Shipped
+as the default ``"auto"`` / ``"unified"`` backward since 0.6.0.
 
-    two-pass reads (bf16, Nq=Nd=B, Lq=Lq, d=d):
-        dQ:  D winners       = B·B·Lq·d
-        dD:  Q rows           = B·B·Lq·d
-        total Q+D  reads      = 2·B²·Lq·d
-
-    unified-pass reads:
-        D winners            = B²·Lq·d            (same)
-        Q rows hoisted once  = B·Lq·d             (B× reduction!)
-        total Q+D  reads     = B²·Lq·d + B·Lq·d ≈ B²·Lq·d
-
-The Q savings come from hoisting ``Q[i, s, :]`` out of the ``j`` loop
-inside the unified kernel — it is constant for every ``(i, j, s)`` that
-share the same ``(i, s)``. The two-pass ``dD`` kernel reloads it
-``Nd`` times; the unified kernel loads it once.
-
-The kernel keeps the row-owned ``grad_Q`` accumulation (no atomic) and
-uses ``tl.atomic_add`` for ``grad_D``. For very high-contention shapes
-we also ship a CSR-deterministic variant; both are callable through
-:func:`maxsim_backward_unified` below.
-
-API
----
-``maxsim_backward_unified(grad_scores, Q, D, argmax, q_mask=, method='atomic')``
-
-Numerical contract (identical to the two-pass ``maxsim_backward``):
-  * For every ``(i, j, q)`` the argmax ``k = argmax[i*Nd+j, q]`` is
-    already known. ``grad_Q[i, q]`` is incremented by
-    ``grad_scores[i, j] * D[j, k]`` (summed across ``j``).
-  * ``grad_D[j, k]`` is incremented by
-    ``grad_scores[i, j] * Q[i, q]`` (summed across ``(i, q)``).
-  * Masked query tokens (``q_mask[i, q] == 0``) contribute nothing.
-  * Masked doc tokens are already ``-inf``-ed in the forward and never
-    win the argmax — nothing to do in the backward.
+See :doc:`../docs/design.md` for the full HBM-traffic derivation and
+numerical contract.
 """
 
 from __future__ import annotations

@@ -4,6 +4,104 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 — User-friendly API layer, cleaner defaults, docs audit
+
+This is an ergonomics-and-honesty release. The kernels are unchanged —
+every speedup number in the README / `docs/benchmarks.md` still
+reproduces bit-for-bit. What changed is the surface area:
+
+- A high-level `nn.Module` (`MaxSimScorer`) and a top-level `retrieve()`
+  entry point so you don't have to assemble `maxsim + topk + chunk`
+  yourself.
+- Per-call `backward=` kwarg on `maxsim`, so different experiments can
+  pick different `grad_D` paths without global state.
+- A sweep of documentation fixes where code and prose had drifted out
+  of sync after 0.6 / 0.7 / 0.8.
+
+### Added
+
+- **`MaxSimScorer(nn.Module)`** — stateless scoring layer with
+  `normalize=True`, `backward="auto"` defaults and an optional
+  `mask_pad_token=` shortcut. Composes with any encoder module and
+  round-trips through `torch.compile`.
+- **`retrieve(Q, D, top_k, *, chunk=None, normalize=True)`** — the
+  one-liner answer to "how do I actually search 100k docs". Wraps
+  `maxsim_topk` with friendlier defaults and clearer docs.
+- **CPU / non-Triton fallback for the high-level API** —
+  `MaxSimScorer` and `retrieve` are now importable *and runnable* on
+  macOS / Windows / CPU-only CI. They transparently dispatch to the
+  pure-PyTorch reference, preserving the full API contract (including
+  autograd and `torch.autograd.gradcheck`). Lets you unit-test
+  training / retrieval code locally before renting a GPU.
+- **CPU-reachable test suite** — `tests/test_retrieve_cpu.py`
+  (30 assertions incl. `gradcheck`) plus a `test_public_all_exports_are_resolvable`
+  guard that flags `__all__` drift without needing a GPU.
+- **Per-call `backward=` kwarg on `maxsim`** —
+  `maxsim(Q, D, ..., backward="csr")` pins a single call's `grad_D`
+  path without touching global state. `set_backward_method(...)` still
+  works as the process-wide default.
+- **Unnormalized-input warning** — `maxsim(..., normalize=False)`
+  emits a one-time `UserWarning` when Q's median token L2 norm is
+  clearly ≠ 1.0 (the top footgun for users coming from PyLate).
+  Silence with `LIK_SUPPRESS_NORM_WARN=1`.
+- **Loss-module patch warning** — `patch_pylate()` now emits a
+  `RuntimeWarning` if it cannot reach one of the internal PyLate loss
+  symbols (e.g. PyLate refactors `contrastive.colbert_scores`),
+  instead of silently leaving that loss unpatched.
+
+### Changed
+
+- **Design doc rewrite** — `docs/design.md` §Backward now describes
+  the real `unified` + `csr` selector. The 0.5.x atomic-vs-CSR
+  heuristic had survived the 0.6.0 rewrite in prose only.
+- **`docs/rfc/0.6.0.md` and `docs/rfc/0.7.0.md`** — now clearly marked
+  as historical planning documents, with a banner pointing to the
+  `CHANGELOG` for what actually shipped. In particular, 0.7.0's
+  "persistent SMEM-cached fused head" is documented as **not** the
+  route 0.8.0 took (closed-form backward, same perf outcome).
+- **`maxsim` / `maxsim_inference` docstrings** — clarified `normalize`
+  default behavior and the per-call `backward=` semantics.
+- **Varlen input validation** — `_varlen_forward` now raises
+  `ValueError` with actionable messages instead of bare `assert`s.
+- **`bench_backward_method.py`** — added a `unified ms` column and
+  fixed the `auto_pick` annotation to match the real selector
+  (`unified` vs `csr`, never `atomic`).
+- **`bench_cached_maxsim.py`** — defaults bumped to `50` iters / `5`
+  warmup to match the rest of the bench suite (docs/benchmarks.md
+  claim is now consistent with every script).
+- **README Quickstart** — restructured around the three canonical
+  entry points (`patch_pylate`, `MaxSimScorer`, `retrieve`) instead
+  of only PyLate + raw `maxsim_inference`.
+- **Module-preamble docstrings** (`forward.py`, `smooth.py`, `fp8.py`,
+  `backward_csr.py`, `backward_unified.py`) — trimmed the RFC-style
+  motivation/derivation sections and cross-link to `docs/design.md`
+  for the long form.
+- **`maxsim_reference` dtype policy** — preserves fp64 inputs instead
+  of down-casting to fp32. Required for `torch.autograd.gradcheck` on
+  the high-level API. fp16 / bf16 still promote to fp32 as before; fp32
+  behavior is unchanged.
+- **Test naming** — `test_contrastive_loss_uses_flash` →
+  `test_contrastive_loss_uses_patched_scores` (and sibling cached /
+  distillation tests). There is no FlashAttention anywhere in this
+  project; the historical name was misleading.
+- **`CONTRIBUTING.md`** — PR checklist no longer references a
+  non-existent "Unreleased" CHANGELOG section.
+
+### Deprecated
+
+- **`late_interaction_kernels.maxsim_forward`** — still importable
+  (emits `DeprecationWarning`), scheduled for removal. Use
+  `maxsim_inference` for reranking or
+  `from late_interaction_kernels.forward import maxsim_forward` if
+  you genuinely need the low-level primitive.
+- **`maxsim_varlen_inference`** — redundant alias, emits
+  `DeprecationWarning`. `maxsim_varlen` auto-skips the argmax save
+  when neither input has `requires_grad=True`.
+
+### Removed
+
+- Nothing. This release is strictly additive + deprecation.
+
 ## 0.8.0 — Closed-form fused-head backward, LateOn integration
 
 Perf + integration release. The 0.7.0 `maxsim_from_hidden_train` shipped
