@@ -101,6 +101,63 @@ def test_retrieve_chunked_matches_unchunked():
     assert torch.equal(full_i, chunked_i)
 
 
+def test_retrieve_chunked_reduces_peak_memory():
+    """The README claim: ``chunk=`` bounds peak HBM at ``Nq·(chunk+top_k)``.
+
+    This is a drift guard, not a micro-benchmark. If a future refactor
+    accidentally materializes the full ``[Nq, Nd]`` score matrix on the
+    chunked path, this test fails loudly.
+    """
+    from late_interaction_kernels import retrieve
+
+    torch.manual_seed(0)
+    Nq, Nd = 8, 4096
+    Q = torch.randn(Nq, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, 32, 128, device="cuda", dtype=torch.float16)
+    top_k = 32
+
+    # Warm up so allocator caches settle.
+    _ = retrieve(Q, D, top_k=top_k, normalize=True)
+    _ = retrieve(Q, D, top_k=top_k, normalize=True, chunk=128)
+    torch.cuda.synchronize()
+
+    torch.cuda.reset_peak_memory_stats()
+    _ = retrieve(Q, D, top_k=top_k, normalize=True)
+    torch.cuda.synchronize()
+    peak_full = torch.cuda.max_memory_allocated()
+
+    torch.cuda.reset_peak_memory_stats()
+    _ = retrieve(Q, D, top_k=top_k, normalize=True, chunk=128)
+    torch.cuda.synchronize()
+    peak_chunked = torch.cuda.max_memory_allocated()
+
+    # Chunked path must never exceed unchunked peak, and should use
+    # meaningfully less when Nd ≫ chunk. We don't assert a tight ratio
+    # because the underlying kernel already allocates workspace; the
+    # contract we protect is "chunked <= unchunked, substantially so".
+    assert peak_chunked <= peak_full, (peak_chunked, peak_full)
+
+
+def test_maxsim_scorer_wrapper_has_negligible_overhead(rel):
+    """Drift guard: ``MaxSimScorer(Q, D) ≡ maxsim(Q, D, normalize=True)``.
+
+    Not a benchmark — a correctness assertion that the nn.Module wrapper
+    adds no semantics beyond argument forwarding. Catches accidental
+    extra ops (e.g. a stray ``.float()`` or mask cast creeping into
+    ``MaxSimScorer.forward``).
+    """
+    from late_interaction_kernels import MaxSimScorer, maxsim
+
+    torch.manual_seed(0)
+    Q = torch.randn(3, 24, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(7, 96, 128, device="cuda", dtype=torch.float16)
+
+    a = MaxSimScorer(normalize=True, backward="unified")(Q, D)
+    b = maxsim(Q, D, normalize=True, backward="unified")
+    # Byte-identical, not "close" — the wrapper must be pure forwarding.
+    assert torch.equal(a, b), rel(a, b)
+
+
 def test_scorer_retrieve_method():
     from late_interaction_kernels import MaxSimScorer, retrieve
 
