@@ -118,32 +118,6 @@ def smooth_maxsim_reference(
 
 if _HAS_TRITON:
 
-    @triton.jit
-    def _fp32_to_monotonic_uint32(x):
-        """Bit-twiddle fp32 so the int32 representation sorts ascending with
-        the float value (handles negatives + NaN last-ish). See Radix-sort
-        float-ordering trick.
-        """
-        # Interpret fp32 bits as int32.
-        bits = x.to(tl.uint32, bitcast=True)
-        # if sign bit == 1 (negative): flip all bits
-        # if sign bit == 0 (positive): flip only sign bit
-        # Combined: xor with (sign ? 0xFFFFFFFF : 0x80000000)
-        sign_mask = bits >> 31  # 0 or 1
-        xor_mask = (sign_mask * 0x7FFFFFFF) | tl.full(bits.shape, 0x80000000, dtype=tl.uint32)
-        return bits ^ xor_mask
-
-    @triton.jit
-    def _monotonic_uint32_to_fp32(u):
-        sign_mask = u >> 31  # 1 for originally-positive (we flipped sign), 0 for originally-negative
-        xor_mask = tl.where(
-            sign_mask == 1,
-            tl.full(u.shape, 0x80000000, dtype=tl.uint32),
-            tl.full(u.shape, 0xFFFFFFFF, dtype=tl.uint32),
-        )
-        bits = u ^ xor_mask
-        return bits.to(tl.float32, bitcast=True)
-
     @triton.autotune(
         configs=forward_configs(),
         key=["Lq", "Ld", "d_pad", "K", "has_q_mask", "has_d_mask", "normalize"],
@@ -221,10 +195,11 @@ if _HAS_TRITON:
                 Q_block_f32 = Q_block_f32 * q_inv[:, None]
             Q_block = Q_block_f32.to(COMPUTE_DTYPE)
 
-            # Running top-K, sorted descending by value. Initial sentinel is
-            # -inf so any real value displaces it.
+            # Running top-K, sorted loosely by value. We don't enforce a
+            # strict sort — we just guarantee the set is the K largest.
+            # best_v[s, k] in fp32, best_i[s, k] in int32.
             best_v = tl.full([BLOCK_Q, K], float("-inf"), dtype=tl.float32)
-            best_i = tl.full([BLOCK_Q, K], 0, dtype=tl.int32)
+            best_i = tl.zeros([BLOCK_Q, K], dtype=tl.int32)
 
             for d_start in range(0, Ld, BLOCK_D):
                 d_off = d_start + tl.arange(0, BLOCK_D)
@@ -254,49 +229,53 @@ if _HAS_TRITON:
                 S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
                 S = tl.where(d_active[None, :], S, float("-inf"))
 
-                # Encode (value, local_idx) into int64 packed key so tl.sort
-                # orders by value with ties broken by column index.
-                tile_cols = tl.arange(0, BLOCK_D) + d_start
-                u_tile = _fp32_to_monotonic_uint32(S)  # [BLOCK_Q, BLOCK_D] uint32
-                packed_tile = (u_tile.to(tl.int64) << 32) | (
-                    tile_cols.to(tl.int64).broadcast_to(S.shape)
-                )
+                # Extract top-K via K rounds of (argmax-on-union, mask-out).
+                # At each round we pick the single winner from the union of
+                # S_tile and the running best_v, write it into slot `ki` of
+                # new_{v,i}, and mask out the source position so the next
+                # round can't pick it again.
+                k_range = tl.arange(0, K)
+                bd_range = tl.arange(0, BLOCK_D)
 
-                # Running top-K as packed int64 too.
-                u_best = _fp32_to_monotonic_uint32(best_v)
-                packed_best = (u_best.to(tl.int64) << 32) | best_i.to(tl.int64)
-
-                # Merge: build [BLOCK_Q, K + BLOCK_D]. Use tl.join-free path:
-                # we do K rounds of "find max, mask out".
-                # Combined tensor via explicit concat using absolute positions.
-                # BLOCK_D is constexpr, K is constexpr — we allocate the
-                # merged buffer as [BLOCK_Q, K + BLOCK_D].
-                merged = tl.cat(packed_best, packed_tile, can_reorder=False)
-
-                # K-round max extraction. tl.sort is available but we want
-                # both value-order AND small constant K, so a K-round
-                # argmax-and-mask is actually fast and more portable.
-                new_v = tl.zeros([BLOCK_Q, K], dtype=tl.float32)
+                new_v = tl.full([BLOCK_Q, K], float("-inf"), dtype=tl.float32)
                 new_i = tl.zeros([BLOCK_Q, K], dtype=tl.int32)
+
+                S_work = S
+                best_v_work = best_v
+                best_i_work = best_i
                 for ki in tl.static_range(0, K):
-                    max_packed = tl.max(merged, axis=1)  # [BLOCK_Q], int64
-                    # Decode
-                    vkey = (max_packed >> 32).to(tl.uint32, bitcast=True)
-                    max_v = _monotonic_uint32_to_fp32(vkey)
-                    max_i = (max_packed & 0xFFFFFFFF).to(tl.int32)
-                    # Write to slot ki (per-row)
-                    k_range = tl.arange(0, K)
-                    is_slot = k_range[None, :] == ki
-                    new_v = tl.where(is_slot, max_v[:, None], new_v)
-                    new_i = tl.where(is_slot, max_i[:, None], new_i)
-                    # Mask out the winner position (where merged == max_packed).
-                    # On ties we may mask multiple but that's fine — the
-                    # remaining rounds still pick genuine top-K members.
-                    is_winner = merged == max_packed[:, None]
-                    # First-true per row to avoid over-masking on ties:
-                    cs = tl.cumsum(is_winner.to(tl.int32), axis=1)
-                    first = is_winner & (cs == 1)
-                    merged = tl.where(first, tl.full(merged.shape, -(1 << 62), tl.int64), merged)
+                    tile_max_v = tl.max(S_work, axis=1)  # [BLOCK_Q]
+                    tile_max_p = tl.argmax(S_work, axis=1).to(tl.int32)
+                    best_max_v = tl.max(best_v_work, axis=1)
+                    best_max_p = tl.argmax(best_v_work, axis=1).to(tl.int32)
+
+                    use_best = best_max_v >= tile_max_v
+                    winner_v = tl.where(use_best, best_max_v, tile_max_v)
+
+                    # Gather best_i at best_max_p.
+                    at_best = k_range[None, :] == best_max_p[:, None]  # [BLOCK_Q, K]
+                    from_best = tl.sum(
+                        tl.where(at_best, best_i_work, tl.zeros_like(best_i_work)), axis=1
+                    )
+                    from_tile = tile_max_p + d_start
+                    winner_i = tl.where(use_best, from_best, from_tile)
+
+                    is_slot = k_range[None, :] == ki  # [1, K]
+                    new_v = tl.where(is_slot, winner_v[:, None], new_v)
+                    new_i = tl.where(is_slot, winner_i[:, None], new_i)
+
+                    # Mask out winner in its source tensor.
+                    at_tile_pos = bd_range[None, :] == tile_max_p[:, None]
+                    S_work = tl.where(
+                        (~use_best)[:, None] & at_tile_pos,
+                        tl.full(S_work.shape, float("-inf"), tl.float32),
+                        S_work,
+                    )
+                    best_v_work = tl.where(
+                        use_best[:, None] & at_best,
+                        tl.full(best_v_work.shape, float("-inf"), tl.float32),
+                        best_v_work,
+                    )
 
                 best_v = new_v
                 best_i = new_i
