@@ -58,9 +58,11 @@ down to.
 pip install late-interaction-kernels
 ```
 
-Needs CUDA + Triton (auto-installed on Linux). On macOS / Windows a pure
-PyTorch reference is importable as `late_interaction_kernels.reference`
-for CI and correctness checks.
+Needs CUDA + Triton (auto-installed on Linux) for the fused kernels. On
+macOS / Windows / CPU-only machines, `MaxSimScorer`, `retrieve`, and
+`late_interaction_kernels.reference` still work — they transparently
+dispatch to a pure-PyTorch reference, so you can develop and unit-test
+your training / retrieval code locally before renting a GPU.
 
 ```bash
 # development

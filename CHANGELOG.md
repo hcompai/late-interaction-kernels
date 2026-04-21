@@ -27,6 +27,15 @@ reproduces bit-for-bit. What changed is the surface area:
 - **`retrieve(Q, D, top_k, *, chunk=None, normalize=True)`** — the
   one-liner answer to "how do I actually search 100k docs". Wraps
   `maxsim_topk` with friendlier defaults and clearer docs.
+- **CPU / non-Triton fallback for the high-level API** —
+  `MaxSimScorer` and `retrieve` are now importable *and runnable* on
+  macOS / Windows / CPU-only CI. They transparently dispatch to the
+  pure-PyTorch reference, preserving the full API contract (including
+  autograd and `torch.autograd.gradcheck`). Lets you unit-test
+  training / retrieval code locally before renting a GPU.
+- **CPU-reachable test suite** — `tests/test_retrieve_cpu.py`
+  (30 assertions incl. `gradcheck`) plus a `test_public_all_exports_are_resolvable`
+  guard that flags `__all__` drift without needing a GPU.
 - **Per-call `backward=` kwarg on `maxsim`** —
   `maxsim(Q, D, ..., backward="csr")` pins a single call's `grad_D`
   path without touching global state. `set_backward_method(...)` still
@@ -67,6 +76,16 @@ reproduces bit-for-bit. What changed is the surface area:
   `backward_csr.py`, `backward_unified.py`) — trimmed the RFC-style
   motivation/derivation sections and cross-link to `docs/design.md`
   for the long form.
+- **`maxsim_reference` dtype policy** — preserves fp64 inputs instead
+  of down-casting to fp32. Required for `torch.autograd.gradcheck` on
+  the high-level API. fp16 / bf16 still promote to fp32 as before; fp32
+  behavior is unchanged.
+- **Test naming** — `test_contrastive_loss_uses_flash` →
+  `test_contrastive_loss_uses_patched_scores` (and sibling cached /
+  distillation tests). There is no FlashAttention anywhere in this
+  project; the historical name was misleading.
+- **`CONTRIBUTING.md`** — PR checklist no longer references a
+  non-existent "Unreleased" CHANGELOG section.
 
 ### Deprecated
 

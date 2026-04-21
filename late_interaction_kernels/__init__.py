@@ -93,7 +93,6 @@ if _HAS_TRITON:
     from .matryoshka import maxsim_matryoshka
     from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
-    from .retrieve import MaxSimScorer, retrieve
     from .smooth import smooth_maxsim
     from .soft import soft_maxsim
     from .topk import maxsim_topk
@@ -118,9 +117,12 @@ else:  # pragma: no cover
     plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
-    MaxSimScorer = retrieve = _needs_triton  # type: ignore[assignment]
 
+# `MaxSimScorer` and `retrieve` transparently fall back to the pure-PyTorch
+# reference on non-Triton platforms, so they're always importable — a big
+# UX win for macOS / CI users developing training code locally.
 from . import reference  # noqa: E402,F401  — always importable (pure PyTorch)
+from .retrieve import MaxSimScorer, retrieve  # noqa: E402
 
 
 def __getattr__(name: str):

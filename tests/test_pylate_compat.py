@@ -166,8 +166,12 @@ def test_patched_falls_back_on_cpu():
         unpatch_pylate()
 
 
-def test_contrastive_loss_uses_flash():
-    """Verify the monkey-patch propagates into `pylate.losses.contrastive`."""
+def test_contrastive_loss_uses_patched_scores():
+    """Verify `patch_pylate()` propagates into `pylate.losses.contrastive`.
+
+    (Historical name kept "flash" — there is no FlashAttention here, just
+    the fused Triton MaxSim kernel.)
+    """
     from late_interaction_kernels.pylate_compat import (
         patch_pylate,
         patched_colbert_scores,
@@ -183,7 +187,7 @@ def test_contrastive_loss_uses_flash():
         unpatch_pylate()
 
 
-def test_cached_contrastive_loss_uses_flash():
+def test_cached_contrastive_loss_uses_patched_scores():
     """`CachedContrastive` is the LightOn Reason-ModernColBERT training recipe —
     it chunks MaxSim via the `score_metric` parameter (default `colbert_scores`).
     Make sure our patch intercepts that import too."""
@@ -202,7 +206,7 @@ def test_cached_contrastive_loss_uses_flash():
         unpatch_pylate()
 
 
-def test_distillation_loss_uses_flash():
+def test_distillation_loss_uses_patched_scores():
     """`Distillation` captures `colbert_kd_scores` at import time too."""
     from late_interaction_kernels.pylate_compat import (
         patch_pylate,

@@ -61,8 +61,16 @@ def maxsim_reference(
     if d != d2:
         raise ValueError(f"embedding dims don't match: Q has d={d}, D has d={d2}")
 
-    Qf = Q.float()
-    Df = D.float()
+    # Preserve fp64 for `torch.autograd.gradcheck`; only promote narrow
+    # floats (fp16 / bf16) up to fp32 for a numerically safe reference.
+    if Q.dtype in (torch.float16, torch.bfloat16):
+        Qf = Q.float()
+    else:
+        Qf = Q
+    if D.dtype in (torch.float16, torch.bfloat16):
+        Df = D.float()
+    else:
+        Df = D
     if normalize:
         Qf = torch.nn.functional.normalize(Qf, p=2, dim=-1, eps=1e-12)
         Df = torch.nn.functional.normalize(Df, p=2, dim=-1, eps=1e-12)
