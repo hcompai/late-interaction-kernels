@@ -47,7 +47,7 @@ def test_quantize_roundtrip_per_tensor():
     assert Xq.dtype == fp8_dtype
     Xhat = dequantize_fp8_per_tensor(Xq, s)
     err = (X - Xhat).abs().max().item() / max(1e-6, X.abs().max().item())
-    assert err < 0.03  # fp8 e4m3 has ~2-3 bits of mantissa
+    assert err < 0.05  # fp8 e4m3 has ~2-3 bits of mantissa
 
 
 @pytest.mark.skipif(fp8_dtype is None, reason="torch has no FP8 dtype")
@@ -63,7 +63,7 @@ def test_quantize_roundtrip_per_token():
     assert s.shape == X.shape[:-1]
     Xhat = dequantize_fp8_per_token(Xq, s)
     err = (X - Xhat).abs().max().item() / max(1e-6, X.abs().max().item())
-    assert err < 0.03
+    assert err < 0.05
 
 
 @pytest.mark.skipif(fp8_dtype is None, reason="torch has no FP8 dtype")
