@@ -1,9 +1,20 @@
-# late-interaction-kernels
+<div align="center">
+
+# ⚡ late-interaction-kernels
 
 **Fused Triton kernels for late-interaction (MaxSim) scoring.**
-*ColBERT · ColPali · ModernColBERT · LateOn · LateOn-Code · ColBERTv2 · PyLate-native.*
+_ColBERT · ColPali · ModernColBERT · LateOn · LateOn-Code · ColBERTv2 · PyLate-native._
 
-[Install](#install) · [Quickstart](#quickstart) · [Benchmarks](#benchmarks) · [Supported models](docs/supported_models.md) · [Design](docs/design.md)
+[![CI](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml/badge.svg)](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-%E2%89%A5%202.1-ee4c2c.svg)](https://pytorch.org/)
+[![Triton](https://img.shields.io/badge/Triton-%E2%89%A5%203.0-9146ff.svg)](https://github.com/triton-lang/triton)
+[![PyLate](https://img.shields.io/badge/PyLate-%E2%89%A5%201.3-00b4d8.svg)](https://github.com/lightonai/pylate)
+
+[**Install**](#install) · [**Quickstart**](#quickstart) · [**Benchmarks**](#benchmarks) · [**Supported models**](docs/supported_models.md) · [**Design**](docs/design.md)
+
+</div>
 
 ---
 
