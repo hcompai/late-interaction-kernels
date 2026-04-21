@@ -48,17 +48,45 @@ vanilla PyLate for a one-off comparison.
 ### Short-`d` regimes (LateOn-Code-edge, mxbai-edge, ColPali-small)
 
 With `d ∈ {48, 64}` the kernel is **more memory-bound** than at `d = 128`,
-because the tensor-core math per HBM byte drops. That's good news for this
-library: fusing `matmul → mask → max → sum` removes exactly the HBM
-round-trip the reference path wastes. Measured speedups at `d = 48` are in
-line with the `d = 128` numbers; we ship a benchmark config for each in
-`benchmarks/bench_forward.py`.
+because the tensor-core math per HBM byte drops. That's good news for
+this library: fusing `matmul → mask → max → sum` removes exactly the HBM
+round-trip the reference path wastes, and naive einsum is forced to
+materialize the full `[Nq, Nd, Lq, Ld]` similarity tensor while
+`maxsim_inference` reduces it on the fly. Measured on H100 80 GB
+(`bench_inference_edge.py`, bf16, 50-iter avg):
+
+| Shape                                              | lik       | naive (fp32) | Speedup    | lik mem  | naive mem |
+| -------------------------------------------------- | --------- | ------------ | ---------- | -------- | --------- |
+| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48`        | 0.072 ms  | 0.380 ms     | **5.3×**   | 0.0 MB   | 314 MB    |
+| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48`        | 0.137 ms  | 1.412 ms     | **10.3×**  | 0.0 MB   | 1.2 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48`        | 0.266 ms  | 2.910 ms     | **10.9×**  | 0.0 MB   | 2.5 GB    |
+| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`         | 0.252 ms  | 2.897 ms     | **11.5×**  | 0.1 MB   | 2.5 GB    |
+| mxbai-edge `Nd=1 000, Ld=4 096, d=64`              | 0.172 ms  | 1.730 ms     | **10.0×**  | 0.0 MB   | 1.5 GB    |
+| mxbai-edge `Nd=16 000, Ld=512, d=64`               | 0.331 ms  | 3.528 ms     | **10.7×**  | 0.1 MB   | 3.0 GB    |
+
+Two things to read out of this table:
+
+1. At typical rerank shapes (`Nd=1k, Ld=1k`) edge models land on a
+   **5–6×** win; as soon as you push either dimension (long-context
+   rerank or high-BS serving) the lead widens to **10–11×** because
+   the naive path's similarity-tensor cost scales linearly with both.
+2. The memory story is **categorical, not incremental** — `maxsim_inference`
+   stays under 1 MB across every row, while naive crosses 2.5 GB at
+   `Ld=8 192` or `Nd=16 000`. That's the difference between fitting
+   your whole rerank stage on a consumer GPU and not.
+
+Training-side win is more modest: LateOn-Code-edge (17 M params) is
+encoder-bound, so `CachedContrastive` steps move ~1.01–1.03× (end-to-end
+measurement in `scripts/sky_lateon_edge.yaml`, job 75). The MaxSim step
+is already < 5 % of wall-clock at this scale — the drop-in is "free
+upgrade" territory for training and a real unlock for inference.
 
 If you want to verify on your hardware before depending on this, the
-two-command test is:
+three-command test is:
 
 ```bash
-python benchmarks/bench_moderncolbert.py --d 48  # or 64
+python benchmarks/bench_inference_edge.py         # dedicated edge sweep
+python benchmarks/bench_moderncolbert.py --d 48   # or 64
 python benchmarks/bench_pylate_moderncolbert.py --model lightonai/LateOn-Code-edge
 ```
 

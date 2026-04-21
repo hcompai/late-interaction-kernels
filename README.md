@@ -321,6 +321,30 @@ reproduction commands.
 | corpus-10k — `Nq=1, Nd=10 000, Ld=300`             | 0.557 ms                 | 7.112 ms     | **12.8×** |
 | ColPali-scale — `Nq=1, Nd=1 000, Lq=1024, Ld=1024` | 1.518 ms                 | 11.967 ms    | **7.9×**  |
 
+### Edge rerankers at long context + high BS (0.5.0)
+
+`maxsim_inference` never materializes the `[Nq, Nd, Lq, Ld]` similarity
+tensor — naive einsum does. That turns into a structural win for
+small-`d` edge rerankers (LateOn-Code-edge `d=48`, mxbai-edge `d=64`)
+at the shapes they're actually deployed on. Run with
+`python benchmarks/bench_inference_edge.py`.
+
+| Shape                                                     | late-interaction-kernels | Naive einsum (fp32) | Speedup    | Peak mem (lik → naive) |
+| --------------------------------------------------------- | ------------------------ | ------------------- | ---------- | ---------------------- |
+| LateOn-Code-edge — `Nd=1 000, Lq=32, Ld=1 024, d=48`      | 0.072 ms                 | 0.380 ms            | **5.3×**   | 0.0 MB → 314 MB        |
+| LateOn-Code-edge — `Nd=1 000, Lq=32, Ld=4 096, d=48`      | 0.137 ms                 | 1.412 ms            | **10.3×**  | 0.0 MB → 1.2 GB        |
+| LateOn-Code-edge — `Nd=1 000, Lq=32, Ld=8 192, d=48`      | 0.266 ms                 | 2.910 ms            | **10.9×**  | 0.0 MB → 2.5 GB        |
+| LateOn-Code-edge — `Nd=16 000, Lq=32, Ld=512, d=48`       | 0.252 ms                 | 2.897 ms            | **11.5×**  | 0.1 MB → 2.5 GB        |
+| mxbai-edge — `Nd=1 000, Lq=32, Ld=4 096, d=64`            | 0.172 ms                 | 1.730 ms            | **10.0×**  | 0.0 MB → 1.5 GB        |
+| mxbai-edge — `Nd=16 000, Lq=32, Ld=512, d=64`             | 0.331 ms                 | 3.528 ms            | **10.7×**  | 0.1 MB → 3.0 GB        |
+| d=128 reference — `Nd=1 000, Lq=32, Ld=4 096`             | 0.333 ms                 | 3.055 ms            | **9.2×**   | 0.0 MB → 2.5 GB        |
+| Serving — `Nd=32 000, Lq=32, Ld=300, d=128`               | 0.766 ms                 | 7.488 ms            | **9.8×**   | 0.1 MB → 5.9 GB        |
+
+All rows fit end-to-end inside `torch.inference_mode()` on a single
+H100; the naive path would bottleneck any realistic rerank pipeline on
+HBM alone. See [`benchmarks/bench_inference_edge.py`](benchmarks/bench_inference_edge.py)
+for the full sweep (13 shapes).
+
 ### CachedContrastive chunked MaxSim — LightOn's Reason-ModernColBERT shapes
 
 The `(bs / mini)²` Python loop inside `CachedContrastive` collapses to
