@@ -125,6 +125,27 @@ def maxsim(
     if d_mask is not None and d_mask.dim() == 1:
         d_mask = d_mask.unsqueeze(0)
 
+    # Shape / device contract — fail fast with a clear message so user code
+    # doesn't silently corrupt memory or produce garbage scores.
+    if Q.shape[-1] != D.shape[-1]:
+        raise ValueError(
+            f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "
+            f"vs D.shape[-1]={D.shape[-1]}."
+        )
+    if Q.device != D.device:
+        raise ValueError(
+            f"Q and D must be on the same device; got Q.device={Q.device} vs "
+            f"D.device={D.device}."
+        )
+    if q_mask is not None and q_mask.device != Q.device:
+        raise ValueError(
+            f"q_mask must be on the same device as Q; got {q_mask.device} vs {Q.device}."
+        )
+    if d_mask is not None and d_mask.device != D.device:
+        raise ValueError(
+            f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}."
+        )
+
     Q = Q.contiguous()
     D = D.contiguous()
     q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
@@ -156,6 +177,16 @@ def maxsim_inference(
     this is the fast path for typical ColBERT reranking (the unnormalized
     embeddings are dequantized or encoder-output fp16).
     """
+    if Q.shape[-1] != D.shape[-1]:
+        raise ValueError(
+            f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "
+            f"vs D.shape[-1]={D.shape[-1]}."
+        )
+    if Q.device != D.device:
+        raise ValueError(
+            f"Q and D must be on the same device; got Q.device={Q.device} vs "
+            f"D.device={D.device}."
+        )
     scores, _ = maxsim_forward(
         Q,
         D,

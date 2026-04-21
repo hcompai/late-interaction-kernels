@@ -49,6 +49,17 @@ fits (and does not fit) in the story.
 - `maxsim_varlen` likewise is now autograd-aware when either input
   requires grad. Previous 0.4.x callers that pass non-grad tensors see
   no change.
+- **`soft_maxsim` is now autograd-aware** — wrapped in a
+  `torch.autograd.Function` with a Triton forward (fp16 / bf16) and a
+  stable fp32 PyTorch reference backward (softmax-reweighted einsum).
+  fp32 / fp64 / CPU inputs transparently fall back to a pure-PyTorch
+  reference forward so `torch.autograd.gradcheck` passes cleanly on
+  fp64. Previous callers that only used the forward see no change
+  beyond the output now having a `grad_fn`.
+- **`maxsim` and `maxsim_inference` now validate the shape / device
+  contract up front** (`Q.shape[-1] == D.shape[-1]`, same device, masks
+  on matching devices). Previously a mismatch could silently produce
+  garbage scores; now it raises `ValueError` with a clear message.
 
 ### Fixed
 

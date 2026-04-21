@@ -60,29 +60,21 @@ def test_varlen_forward_is_bitwise_deterministic():
 def test_gradcheck_soft_maxsim_smooth():
     """Soft-maxsim uses log-sum-exp and is smooth everywhere — unlike hard
     maxsim, whose forward has argmax kinks that confuse finite-difference
-    gradcheck. We run a light gradcheck on a tiny fp32 shape with relaxed
-    tolerances, reflecting the kernel's fp32-accumulated tensor-core dot.
+    gradcheck. We run gradcheck on a tiny fp64 shape; on fp64 the soft path
+    falls back to a pure-PyTorch reference whose backward must match
+    finite-difference to tight tolerances.
     """
     from late_interaction_kernels import soft_maxsim
 
     Nq, Nd, Lq, Ld, d = 1, 2, 3, 5, 32
     torch.manual_seed(0)
-    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32, requires_grad=True)
-    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32, requires_grad=True)
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float64, requires_grad=True)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float64, requires_grad=True)
 
     def fn(q, d_):
         return soft_maxsim(q, d_, beta=2.0)
 
-    ok = torch.autograd.gradcheck(
-        fn,
-        (Q, D),
-        eps=1e-2,
-        atol=5e-2,
-        rtol=5e-2,
-        nondet_tol=5e-4,
-        fast_mode=True,
-    )
-    assert ok
+    assert torch.autograd.gradcheck(fn, (Q, D), eps=1e-6, atol=1e-5, rtol=1e-5, fast_mode=True)
 
 
 # --------------------------------------------------------------------------- #
