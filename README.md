@@ -43,21 +43,24 @@ drop-in for the corresponding PyTorch expression.
 ## At a glance
 
 
-| Kernel / path                                            | Baseline (same shape)                 | Speedup                     |
-| -------------------------------------------------------- | ------------------------------------- | --------------------------- |
-| `maxsim_inference` — rerank / inference                  | `einsum + max + sum` (PyTorch)        | **7–23×**, ~0 scratch       |
-| `maxsim(..., normalize=True)`                            | `F.normalize + maxsim`                | **3–17×**                   |
-| `maxsim_matryoshka` (K dims at once)                     | K separate MaxSim calls               | **1.6×**                    |
-| `maxsim_topk`                                            | `maxsim + torch.topk`                 | ≈ 1× (API win)              |
-| `maxsim_from_hidden` (inference, 0.6.0)                  | `F.linear + F.normalize + maxsim`     | **avoids `D_proj` scratch** |
-| `plaid_approx_score` (ColBERTv2 IVF step)                | gather + mask + max + sum (PyTorch)   | **~20×**                    |
-| `maxsim_residual` (2/4/8-bit)                            | unpack + normalize + MaxSim (PyTorch) | **~20×**                    |
-| `maxsim_residual` fwd+bwd (train on compressed, **new**) | unpack + maxsim autograd (PyTorch)    | see `bench_backward_0_5`    |
-| `maxsim_varlen` fwd+bwd (ragged, no repad, **new**)      | pad + mask + maxsim autograd          | see `bench_backward_0_5`    |
-| CachedContrastive chunked MaxSim (PyLate training)       | PyLate default                        | **up to 13.8×**             |
-| Long-doc MaxSim at `Ld ≥ 8k`                             | naive einsum                          | **runs; naive OOMs**        |
-| PyLate MaxSim + loss + backward (0.6.0 unified bwd)      | vanilla PyLate (same slice)           | **1.12–2.67×**              |
-| Plain ModernColBERT training step (full encoder + loss)  | vanilla PyLate                        | 1.00–1.06× (encoder-bound)  |
+| Kernel / path                                              | Baseline (same shape)                 | Speedup                     |
+| ---------------------------------------------------------- | ------------------------------------- | --------------------------- |
+| `maxsim_inference` — rerank / inference                    | `einsum + max + sum` (PyTorch)        | **7–23×**, ~0 scratch       |
+| `maxsim_inference_fp8` (Hopper WGMMA, **new in 0.7.0**)    | `maxsim_inference` (bf16)             | **up to 1.4×** at Nd ≥ 4k   |
+| `maxsim(..., normalize=True)`                              | `F.normalize + maxsim`                | **3–17×**                   |
+| `maxsim_matryoshka` (K dims at once)                       | K separate MaxSim calls               | **1.6×**                    |
+| `maxsim_topk`                                              | `maxsim + torch.topk`                 | ≈ 1× (API win)              |
+| `maxsim_from_hidden` (inference, 0.6.0)                    | `F.linear + F.normalize + maxsim`     | **avoids `D_proj` scratch** |
+| `maxsim_from_hidden_train` (training, **new in 0.7.0**)    | `F.linear + F.normalize + maxsim`     | winners-only backward, no `D_proj` in HBM |
+| `smooth_maxsim` (top-K aggregate, **new in 0.7.0**)        | `torch.topk + mean + sum`             | smoother gradients, O(K) bwd |
+| `plaid_approx_score` (ColBERTv2 IVF step)                  | gather + mask + max + sum (PyTorch)   | **~20×**                    |
+| `maxsim_residual` (2/4/8-bit)                              | unpack + normalize + MaxSim (PyTorch) | **~20×**                    |
+| `maxsim_residual` fwd+bwd (train on compressed)            | unpack + maxsim autograd (PyTorch)    | see `bench_backward_0_5`    |
+| `maxsim_varlen` fwd+bwd (ragged, no repad)                 | pad + mask + maxsim autograd          | see `bench_backward_0_5`    |
+| CachedContrastive chunked MaxSim (PyLate training)         | PyLate default                        | **up to 13.8×**             |
+| Long-doc MaxSim at `Ld ≥ 8k`                               | naive einsum                          | **runs; naive OOMs**        |
+| PyLate MaxSim + loss + backward (0.6.0 unified bwd)        | vanilla PyLate (same slice)           | **1.12–2.67×**              |
+| Plain ModernColBERT training step (full encoder + loss)    | vanilla PyLate                        | 1.00–1.06× (encoder-bound)  |
 
 
 All numbers on a single **H100 80 GB SXM**, bf16 / fp16 compute, fp32
@@ -220,9 +223,69 @@ from late_interaction_kernels import maxsim_from_hidden
 scores = maxsim_from_hidden(Q_proj, H_d, W, b=b, normalize=True)
 ```
 
-Inference-only. Training-side fusion requires a persistent kernel and
-lands in 0.7.0 — see `[docs/rfc/0.6.0.md](docs/rfc/0.6.0.md)` for the
-HBM analysis.
+Inference-only. The autograd-aware training variant ships in 0.7.0 —
+see below.
+
+### Fused D-side head (training, **new in 0.7.0**)
+
+`maxsim_from_hidden_train` is the autograd-aware sibling of
+`maxsim_from_hidden`. Forward never writes the
+`[Nd, Ld, d_out]` `D_proj` scratch; backward gathers only the winning
+`H_d` slots and back-props through `F.linear + F.normalize` at those
+positions — numerically identical to the unfused path at fp32
+tolerance, with a much smaller HBM footprint.
+
+```python
+from late_interaction_kernels import maxsim_from_hidden_train
+
+H_d.requires_grad_(True)
+W.requires_grad_(True)
+scores = maxsim_from_hidden_train(Q_proj, H_d, W, b=b, normalize=True)
+loss = scores.sum()
+loss.backward()     # grads flow to Q_proj, H_d, W, b as appropriate
+```
+
+See `[docs/rfc/0.7.0.md](docs/rfc/0.7.0.md)` for the HBM analysis.
+
+### FP8 MaxSim inference (Hopper / Blackwell, **new in 0.7.0**)
+
+Halve the HBM footprint and double the tensor-core throughput on Hopper
+(`WGMMA`) — ideal for large-corpus reranking where the kernel is
+HBM-bound:
+
+```python
+from late_interaction_kernels import (
+    maxsim_inference_fp8,
+    quantize_fp8_per_token,
+)
+
+Q_fp8, sQ = quantize_fp8_per_token(Q)   # or quantize_fp8_per_tensor(Q)
+D_fp8, sD = quantize_fp8_per_token(D)
+scores = maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD)
+```
+
+Auto-falls back to dequantized bf16 with a one-time warning on
+pre-Hopper GPUs or when Triton doesn't support fp8 `tl.dot` — the API
+contract is preserved so calling code never has to branch.
+
+### Smooth top-K MaxSim (training, **new in 0.7.0**)
+
+Hard MaxSim gives 100 % of the gradient to a single doc token per query
+token. `smooth_maxsim` aggregates the **top-K** doc tokens per query
+token so the training signal is denser — same backward cost as hard
+MaxSim times a tiny constant (no `[Nq, Nd, Lq, Ld]` scratch like
+`soft_maxsim`):
+
+```python
+from late_interaction_kernels import smooth_maxsim
+
+scores = smooth_maxsim(Q, D, top_k=4, aggregation="mean")
+scores.sum().backward()
+```
+
+`top_k=1, aggregation="sum"` is bit-identical to hard `maxsim`. Use
+`top_k ∈ [2, 8]` for smoother gradients during pre-training; fall back
+to `maxsim` for eval.
 
 ### ColBERTv2 kernels (centroid codes + packed residuals)
 
@@ -399,6 +462,25 @@ overall wall-clock speedup is still 1.00–1.06× — see the
 | ColPali-scale — `Nq=1, Nd=1 000, Lq=1024, Ld=1024` | 1.518 ms                 | 11.967 ms    | **7.9×**  |
 
 
+### FP8 inference (Hopper WGMMA, 0.7.0)
+
+`maxsim_inference_fp8` uses Hopper's fp8 tensor cores (`WGMMA`) with an
+fp32 accumulator. Per-tensor and per-token scales are both supported;
+on-the-fly dequant fallback kicks in on pre-Hopper GPUs. The real wins
+show up on HBM-bound shapes (large `Nd × Ld`, small `d`) where the 2×
+footprint reduction actually matters:
+
+| Shape                                      | bf16 ms  | fp8 ms   | Speedup   |
+| ------------------------------------------ | -------- | -------- | --------- |
+| pylate-rerank-8k (`Nd=8 192, Ld=256, d=128`) | 0.237    | 0.189    | **1.26×** |
+| batched-rerank-16k (`Nq=4, Nd=4 096, Ld=256`) | 0.404   | 0.286    | **1.42×** |
+| long-docs-2k (`Nd=2 048, Ld=512, d=128`)   | 0.155    | 0.137    | **1.13×** |
+| colbert-short-rerank (`Nd=4 096, Ld=128`)  | 0.116    | 0.116    | 1.00×     |
+
+Relative numerical error vs the bf16 reference: ≤ 0.2 % on normalized
+embeddings (within published fp8 reranking tolerances).
+Reproduce with `[benchmarks/bench_fp8.py](benchmarks/bench_fp8.py)`.
+
 ### Edge rerankers at long context + high BS (0.5.0)
 
 `maxsim_inference` never materializes the `[Nq, Nd, Lq, Ld]` similarity
@@ -537,7 +619,7 @@ relative (the `atomic_add` reduction order depends on the scheduler).
 
 | GPU family                  | Status         | Notes                                               |
 | --------------------------- | -------------- | --------------------------------------------------- |
-| H100 / H200 (Hopper)        | primary target | autotuned shortlist, all benchmarks from here       |
+| H100 / H200 (Hopper)        | primary target | autotuned shortlist (incl. warp-specialized configs on Triton 3.2+), FP8 WGMMA path |
 | A100 (Ampere 80 GB)         | supported      | separate autotune shortlist                         |
 | L4, L40, RTX 4090 (Ada)     | supported      | generic shortlist                                   |
 | A10, A40, RTX 3090 (Ampere) | supported      | generic shortlist                                   |
