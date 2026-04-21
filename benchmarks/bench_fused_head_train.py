@@ -49,12 +49,15 @@ def _time_and_mem(fn, warmup=3, iters=20):
 
 SHAPES = [
     # (label, Nq, Nd, Lq, Ld, d_model, d_out)
-    ("gte-moderncolbert-B2-short", 2, 8, 32, 200, 768, 128),
     ("gte-moderncolbert-B4-short", 4, 16, 32, 200, 768, 128),
-    ("gte-moderncolbert-B4-long", 4, 16, 32, 1024, 768, 128),
     ("gte-moderncolbert-B8-1k", 8, 32, 32, 1024, 768, 128),
-    ("lateon-code-edge-B8-long", 8, 32, 32, 2048, 384, 96),
-    ("lateon-code-edge-B4-bigLd", 4, 16, 32, 4096, 384, 96),
+    ("gte-moderncolbert-Nd128-long", 4, 128, 32, 1024, 768, 128),
+    ("gte-moderncolbert-Nd256-long", 2, 256, 32, 1024, 768, 128),
+    # Regimes where the D_proj scratch is the dominant cost: the fused
+    # head only ever touches winners, so peak memory stays bounded.
+    ("long-mem-Nd512-Ld2048", 1, 512, 32, 2048, 768, 128),
+    ("long-mem-Nd1024-Ld2048", 1, 1024, 32, 2048, 768, 128),
+    ("lateon-code-edge-Nd256-bigLd", 2, 256, 32, 4096, 384, 96),
 ]
 
 
