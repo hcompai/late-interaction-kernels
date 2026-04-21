@@ -51,7 +51,7 @@ drop-in for the corresponding PyTorch expression.
 | `maxsim_matryoshka` (K dims at once)                       | K separate MaxSim calls               | **1.6×**                    |
 | `maxsim_topk`                                              | `maxsim + torch.topk`                 | ≈ 1× (API win)              |
 | `maxsim_from_hidden` (inference, 0.6.0)                    | `F.linear + F.normalize + maxsim`     | **avoids `D_proj` scratch** |
-| `maxsim_from_hidden_train` (training, **new in 0.7.0**)    | `F.linear + F.normalize + maxsim`     | winners-only backward, no `D_proj` in HBM |
+| `maxsim_from_hidden_train` (training, **new in 0.7.0**, experimental) | `F.linear + F.normalize + maxsim`     | correct autograd wrapper; full perf win ships in 0.8.0 (persistent kernel) |
 | `smooth_maxsim` (top-K aggregate, **new in 0.7.0**)        | `torch.topk + mean + sum`             | smoother gradients, O(K) bwd |
 | `plaid_approx_score` (ColBERTv2 IVF step)                  | gather + mask + max + sum (PyTorch)   | **~20×**                    |
 | `maxsim_residual` (2/4/8-bit)                              | unpack + normalize + MaxSim (PyTorch) | **~20×**                    |
@@ -226,14 +226,12 @@ scores = maxsim_from_hidden(Q_proj, H_d, W, b=b, normalize=True)
 Inference-only. The autograd-aware training variant ships in 0.7.0 —
 see below.
 
-### Fused D-side head (training, **new in 0.7.0**)
+### Fused D-side head (training, **experimental in 0.7.0**)
 
 `maxsim_from_hidden_train` is the autograd-aware sibling of
-`maxsim_from_hidden`. Forward never writes the
-`[Nd, Ld, d_out]` `D_proj` scratch; backward gathers only the winning
-`H_d` slots and back-props through `F.linear + F.normalize` at those
-positions — numerically identical to the unfused path at fp32
-tolerance, with a much smaller HBM footprint.
+`maxsim_from_hidden`. Forward runs the fused kernel with an argmax
+save; backward rebuilds the winners slice of `D_proj` and runs the
+`F.linear + F.normalize` backward only at winning doc positions.
 
 ```python
 from late_interaction_kernels import maxsim_from_hidden_train
@@ -245,7 +243,17 @@ loss = scores.sum()
 loss.backward()     # grads flow to Q_proj, H_d, W, b as appropriate
 ```
 
-See `[docs/rfc/0.7.0.md](docs/rfc/0.7.0.md)` for the HBM analysis.
+**Status — honest read:** the backward is currently a Python autograd
+rebuild rather than a fused Triton kernel. It matches the unfused path
+numerically (gradcheck clean on fp32, ≤ 2 % RMS parity on bf16) but
+runs **~2× slower** than the plain `F.linear + F.normalize + maxsim`
+path on today's encoder-bound training shapes, because the
+`[Nq, Nd, Lq, d_model]` winners gather temporarily inflates memory
+when `d_model ≫ d_out`. A persistent kernel with SMEM-cached
+`H`/`Q` that actually delivers the full HBM win ships in **0.8.0** —
+see `[docs/rfc/0.7.0.md](docs/rfc/0.7.0.md)` §5. Keep using the unfused
+path or `maxsim_from_hidden` (inference) until then unless you
+explicitly want the autograd-aware API surface.
 
 ### FP8 MaxSim inference (Hopper / Blackwell, **new in 0.7.0**)
 
