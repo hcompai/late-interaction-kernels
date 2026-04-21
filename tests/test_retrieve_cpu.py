@@ -296,6 +296,80 @@ def test_reference_topk_path_matches_fused_topk_contract_on_ties():
 # --------------------------------------------------------------------------- #
 
 
+def test_suppress_norm_warn_env_var_silences_warning(monkeypatch):
+    """``LIK_SUPPRESS_NORM_WARN=1`` must silence the unnormalized-input warning.
+
+    The warning lives in ``autograd._maybe_warn_unnormalized``; we exercise
+    it directly so this test is CPU-safe (no Triton kernel launch). The
+    positive (warning fires) case is tested on GPU in ``test_retrieve.py``.
+    """
+    import warnings
+
+    # ``autograd`` imports Triton transitively — auto-skip on macOS.
+    pytest.importorskip("triton")
+    from late_interaction_kernels import autograd as _autograd_mod
+
+    monkeypatch.setenv("LIK_SUPPRESS_NORM_WARN", "1")
+    _autograd_mod._WARNED_UNNORMALIZED = False
+
+    Q = torch.randn(2, 16, 64, dtype=torch.float32) * 10.0  # clearly not unit-norm
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _autograd_mod._maybe_warn_unnormalized(Q)
+
+    lik_msgs = [
+        str(x.message)
+        for x in w
+        if issubclass(x.category, UserWarning) and "late-interaction-kernels" in str(x.message)
+    ]
+    assert lik_msgs == [], f"LIK_SUPPRESS_NORM_WARN=1 should silence, got {lik_msgs}"
+
+
+def test_unnormalized_warn_fires_once_direct(monkeypatch):
+    """Direct test of the unnormalized-warning helper on CPU.
+
+    The GPU test ``test_unnormalized_input_warns_once`` covers the same
+    one-shot semantics but requires calling ``maxsim()`` (Triton). This
+    CPU test pins the helper contract itself, so the one-shot logic is
+    protected even when Triton tests aren't run.
+    """
+    import warnings
+
+    pytest.importorskip("triton")
+    from late_interaction_kernels import autograd as _autograd_mod
+
+    monkeypatch.delenv("LIK_SUPPRESS_NORM_WARN", raising=False)
+    _autograd_mod._WARNED_UNNORMALIZED = False
+
+    Q = torch.randn(2, 16, 64, dtype=torch.float32) * 10.0
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _autograd_mod._maybe_warn_unnormalized(Q)
+        _autograd_mod._maybe_warn_unnormalized(Q)  # second call: must NOT re-warn
+
+    lik_msgs = [
+        str(x.message)
+        for x in w
+        if issubclass(x.category, UserWarning) and "late-interaction-kernels" in str(x.message)
+    ]
+    assert len(lik_msgs) == 1, f"expected exactly one warning, got {lik_msgs}"
+    assert "normalize=True" in lik_msgs[0]
+
+
+def test_scorer_retrieve_method_matches_top_level_retrieve():
+    """``scorer.retrieve(...)`` must be equivalent to ``retrieve(..., normalize=scorer.normalize)``."""
+    from late_interaction_kernels import MaxSimScorer, retrieve
+
+    torch.manual_seed(0)
+    Q = torch.randn(3, 12, 16, dtype=torch.float32)
+    D = torch.randn(20, 16, 16, dtype=torch.float32)
+    scorer = MaxSimScorer(normalize=True)
+    s1, i1 = scorer.retrieve(Q, D, top_k=4)
+    s2, i2 = retrieve(Q, D, top_k=4, normalize=True)
+    assert torch.equal(s1, s2)
+    assert torch.equal(i1, i2)
+
+
 def test_scorer_gradcheck_fp64():
     """`torch.autograd.gradcheck` against the reference in fp64.
 

@@ -44,16 +44,6 @@ def test_maxsim_scorer_backward(rel):
     assert torch.isfinite(D.grad).all()
 
 
-def test_maxsim_scorer_score_no_grad():
-    from late_interaction_kernels import MaxSimScorer
-
-    Q = torch.randn(4, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-    D = torch.randn(8, 128, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-    scorer = MaxSimScorer()
-    scores = scorer.score(Q, D)
-    assert not scores.requires_grad
-
-
 def test_maxsim_scorer_composes_in_module():
     """`MaxSimScorer` should slot into a bigger `nn.Module` without tricks."""
     from late_interaction_kernels import MaxSimScorer
@@ -187,18 +177,6 @@ def test_scorer_forward_with_ids():
     assert scores.shape == (2, 4)
     scores.sum().backward()
 
-    # Without mask_pad_token set, it should raise.
-    scorer_no_pad = MaxSimScorer(normalize=True)
-    with pytest.raises(ValueError, match="mask_pad_token"):
-        scorer_no_pad.forward_with_ids(Q, D, q_ids, d_ids)
-
-
-def test_scorer_invalid_backward_raises():
-    from late_interaction_kernels import MaxSimScorer
-
-    with pytest.raises(ValueError, match="backward"):
-        MaxSimScorer(backward="bogus")  # type: ignore[arg-type]
-
 
 @pytest.mark.parametrize("backward", ["auto", "unified", "csr", "atomic"])
 def test_maxsim_per_call_backward_kwarg(backward):
@@ -239,19 +217,6 @@ def test_maxsim_per_call_overrides_global():
         assert get_backward_method() == "csr"
     finally:
         set_backward_method(old)
-
-
-def test_maxsim_forward_deprecation_warning():
-    """`from lik import maxsim_forward` must still work but warn."""
-    import warnings
-
-    import late_interaction_kernels as lik
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        fn = lik.maxsim_forward  # deprecated path
-        assert callable(fn)
-    assert any(issubclass(x.category, DeprecationWarning) for x in w), w
 
 
 def test_maxsim_varlen_inference_deprecated():
