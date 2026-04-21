@@ -63,6 +63,7 @@ LateOn-Code):
 | `maxsim(..., normalize=True)`                            | `F.normalize + maxsim`                | **3–17×**                 |
 | `maxsim_matryoshka` (K dims at once)                     | K separate MaxSim calls               | **1.6×**                  |
 | `maxsim_topk`                                            | `maxsim + torch.topk`                 | ≈ 1× (API win)            |
+| `maxsim_from_hidden` (inference, 0.6.0)                  | `F.linear + F.normalize + maxsim`     | **avoids `D_proj` scratch** |
 | `plaid_approx_score` (ColBERTv2 IVF step)                | gather + mask + max + sum (PyTorch)   | **~20×**                  |
 | `maxsim_residual` (2/4/8-bit)                            | unpack + normalize + MaxSim (PyTorch) | **~20×**                  |
 | `maxsim_residual` fwd+bwd (train on compressed, **new**) | unpack + maxsim autograd (PyTorch)    | see `bench_backward_0_5`  |
@@ -209,6 +210,31 @@ from late_interaction_kernels import maxsim_xtr
 
 scores = maxsim_xtr(Q, D, top_k=5)    # sum of top-5 doc-token scores per query token
 ```
+
+### Fused D-side head (inference, 0.6.0)
+
+When the on-disk format is raw hidden states `[Nd, Ld, d_model]` (the
+last layer of a ModernBERT encoder), the standard rerank pipeline
+materializes a big `D_proj = F.normalize(H_d @ W.T)` intermediate
+before calling MaxSim. For large corpora this scratch is multi-GB
+(e.g. 4.4 GB at `Nd=100k, Ld=180, d_out=128`) and OOMs on edge models
+at `Nd > 1M`.
+
+`maxsim_from_hidden` fuses projection + L2-normalize + MaxSim into
+one kernel, so that scratch is never allocated:
+
+```python
+from late_interaction_kernels import maxsim_from_hidden
+
+# Q_proj: already projected + normalized queries, [Lq, d_out]
+# H_d:    raw hidden states, [Nd, Ld, d_model]
+# W, b:   projection head (same convention as nn.Linear)
+scores = maxsim_from_hidden(Q_proj, H_d, W, b=b, normalize=True)
+```
+
+Inference-only. Training-side fusion requires a persistent kernel and
+lands in 0.7.0 — see [`docs/rfc/0.6.0.md`](docs/rfc/0.6.0.md) for the
+HBM analysis.
 
 ### ColBERTv2 kernels (centroid codes + packed residuals)
 

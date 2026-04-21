@@ -275,6 +275,37 @@ def maxsim_residual_reference(
     return m.sum(dim=-1)
 
 
+def maxsim_from_hidden_reference(
+    Q: torch.Tensor,
+    H_d: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Reference for ``maxsim_from_hidden``: project D on-the-fly, MaxSim against Q.
+
+    Materializes ``D_proj`` in fp32 — that is the whole point of the fused
+    kernel *not* existing here — but this gives us the ground truth for
+    parity tests.
+    """
+    q_squeeze = Q.dim() == 2
+    if q_squeeze:
+        Q = Q.unsqueeze(0)
+    if d_mask is not None and d_mask.dim() == 1:
+        d_mask = d_mask.unsqueeze(0)
+
+    D_proj = torch.nn.functional.linear(H_d.float(), W.float(), b.float() if b is not None else None)
+    if normalize:
+        D_proj = torch.nn.functional.normalize(D_proj, p=2, dim=-1, eps=1e-12)
+
+    scores = maxsim_reference(Q, D_proj, d_mask=d_mask)
+    if q_squeeze:
+        scores = scores.squeeze(0)
+    return scores
+
+
 def maxsim_reference_varlen(
     Q: torch.Tensor,
     D: torch.Tensor,

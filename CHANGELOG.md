@@ -4,6 +4,54 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0-dev — Fused head + unified-backward scaffold
+
+First drop of the performance-focused 0.6.x track. See
+[`docs/rfc/0.6.0.md`](docs/rfc/0.6.0.md) for the full design and
+HBM-level motivation.
+
+### Added
+
+- **`maxsim_from_hidden(Q, H_d, W, b=, d_mask=, normalize=)`** —
+  inference-only fused kernel. Takes pre-projected queries and **raw
+  hidden-state** documents (`[Nd, Ld, d_model]`), applies the
+  projection + L2-normalize + MaxSim in a single pass so the
+  `[Nd, Ld, d_out]` intermediate never hits HBM. Target use case:
+  reranking a large corpus stored on disk as `[Nd, Ld, 768]` ModernBERT
+  hidden states — the intermediate `D_proj` can be multi-GB and OOMs
+  on edge models with `Nd > 100k`. Not autograd-aware (training-side
+  fusion requires a persistent kernel, deferred to 0.7.0; the
+  HBM analysis is in the RFC).
+- **`benchmarks/bench_flash_maxsim.py`** — head-to-head microbenchmark
+  against `flash-maxsim` (roipony/IBM). 50-iter median, reports
+  ms/iter, stdev, peak memory, and the speedup ratio on both plain
+  forward and `normalize=True` forward across ten representative
+  shapes (rerank, training batch, long-doc, edge models). Skips
+  flash-maxsim rows gracefully when the package is not installed.
+- **`late_interaction_kernels.backward_unified`** — scaffold for the
+  FA-2-style single-pass `grad_Q` + `grad_D` kernel landing in 0.6.1.
+  Ships as a pure-PyTorch reference (`maxsim_backward_unified_reference`)
+  that matches `torch.autograd` to fp32 tolerance on the existing
+  two-pass contract. The Triton kernel entry-point
+  (`maxsim_backward_unified`) raises `NotImplementedError` for now —
+  use the stable two-pass `maxsim_backward` in 0.6.x.
+- **`docs/rfc/0.6.0.md`** — public RFC for the 0.6.0 / 0.6.1 / 0.7.0 /
+  0.8.0 performance track. Includes:
+  - HBM accounting showing why naive training-side fused-head is a
+    net loss (4× more hidden-state reads) and why 0.7.0 needs a
+    persistent kernel to reclaim it.
+  - `D_proj` scratch estimates showing the `maxsim_from_hidden` win
+    (up to 46 GB saved on `Nd=1M` corpora with `d_out=96`).
+  - Expected speedups per milestone and validation plan.
+
+### Deferred to 0.6.1 / 0.7.0
+
+- Top-K argmax-save variant for smoother hard-MaxSim backward gradients.
+  Defers to 0.7.0 because it needs a new Triton kernel and a training
+  run to validate.
+- Unified backward Triton kernel — reference lands here; kernel lands
+  in 0.6.1 after cluster autotune.
+
 ## 0.5.1 — Packed-training cookbook, repo trim
 
 Documentation and repo-hygiene release. No kernel changes. All 0.5.0 APIs
