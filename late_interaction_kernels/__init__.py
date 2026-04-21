@@ -7,6 +7,8 @@ Training / general MaxSim
     * ``maxsim(Q, D, q_mask=, d_mask=, normalize=)`` — autograd-aware.
     * ``maxsim_inference(...)`` — no saved argmax, inference-only.
     * ``soft_maxsim(...)`` — log-sum-exp relaxation (dense gradient).
+    * ``smooth_maxsim(..., top_k=)`` — top-K argmax save with sparse
+      smoother gradient (middle ground between hard max and LSE).
     * ``maxsim_varlen(...)`` — packed / ragged inputs, autograd-aware.
     * ``maxsim_varlen_inference(...)`` — no saved argmax, inference-only.
 
@@ -14,6 +16,9 @@ Retrieval / fused heads
     * ``maxsim_from_hidden(Q, H_d, W, b=, normalize=)`` — fused D-side
       projection + L2-normalize + MaxSim, inference-only. Saves the
       ``[Nd, Ld, d_out]`` scratch from materializing ``D_proj``.
+    * ``maxsim_from_hidden_train(Q, H_d, W, b=, normalize=)`` — same
+      forward, fully autograd-aware; backs-props into ``H_d``, ``W``,
+      ``b``, ``Q`` without re-materializing ``D_proj``.
     * ``maxsim_topk(Q, D, k, ...)`` — top-k docs + indices in one call.
     * ``plaid_approx_score(qcs, codes, doc_lengths)`` — ColBERTv2 IVF
       approximate scoring step, fused.
@@ -34,7 +39,7 @@ Advanced
     * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
 """
 
-__version__ = "0.6.0.dev0"
+__version__ = "0.7.0.dev0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and
@@ -56,10 +61,11 @@ if _HAS_TRITON:
         set_backward_method,
     )
     from .forward import maxsim_forward
-    from .fused_head import maxsim_from_hidden
+    from .fused_head import maxsim_from_hidden, maxsim_from_hidden_train
     from .matryoshka import maxsim_matryoshka
     from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
+    from .smooth import smooth_maxsim
     from .soft import soft_maxsim
     from .topk import maxsim_topk
     from .varlen import maxsim_varlen, maxsim_varlen_inference
@@ -74,8 +80,8 @@ else:  # pragma: no cover
         )
 
     maxsim = maxsim_inference = maxsim_forward = _needs_triton
-    maxsim_from_hidden = _needs_triton
-    soft_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
+    maxsim_from_hidden = maxsim_from_hidden_train = _needs_triton
+    soft_maxsim = smooth_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
     maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
     plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
@@ -90,6 +96,8 @@ __all__ = [
     "maxsim_inference",
     "maxsim_forward",
     "maxsim_from_hidden",
+    "maxsim_from_hidden_train",
+    "smooth_maxsim",
     "soft_maxsim",
     "maxsim_varlen",
     "maxsim_varlen_inference",
