@@ -376,7 +376,9 @@ releases and full kernel-by-kernel history: [`CHANGELOG.md`](CHANGELOG.md).
   for late-interaction models. `patch_pylate()` hooks directly into it.
 - [**FastPlaid**](https://github.com/lightonai/fast-plaid) — Rust /
   `tch-rs` multi-vector search engine. Different category: end-to-end
-  retrieval engine vs kernel library.
+  retrieval engine vs kernel library. On the shared `bmm → mask → max
+  → sum` scoring step the fused kernel is **1.55–3.56×** faster at
+  `Ld ∈ {512, 1k, 4k, 8k}` ([numbers](docs/benchmarks.md#kernel-level-microbenchmark-on-the-matmul--mask--max--sum-pattern)).
 - [**NextPlaid / ColGrep**](https://github.com/lightonai/next-plaid) —
   LightOn's Rust CLI built on FastPlaid, optimized for on-disk
   code-search indexes.
