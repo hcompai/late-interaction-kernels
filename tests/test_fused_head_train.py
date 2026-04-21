@@ -64,11 +64,18 @@ def test_fused_head_train_forward_parity(normalize):
 @pytest.mark.cuda
 @pytest.mark.parametrize("need_grads", [["Q"], ["H_d"], ["W"], ["Q", "H_d", "W", "b"]])
 def test_fused_head_train_backward_matches_unfused(need_grads):
-    """All requested gradients must match the unfused autograd path."""
+    """All requested gradients must match the unfused autograd path.
+
+    Uses fp32 inputs on purpose: bf16 ties on the inner argmax flip the
+    winning doc-token between the kernel (fp32 D_proj accumulator) and
+    the eager path (bf16 ``F.linear`` → bf16 D_proj), which injects 100 %
+    relative error on a small fraction of ``Q`` rows. With fp32 inputs
+    the winner is deterministic and gradients match tightly.
+    """
     from late_interaction_kernels import maxsim_from_hidden_train
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 16, 64, 256, 64
-    dtype = torch.bfloat16
+    dtype = torch.float32
     torch.manual_seed(0)
 
     def _make():
