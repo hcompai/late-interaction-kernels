@@ -162,6 +162,7 @@ def _maxsim_residual_kernel(
     centroids_ptr,  # [n_centroids, d] fp32 centroid table
     bucket_weights_ptr,  # [n_buckets] fp32 residual bucket values
     out_ptr,  # [Nq, Nd] fp32
+    argmax_ptr,  # [Nq, Nd, Lq] int32 (only written if SAVE_ARGMAX)
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
@@ -183,17 +184,25 @@ def _maxsim_residual_kernel(
     stride_cent_d,
     stride_out_n,
     stride_out_d,
+    stride_am_n,
+    stride_am_d,
+    stride_am_l,
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
     normalize: tl.constexpr,
+    SAVE_ARGMAX: tl.constexpr,
 ):
     """One program per (query, doc). For each doc token we:
     1. Read centroid code, gather the centroid[code, :].
     2. Read packed residual bytes, unpack to `d` fp32 bucket-weight values.
-    3. emb = centroid + residual (clamped to unit-norm via rsqrt).
+    3. emb = centroid + residual (optionally L2-normalized in SRAM).
     4. Tile-accumulate S = Q @ emb.T, run the MaxSim online-max like the
        main forward kernel.
+
+    If SAVE_ARGMAX is set, we also write the per-query-token winning doc-token
+    index to ``argmax[q_idx, d_idx, s]`` — the backward kernel uses this to
+    recompute the winner's ``emb`` without materializing the score tensor.
     """
     pid = tl.program_id(0)
     q_idx = pid // Nd
@@ -230,6 +239,7 @@ def _maxsim_residual_kernel(
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
+        am = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
@@ -277,16 +287,128 @@ def _maxsim_residual_kernel(
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
             S = tl.where(d_valid[None, :], S, float("-inf"))
-            m = tl.maximum(m, tl.max(S, axis=1))
+            tile_max = tl.max(S, axis=1)
+            tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
+            update = tile_max > m
+            m = tl.where(update, tile_max, m)
+            am = tl.where(update, tile_arg, am)
 
         m_finite = m != float("-inf")
         m = tl.where(m_finite & q_valid, m, 0.0)
         score_acc += tl.sum(m)
 
+        if SAVE_ARGMAX:
+            # Clamp argmax for invalid query tokens to 0 so the backward's load
+            # is always in-bounds (the q_mask/length guard will zero the grad anyway).
+            am_safe = tl.where(q_valid, am, 0)
+            tl.store(
+                argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
+                am_safe,
+                mask=q_valid,
+            )
+
     tl.store(out_ptr + q_idx * stride_out_n + d_idx * stride_out_d, score_acc)
 
 
-def maxsim_residual(
+# -----------------------------------------------------------------------------
+# Backward: grad_Q for maxsim_residual
+# -----------------------------------------------------------------------------
+
+
+@triton.jit
+def _maxsim_residual_bwd_dQ_kernel(
+    argmax_ptr,  # [Nq, Nd, Lq] int32
+    grad_s_ptr,  # [Nq, Nd] fp32
+    codes_ptr,  # [Nd, Ld]  int64 centroid codes
+    residuals_ptr,  # [Nd, Ld, packed_dim] uint8
+    centroids_ptr,  # [n_centroids, d] fp32
+    bucket_weights_ptr,  # [n_buckets] fp32
+    grad_Qhat_ptr,  # [Nq, Lq, d] fp32 output
+    Nq: tl.constexpr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    nbits: tl.constexpr,
+    codes_per_byte: tl.constexpr,
+    stride_am_n,
+    stride_am_d,
+    stride_am_l,
+    stride_gs_n,
+    stride_gs_d,
+    stride_codes_n,
+    stride_codes_l,
+    stride_res_n,
+    stride_res_l,
+    stride_res_p,
+    stride_cent_c,
+    stride_cent_d,
+    stride_gq_n,
+    stride_gq_l,
+    stride_gq_k,
+    normalize: tl.constexpr,
+):
+    """One program per (q_idx, s). For each doc j:
+      1. Load argmax[q,j,s] = t (the winning doc token).
+      2. Gather centroid[codes[j,t]] and unpack residual bucket values.
+      3. emb = centroid + residual (optionally L2-normalized).
+      4. acc += grad_scores[q, j] * emb.
+
+    This gives grad w.r.t. the *normalized* Q (if normalize=True). The
+    Python wrapper applies the Q-side L2-norm Jacobian.
+    """
+    pid = tl.program_id(0)
+    q_idx = pid // Lq
+    s = pid % Lq
+
+    k_off = tl.arange(0, d_pad)
+    k_mask = k_off < d
+
+    byte_idx = (k_off // codes_per_byte).to(tl.int32)
+    slot_idx = (k_off % codes_per_byte).to(tl.int32)
+    shift = (slot_idx * nbits).to(tl.int32)
+    code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
+
+    acc = tl.zeros([d_pad], dtype=tl.float32)
+
+    for j in range(0, Nd):
+        gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
+        t = tl.load(argmax_ptr + q_idx * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+
+        cent_code = tl.load(codes_ptr + j * stride_codes_n + t * stride_codes_l).to(tl.int32)
+        cent = tl.load(
+            centroids_ptr + cent_code * stride_cent_c + k_off * stride_cent_d,
+            mask=k_mask,
+            other=0.0,
+        ).to(tl.float32)
+        byte_vals = tl.load(
+            residuals_ptr + j * stride_res_n + t * stride_res_l + byte_idx * stride_res_p,
+            mask=k_mask,
+            other=0,
+        ).to(tl.int32)
+        bucket_codes = (byte_vals >> shift) & code_mask
+        bucket_vals = tl.load(
+            bucket_weights_ptr + bucket_codes,
+            mask=k_mask,
+            other=0.0,
+        ).to(tl.float32)
+        emb = cent + bucket_vals
+
+        if normalize:
+            en = tl.sum(emb * emb)
+            einv = 1.0 / tl.sqrt(tl.maximum(en, 1e-12))
+            emb = emb * einv
+
+        acc += gs * emb
+
+    tl.store(
+        grad_Qhat_ptr + q_idx * stride_gq_n + s * stride_gq_l + k_off * stride_gq_k,
+        acc,
+        mask=k_mask,
+    )
+
+
+def _maxsim_residual_forward(
     Q: torch.Tensor,
     codes: torch.Tensor,
     residuals: torch.Tensor,
@@ -294,42 +416,12 @@ def maxsim_residual(
     centroids: torch.Tensor,
     bucket_weights: torch.Tensor,
     nbits: int,
-    *,
-    normalize: bool = True,
-) -> torch.Tensor:
-    """Fused PLAID residual-decompression + MaxSim.
-
-    Decompresses PLAID / ColBERTv2 compressed embeddings on-the-fly in
-    SRAM and scores them against the query — the exact-rerank step, fused
-    into a single Triton kernel callable from Python.
-
-    Compressed format (following the PLAID / ColBERTv2 convention):
-
-    * ``codes[n, t]`` is an integer index into ``centroids`` for token ``t``
-      of doc ``n``.
-    * ``residuals[n, t, :]`` is ``ceil(d * nbits / 8)`` bytes; each byte packs
-      ``8 / nbits`` bucket indices (little-endian within the byte).
-    * ``bucket_weights[b]`` gives the scalar quantization offset added onto
-      the centroid feature.
-
-    Args:
-        Q: ``[Nq, Lq, d]`` query embeddings (fp16/bf16/fp32).
-        codes: ``[Nd, max_Ld]`` int64 centroid codes.
-        residuals: ``[Nd, max_Ld, packed_dim]`` uint8. ``packed_dim = d * nbits / 8``.
-        doc_lengths: ``[Nd]`` int64 real lengths.
-        centroids: ``[n_centroids, d]`` fp32 centroid table.
-        bucket_weights: ``[n_buckets]`` fp32. ``n_buckets = 2 ** nbits``.
-        nbits: one of ``{2, 4, 8}``.
-        normalize: if True, L2-normalize Q and the reconstructed embedding
-            (standard ColBERTv2 / PLAID convention).
-
-    Returns:
-        scores: ``[Nq, Nd]`` fp32.
-    """
+    normalize: bool,
+    save_argmax: bool,
+):
+    """Launcher used by both the public inference API and the autograd wrapper."""
     if nbits not in (2, 4, 8):
         raise ValueError(f"nbits must be 2, 4, or 8; got {nbits}")
-    if Q.dim() == 2:
-        Q = Q.unsqueeze(0)
     if codes.dim() != 2:
         raise ValueError("codes must be [Nd, max_Ld]")
     if residuals.dim() != 3:
@@ -357,9 +449,15 @@ def maxsim_residual(
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
+    if save_argmax:
+        argmax = torch.empty(Nq, Nd, Lq, device=Q.device, dtype=torch.int32)
+    else:
+        argmax = torch.empty(1, device=Q.device, dtype=torch.int32)  # dummy
 
     BLOCK_Q = 32 if Lq >= 32 else max(16, next_pow2(Lq))
     BLOCK_D = 64 if max_Ld >= 64 else max(16, next_pow2(max_Ld))
+
+    am_strides = (argmax.stride(0), argmax.stride(1), argmax.stride(2)) if save_argmax else (0, 0, 0)
 
     grid = (Nq * Nd,)
     _maxsim_residual_kernel[grid](
@@ -370,6 +468,7 @@ def maxsim_residual(
         centroids,
         bucket_weights,
         out,
+        argmax,
         Nq,
         Nd,
         Lq,
@@ -391,14 +490,211 @@ def maxsim_residual(
         centroids.stride(1),
         out.stride(0),
         out.stride(1),
+        am_strides[0],
+        am_strides[1],
+        am_strides[2],
         BLOCK_Q=BLOCK_Q,
         BLOCK_D=BLOCK_D,
         COMPUTE_DTYPE=tl_dtype,
         normalize=normalize,
+        SAVE_ARGMAX=save_argmax,
         num_warps=4,
         num_stages=2,
     )
-    return out
+    return out, (argmax if save_argmax else None), (Q, codes, residuals, centroids, bucket_weights)
+
+
+class _MaxSimResidualFn(torch.autograd.Function):
+    """Autograd wrapper for ``maxsim_residual`` — only ``Q`` is differentiable.
+
+    ``codes`` / ``residuals`` are integer tensors (not differentiable).
+    ``centroids`` and ``bucket_weights`` are typically frozen k-means
+    quantization artefacts; we do not propagate gradient into them.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        Q,
+        codes,
+        residuals,
+        doc_lengths,
+        centroids,
+        bucket_weights,
+        nbits,
+        normalize,
+    ):
+        scores, argmax, packed = _maxsim_residual_forward(
+            Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, True
+        )
+        Qc, codes_c, residuals_c, centroids_c, bucket_weights_c = packed
+        ctx.save_for_backward(Qc, codes_c, residuals_c, centroids_c, bucket_weights_c, argmax)
+        ctx.nbits = nbits
+        ctx.normalize = normalize
+        return scores
+
+    @staticmethod
+    def backward(ctx, grad_scores):
+        Q, codes, residuals, centroids, bucket_weights, argmax = ctx.saved_tensors
+        nbits = ctx.nbits
+        normalize = ctx.normalize
+
+        grad_scores = grad_scores.contiguous().to(torch.float32)
+        Nq, Lq, d = Q.shape
+        Nd = codes.shape[0]
+        d_pad = next_pow2(d)
+        codes_per_byte = 8 // nbits
+
+        grad_Qhat = torch.zeros(Nq, Lq, d, device=Q.device, dtype=torch.float32)
+
+        grid = (Nq * Lq,)
+        _maxsim_residual_bwd_dQ_kernel[grid](
+            argmax,
+            grad_scores,
+            codes,
+            residuals,
+            centroids,
+            bucket_weights,
+            grad_Qhat,
+            Nq,
+            Nd,
+            Lq,
+            d,
+            d_pad,
+            nbits,
+            codes_per_byte,
+            argmax.stride(0),
+            argmax.stride(1),
+            argmax.stride(2),
+            grad_scores.stride(0),
+            grad_scores.stride(1),
+            codes.stride(0),
+            codes.stride(1),
+            residuals.stride(0),
+            residuals.stride(1),
+            residuals.stride(2),
+            centroids.stride(0),
+            centroids.stride(1),
+            grad_Qhat.stride(0),
+            grad_Qhat.stride(1),
+            grad_Qhat.stride(2),
+            normalize=normalize,
+            num_warps=4,
+            num_stages=2,
+        )
+
+        if normalize:
+            # grad_Qhat is gradient w.r.t. Q_hat = Q / ||Q||. Apply the
+            # Q-side L2-normalize Jacobian:
+            #   d Qhat / d Q = (I - Qhat Qhat^T) / ||Q||
+            q_norm = torch.linalg.vector_norm(Q.float(), dim=-1, keepdim=True).clamp_min(1e-6)
+            Q_hat = Q.float() / q_norm
+            proj = (grad_Qhat * Q_hat).sum(-1, keepdim=True) * Q_hat
+            grad_Q = (grad_Qhat - proj) / q_norm
+        else:
+            grad_Q = grad_Qhat
+
+        return (
+            grad_Q.to(Q.dtype),  # Q
+            None,  # codes
+            None,  # residuals
+            None,  # doc_lengths
+            None,  # centroids
+            None,  # bucket_weights
+            None,  # nbits
+            None,  # normalize
+        )
+
+
+def maxsim_residual(
+    Q: torch.Tensor,
+    codes: torch.Tensor,
+    residuals: torch.Tensor,
+    doc_lengths: torch.Tensor,
+    centroids: torch.Tensor,
+    bucket_weights: torch.Tensor,
+    nbits: int,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Fused PLAID residual-decompression + MaxSim (autograd-aware on Q).
+
+    Decompresses PLAID / ColBERTv2 compressed embeddings on-the-fly in
+    SRAM and scores them against the query — the exact-rerank step, fused
+    into a single Triton kernel.
+
+    Compressed format (following the PLAID / ColBERTv2 convention):
+
+    * ``codes[n, t]`` is an integer index into ``centroids`` for token ``t``
+      of doc ``n``.
+    * ``residuals[n, t, :]`` is ``ceil(d * nbits / 8)`` bytes; each byte packs
+      ``8 / nbits`` bucket indices (little-endian within the byte).
+    * ``bucket_weights[b]`` gives the scalar quantization offset added onto
+      the centroid feature.
+
+    Args:
+        Q: ``[Nq, Lq, d]`` query embeddings (fp16/bf16/fp32). Requires-grad
+            is honored via a fused backward (see Autograd below).
+        codes: ``[Nd, max_Ld]`` int64 centroid codes.
+        residuals: ``[Nd, max_Ld, packed_dim]`` uint8. ``packed_dim = d * nbits / 8``.
+        doc_lengths: ``[Nd]`` int64 real lengths.
+        centroids: ``[n_centroids, d]`` fp32 centroid table.
+        bucket_weights: ``[n_buckets]`` fp32. ``n_buckets = 2 ** nbits``.
+        nbits: one of ``{2, 4, 8}``.
+        normalize: if True, L2-normalize Q and the reconstructed embedding
+            (standard ColBERTv2 / PLAID convention). Backward applies the
+            Q-side L2-norm Jacobian.
+
+    Returns:
+        scores: ``[Nq, Nd]`` fp32.
+
+    Autograd
+    --------
+    Only ``Q`` is treated as differentiable. ``codes`` / ``residuals`` are
+    integer tensors; ``centroids`` and ``bucket_weights`` are typically
+    frozen post-k-means and no gradient is propagated into them. The fused
+    backward kernel recovers the winning doc token per ``(query, doc, q_tok)``
+    from a saved argmax buffer, re-decompresses its embedding in SRAM, and
+    accumulates ``grad_Q += grad_scores * emb`` — no dense unpack, no
+    ``[Nq, Nd, Lq, Ld]`` scratch.
+
+    Use ``maxsim_residual_inference`` if you don't need gradients and want
+    to skip saving the argmax buffer.
+    """
+    if Q.dim() == 2:
+        Q = Q.unsqueeze(0)
+    if Q.requires_grad:
+        return _MaxSimResidualFn.apply(
+            Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize
+        )
+    scores, _, _ = _maxsim_residual_forward(
+        Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
+    )
+    return scores
+
+
+def maxsim_residual_inference(
+    Q: torch.Tensor,
+    codes: torch.Tensor,
+    residuals: torch.Tensor,
+    doc_lengths: torch.Tensor,
+    centroids: torch.Tensor,
+    bucket_weights: torch.Tensor,
+    nbits: int,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Same as ``maxsim_residual`` but skips the argmax save (no autograd).
+
+    Use this for pure reranking / inference — it avoids a ``[Nq, Nd, Lq]``
+    int32 buffer that would otherwise be reserved for the backward pass.
+    """
+    if Q.dim() == 2:
+        Q = Q.unsqueeze(0)
+    scores, _, _ = _maxsim_residual_forward(
+        Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
+    )
+    return scores
 
 
 # Reference implementations live in ``late_interaction_kernels.reference``
@@ -413,5 +709,6 @@ __all__ = [
     "plaid_approx_score",
     "plaid_approx_score_reference",
     "maxsim_residual",
+    "maxsim_residual_inference",
     "maxsim_residual_reference",
 ]

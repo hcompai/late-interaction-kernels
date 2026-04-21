@@ -1,1 +1,11 @@
 blank_issues_enabled: false
+contact_links:
+  - name: PyLate drop-in docs
+    url: https://github.com/hcompai/late-interaction-kernels/blob/main/README.md#pylate-drop-in
+    about: How patch_pylate() works and which PyLate version we require (>= 1.3.3).
+  - name: Supported models
+    url: https://github.com/hcompai/late-interaction-kernels/blob/main/docs/supported_models.md
+    about: Which ColBERT / ColPali / ModernColBERT / LateOn-Code / mxbai-edge models we accelerate today.
+  - name: Security report
+    url: https://github.com/hcompai/late-interaction-kernels/blob/main/SECURITY.md
+    about: Private vulnerability disclosure policy — please do NOT open a public issue for security reports.

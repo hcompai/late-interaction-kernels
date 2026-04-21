@@ -7,7 +7,8 @@ Training / general MaxSim
     * ``maxsim(Q, D, q_mask=, d_mask=, normalize=)`` — autograd-aware.
     * ``maxsim_inference(...)`` — no saved argmax, inference-only.
     * ``soft_maxsim(...)`` — log-sum-exp relaxation (dense gradient).
-    * ``maxsim_varlen(...)`` — packed / ragged inputs.
+    * ``maxsim_varlen(...)`` — packed / ragged inputs, autograd-aware.
+    * ``maxsim_varlen_inference(...)`` — no saved argmax, inference-only.
 
 Retrieval
     * ``maxsim_topk(Q, D, k, ...)`` — top-k docs + indices in one call.
@@ -15,7 +16,9 @@ Retrieval
       approximate scoring step, fused.
     * ``maxsim_residual(Q, codes, residuals, ...)`` — fused PLAID /
       ColBERTv2 2/4/8-bit decompression + L2-normalize + MaxSim (exact
-      rerank step).
+      rerank step). Autograd-aware on Q; lets you train directly on
+      compressed doc embeddings.
+    * ``maxsim_residual_inference(...)`` — no saved argmax, inference-only.
 
 Late-interaction variants
     * ``maxsim_matryoshka(Q, D, dims=[...])`` — multi-dim scoring in one pass.
@@ -28,7 +31,7 @@ Advanced
     * ``set_backward_method("auto" | "csr" | "atomic")`` selects the grad_D path.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # The Triton kernels are not importable on platforms without Triton (macOS,
 # Windows without a CUDA build). We still want ``import late_interaction_kernels`` and
@@ -51,11 +54,11 @@ if _HAS_TRITON:
     )
     from .forward import maxsim_forward
     from .matryoshka import maxsim_matryoshka
-    from .plaid import maxsim_residual, plaid_approx_score
+    from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
     from .pylate_compat import patch_pylate, unpatch_pylate
     from .soft import soft_maxsim
     from .topk import maxsim_topk
-    from .varlen import maxsim_varlen
+    from .varlen import maxsim_varlen, maxsim_varlen_inference
     from .xtr import maxsim_xtr
 else:  # pragma: no cover
 
@@ -67,9 +70,9 @@ else:  # pragma: no cover
         )
 
     maxsim = maxsim_inference = maxsim_forward = _needs_triton
-    soft_maxsim = maxsim_varlen = _needs_triton
+    soft_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
     maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
-    plaid_approx_score = maxsim_residual = _needs_triton
+    plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
 
@@ -83,10 +86,12 @@ __all__ = [
     "maxsim_forward",
     "soft_maxsim",
     "maxsim_varlen",
+    "maxsim_varlen_inference",
     # retrieval
     "maxsim_topk",
     "plaid_approx_score",
     "maxsim_residual",
+    "maxsim_residual_inference",
     # variants
     "maxsim_matryoshka",
     "maxsim_xtr",

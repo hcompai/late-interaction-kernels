@@ -17,9 +17,11 @@ run() {
 }
 
 run python benchmarks/bench_forward.py          --outdir "${OUTDIR}"
+run python benchmarks/bench_inference_edge.py   --outdir "${OUTDIR}"
 run python benchmarks/bench_backward_method.py  --outdir "${OUTDIR}"
 run python benchmarks/bench_normalize.py        --outdir "${OUTDIR}"
 run python benchmarks/bench_new_kernels.py      --outdir "${OUTDIR}"
+run python benchmarks/bench_backward_0_5.py     --outdir "${OUTDIR}"
 run python benchmarks/bench_moderncolbert.py    --outdir "${OUTDIR}"
 run python benchmarks/bench_cached_maxsim.py    --outdir "${OUTDIR}"
 

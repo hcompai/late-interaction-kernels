@@ -35,6 +35,13 @@ SHAPES = [
     ("train-batch-128", 128, 128, 32, 300, 128),
     ("large-d-512", 1, 1000, 32, 300, 512),
     ("large-d-1024", 1, 500, 32, 300, 1024),
+    # Small-d shapes — LateOn-Code-edge (d=48) and mxbai-edge (d=64) style
+    # rerankers. Small d makes the GPU HBM-bound on the Q/D loads, so
+    # fusion gives a smaller win than at d=128 but memory matters more.
+    ("lateon-code-edge-rerank", 1, 1000, 32, 2048, 48),
+    ("lateon-code-edge-big", 1, 4000, 32, 2048, 48),
+    ("mxbai-edge-rerank", 1, 1000, 32, 300, 64),
+    ("mxbai-edge-corpus-10k", 1, 10000, 32, 300, 64),
 ]
 
 

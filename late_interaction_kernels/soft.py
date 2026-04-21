@@ -144,37 +144,42 @@ def _soft_maxsim_kernel(
     tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
 
-def soft_maxsim(
+def _soft_maxsim_reference(
     Q: torch.Tensor,
     D: torch.Tensor,
-    q_mask: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    beta: float = 10.0,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    beta: float,
 ) -> torch.Tensor:
-    """Soft (log-sum-exp) approximation of MaxSim.
+    """Pure-PyTorch reference implementation of soft-MaxSim.
 
-    As `beta -> inf`, the result converges to hard `maxsim`. For training it
-    gives denser gradients (all doc tokens contribute) at the cost of a tiny
-    bias.
-
-    Returns an fp32 tensor of shape [Nq, Nd] (or squeezed).
+    Used for:
+      * fp64 inputs (Triton tensor-core dot doesn't support fp64)
+      * CPU inputs (no CUDA required)
+      * the autograd backward path
     """
-    q_was_2d = Q.dim() == 2
-    d_was_2d = D.dim() == 2
-    if q_was_2d:
-        Q = Q.unsqueeze(0)
-    if d_was_2d:
-        D = D.unsqueeze(0)
-    if q_mask is not None and q_mask.dim() == 1:
-        q_mask = q_mask.unsqueeze(0)
-    if d_mask is not None and d_mask.dim() == 1:
-        d_mask = d_mask.unsqueeze(0)
+    # Always accumulate in at least fp32 to match the Triton path's output
+    # dtype and numerical behavior. fp64 inputs stay in fp64 for gradcheck.
+    acc_dtype = Q.dtype if Q.dtype == torch.float64 else torch.float32
+    S = torch.einsum("ild,jtd->ijlt", Q.to(acc_dtype), D.to(acc_dtype)) * beta
+    if d_mask is not None:
+        S = S.masked_fill(~d_mask.bool()[None, :, None, :], float("-inf"))
+    lse = torch.logsumexp(S, dim=-1) / beta  # [Nq, Nd, Lq]
+    if q_mask is not None:
+        lse = lse.masked_fill(~q_mask.bool()[:, None, :], 0.0)
+    return lse.sum(dim=-1)
 
+
+def _soft_maxsim_triton(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    beta: float,
+) -> torch.Tensor:
     Nq, Lq, d = Q.shape
     Nd, Ld, _ = D.shape
 
-    Q = Q.contiguous()
-    D = D.contiguous()
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
     q_mask_i8 = q_mask.contiguous().to(torch.int8) if has_q_mask else Q
@@ -216,6 +221,117 @@ def soft_maxsim(
         has_d_mask,
         COMPUTE_DTYPE=tl_dtype,
     )
+    return scores
+
+
+class _SoftMaxSimFn(torch.autograd.Function):
+    """Autograd wrapper: Triton forward (fast) + PyTorch reference backward.
+
+    The backward recomputes the per-pair softmax weights in fp32 on the fly.
+    This is O(Nq·Nd·Lq·Ld·d) FLOPs but avoids materializing the [Nq,Nd,Lq,Ld]
+    attention tensor in the forward — we only keep it alive briefly during
+    the backward. Good enough for PyLate training regimes where Ld ≤ 512.
+    """
+
+    @staticmethod
+    def forward(ctx, Q, D, q_mask, d_mask, beta):
+        # Only use the Triton kernel for fp16 / bf16 — the tensor-core dot
+        # uses an fp16 accumulator for fp32 inputs (see `pick_compute_dtype`),
+        # which would make the forward inconsistent with the fp32 backward.
+        # For fp32 / fp64 / CPU, fall back to the pure-PyTorch reference so
+        # `torch.autograd.gradcheck` sees matching precision on both sides.
+        use_triton = Q.is_cuda and Q.dtype in (torch.float16, torch.bfloat16) and D.dtype == Q.dtype
+        if use_triton:
+            scores = _soft_maxsim_triton(Q, D, q_mask, d_mask, beta)
+        else:
+            scores = _soft_maxsim_reference(Q, D, q_mask, d_mask, beta)
+        ctx.save_for_backward(Q, D, q_mask, d_mask)
+        ctx.beta = float(beta)
+        return scores
+
+    @staticmethod
+    def backward(ctx, grad_scores):
+        Q, D, q_mask, d_mask = ctx.saved_tensors
+        beta = ctx.beta
+
+        # Recompute in at least fp32 for a stable, deterministic backward —
+        # the soft path is smooth in every (s, t) pair so the grad is dense
+        # and we can afford one reference pass. fp64 inputs stay in fp64
+        # so `torch.autograd.gradcheck` sees a matching precision on both
+        # sides of the finite-difference comparison.
+        acc_dtype = Q.dtype if Q.dtype == torch.float64 else torch.float32
+        Qf = Q.to(acc_dtype)
+        Df = D.to(acc_dtype)
+
+        S = torch.einsum("ild,jtd->ijlt", Qf, Df) * beta  # [Nq, Nd, Lq, Ld]
+        if d_mask is not None:
+            S = S.masked_fill(~d_mask.bool()[None, :, None, :], float("-inf"))
+
+        # softmax over doc-token dimension — these are the weights that
+        # each (query_token, doc_token) pair contributes to the score.
+        W = torch.softmax(S, dim=-1)  # [Nq, Nd, Lq, Ld]
+        if q_mask is not None:
+            W = W * q_mask.bool()[:, None, :, None].to(W.dtype)
+
+        # Distribute grad_scores ∈ [Nq, Nd] back through the sum over Lq
+        # and the softmax over Ld. Grad w.r.t. (query_token s, dim d) is
+        #   Σ_{j, t} grad_scores[i, j] · W[i, j, s, t] · D[j, t, d].
+        g = grad_scores.to(acc_dtype)  # [Nq, Nd]
+        # [Nq, Nd, Lq, Ld] * [Nq, Nd, 1, 1]
+        Wg = W * g[:, :, None, None]
+        grad_Q = torch.einsum("ijlt,jtd->ild", Wg, Df)
+        grad_D = torch.einsum("ijlt,ild->jtd", Wg, Qf)
+
+        return grad_Q.to(Q.dtype), grad_D.to(D.dtype), None, None, None
+
+
+def soft_maxsim(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    beta: float = 10.0,
+) -> torch.Tensor:
+    """Soft (log-sum-exp) approximation of MaxSim, autograd-aware.
+
+    As ``beta -> inf``, the result converges to hard :func:`maxsim`. During
+    training this gives denser gradients (every doc token contributes
+    through the softmax) at the cost of a tiny forward bias.
+
+    Forward uses the Triton kernel when possible; backward is a stable
+    fp32 PyTorch recomputation of the softmax weights — deterministic and
+    autograd-checked.
+
+    Returns an fp32 tensor of shape ``[Nq, Nd]`` (squeezed to match 2-D
+    inputs, like :func:`maxsim`).
+    """
+    q_was_2d = Q.dim() == 2
+    d_was_2d = D.dim() == 2
+    if q_was_2d:
+        Q = Q.unsqueeze(0)
+    if d_was_2d:
+        D = D.unsqueeze(0)
+    if q_mask is not None and q_mask.dim() == 1:
+        q_mask = q_mask.unsqueeze(0)
+    if d_mask is not None and d_mask.dim() == 1:
+        d_mask = d_mask.unsqueeze(0)
+
+    if Q.shape[-1] != D.shape[-1]:
+        raise ValueError(
+            f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "
+            f"vs D.shape[-1]={D.shape[-1]}."
+        )
+    if Q.device != D.device:
+        raise ValueError(
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
+        )
+
+    Q = Q.contiguous()
+    D = D.contiguous()
+    q_mask_c = q_mask.contiguous().to(torch.bool) if q_mask is not None else None
+    d_mask_c = d_mask.contiguous().to(torch.bool) if d_mask is not None else None
+
+    scores = _SoftMaxSimFn.apply(Q, D, q_mask_c, d_mask_c, beta)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())
