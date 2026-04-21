@@ -90,7 +90,115 @@ def test_unified_reference_dtype_roundtrip():
     assert gd.dtype == torch.bfloat16
 
 
-def test_unified_kernel_raises_not_implemented():
-    """The Triton kernel is a 0.6.1 deliverable; for now the entry-point raises."""
-    with pytest.raises(NotImplementedError, match="0.6.1"):
-        maxsim_backward_unified()
+def test_unified_kernel_rejects_unknown_method():
+    with pytest.raises(ValueError, match="atomic"):
+        maxsim_backward_unified(
+            torch.zeros(1, 1),
+            torch.zeros(1, 1, 1),
+            torch.zeros(1, 1, 1),
+            torch.zeros(1, 1, dtype=torch.int32),
+            method="nope",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# CUDA parity: unified Triton kernel == two-pass Triton kernel                #
+# --------------------------------------------------------------------------- #
+
+pytestmark_cuda = pytest.mark.cuda
+
+
+PARITY_SHAPES = [
+    # (Nq, Nd, Lq, Ld, d)
+    (1, 4, 32, 64, 128),
+    (4, 8, 32, 128, 128),
+    (16, 16, 32, 200, 128),
+    (32, 32, 32, 200, 128),  # PyLate in-batch-negatives, B=32
+    (64, 64, 32, 200, 128),  # B=64
+    (8, 8, 128, 1024, 128),  # long doc
+    (2, 2, 1024, 1024, 128),  # ColPali-ish
+    (4, 4, 32, 256, 48),  # LateOn-Code-edge
+    (4, 4, 32, 256, 256),  # fatter d
+]
+PARITY_IDS = [f"Nq{s[0]}_Nd{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}" for s in PARITY_SHAPES]
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("shape", PARITY_SHAPES, ids=PARITY_IDS)
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_unified_kernel_matches_two_pass(shape, dtype, rel):
+    """Unified Triton kernel == two-pass Triton kernel, bitwise parity.
+
+    Both paths use fp32 atomics into grad_D, so the summation order can
+    differ and introduce tiny fp32 drift. Tight tolerance is fine: the
+    per-element contributions are identical.
+    """
+    from late_interaction_kernels.backward import maxsim_backward
+    from late_interaction_kernels.forward import _run_forward
+
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=dtype)
+    grad_s = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
+
+    _, argmax = _run_forward(Q, D, q_mask=None, d_mask=None, save_argmax=True)
+
+    gQ_atom, gD_atom = maxsim_backward(grad_s, Q, D, argmax, None, None, method="atomic")
+    gQ_uni, gD_uni = maxsim_backward_unified(grad_s, Q, D, argmax, q_mask=None)
+
+    # grad_Q path is structurally identical to the two-pass dQ kernel —
+    # must match exactly.
+    torch.testing.assert_close(gQ_uni.float(), gQ_atom.float(), atol=1e-5, rtol=1e-5)
+    # grad_D uses fp32 atomics in both variants; the order of atomic_adds
+    # can differ slightly, giving tiny fp32 drift. 5e-4 relative is the
+    # standard tolerance we use elsewhere.
+    assert rel(gD_uni.float(), gD_atom.float()) < 5e-4
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("shape", [(8, 16, 32, 128, 128), (32, 32, 32, 200, 128)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_unified_kernel_matches_two_pass_with_qmask(shape, dtype, rel):
+    from late_interaction_kernels.backward import maxsim_backward
+    from late_interaction_kernels.forward import _run_forward
+
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(1)
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=dtype)
+    grad_s = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
+    q_mask = torch.rand(Nq, Lq, device="cuda") > 0.3  # ~70% kept
+    q_mask_i8 = q_mask.to(torch.int8)
+
+    _, argmax = _run_forward(Q, D, q_mask=q_mask_i8, d_mask=None, save_argmax=True)
+
+    gQ_atom, gD_atom = maxsim_backward(grad_s, Q, D, argmax, q_mask_i8, None, method="atomic")
+    gQ_uni, gD_uni = maxsim_backward_unified(grad_s, Q, D, argmax, q_mask=q_mask_i8)
+
+    torch.testing.assert_close(gQ_uni.float(), gQ_atom.float(), atol=1e-5, rtol=1e-5)
+    assert rel(gD_uni.float(), gD_atom.float()) < 5e-4
+
+
+@pytest.mark.cuda
+def test_unified_end_to_end_autograd():
+    """``maxsim(...)`` with method='unified' must train identically to 'atomic'."""
+    from late_interaction_kernels import maxsim, set_backward_method
+
+    torch.manual_seed(2)
+    Q_ref = torch.randn(8, 32, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    D_ref = torch.randn(8, 200, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+
+    Q_uni = Q_ref.detach().clone().requires_grad_(True)
+    D_uni = D_ref.detach().clone().requires_grad_(True)
+
+    set_backward_method("atomic")
+    maxsim(Q_ref, D_ref).sum().backward()
+    set_backward_method("unified")
+    maxsim(Q_uni, D_uni).sum().backward()
+    set_backward_method("auto")  # reset
+
+    rel_q = (Q_uni.grad.float() - Q_ref.grad.float()).abs().max() / max(1e-6, Q_ref.grad.float().abs().max())
+    rel_d = (D_uni.grad.float() - D_ref.grad.float()).abs().max() / max(1e-6, D_ref.grad.float().abs().max())
+    assert rel_q < 1e-4, f"grad_Q drift = {rel_q:.2e}"
+    assert rel_d < 5e-4, f"grad_D drift = {rel_d:.2e}"
