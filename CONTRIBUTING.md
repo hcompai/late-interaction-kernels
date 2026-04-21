@@ -17,7 +17,12 @@ Open an issue with:
 
 If you see slow performance on a GPU we don't have a shortlist for:
 
-1. Run `python benchmarks/bench_forward.py` on your shape of interest.
+1. Run the benchmark matching your shape of interest:
+   - `python benchmarks/bench_forward.py` — PyLate training shapes (d=128).
+   - `python benchmarks/bench_inference_edge.py` — small-d rerankers
+     (LateOn-Code-edge d=48, mxbai-edge d=64) at long context & high BS.
+   - `python benchmarks/bench_backward_0_5.py` — fused backward
+     (`maxsim_residual`, `maxsim_varlen`) vs the reference autograd path.
 2. Add a shortlist entry to `late_interaction_kernels/_autotune.py` keyed
    on the device name prefix.
 3. Re-run the benchmark and include before / after in the PR.
