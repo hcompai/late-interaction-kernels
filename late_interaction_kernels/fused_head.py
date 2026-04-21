@@ -379,44 +379,46 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
 
         grad_scores = grad_scores.contiguous().to(torch.float32)
 
+        need_Q = ctx.needs_input_grad[0]
+        need_H = ctx.needs_input_grad[1]
+        need_W = ctx.needs_input_grad[2]
+        need_b = ctx.needs_input_grad[3] and b is not None
+
         # argmax is [Nq*Nd, Lq] → reshape to [Nq, Nd, Lq]
         am = argmax.view(Nq, Nd, Lq).long()
 
-        # Gather H_d at the winning doc-token positions. This is the
-        # only part that touches H_d sparsely; size is
-        # [Nq, Nd, Lq, d_model]. For typical shapes (Lq=32, Nq=Nd=128,
-        # d_model=768) that's 48 MB — tolerable.
+        # Gather H_d at the winning doc-token positions (the only time we
+        # touch H_d during backward). Size [Nq, Nd, Lq, d_model].
         j_idx = torch.arange(Nd, device=H_d.device).view(1, Nd, 1).expand(Nq, Nd, Lq)
         H_win = H_d[j_idx, am]  # [Nq, Nd, Lq, d_model]
 
-        # Rebuild the tiny winners slice of D_proj in fp32 through an
-        # autograd-tracked pipeline so grad flows back into H_d, W, b.
-        # H_win and Q are leaf-ish inputs we need grads for; the rest
-        # (W, b) are parameters.
-        H_win_fp = H_win.detach().to(torch.float32).requires_grad_(H_win.requires_grad or H_d.requires_grad)
-        W_fp = W.detach().to(torch.float32).requires_grad_(W.requires_grad)
-        b_fp = b.detach().to(torch.float32).requires_grad_(b.requires_grad) if b is not None else None
-        Q_fp = Q.detach().to(torch.float32).requires_grad_(Q.requires_grad)
+        # Rebuild the tiny winners slice of D_proj in fp32 with grad tracking
+        # on whichever inputs need it. Saved tensors come back detached,
+        # so we can always set requires_grad freely.
+        H_win_fp = H_win.detach().to(torch.float32)
+        W_fp = W.detach().to(torch.float32)
+        b_fp = b.detach().to(torch.float32) if b is not None else None
+        Q_fp = Q.detach().to(torch.float32)
+        if need_Q:
+            Q_fp.requires_grad_(True)
+        if need_H:
+            H_win_fp.requires_grad_(True)
+        if need_W:
+            W_fp.requires_grad_(True)
+        if need_b:
+            b_fp.requires_grad_(True)
 
         D_win = torch.nn.functional.linear(H_win_fp, W_fp, b_fp)  # [Nq, Nd, Lq, d_out]
         if normalize:
             D_win = torch.nn.functional.normalize(D_win, p=2, dim=-1, eps=1e-12)
 
-        # Score from saved argmax:
-        #   per (i, j, s):  contrib = D_win[i, j, s, :] · Q[i, s, :]
-        #   score[i, j] = sum_s contrib if q_mask == 1 else 0
-        # The fused forward already applied q_mask via the kernel's -inf;
-        # here we reuse the same convention implicitly via grad_scores.
+        # score[i, j] = sum_s  D_win[i, j, s, :] · Q[i, s, :]
+        # (the fused forward already masks query tokens via q_active; we
+        # mirror it here with nothing — grad_scores respects that
+        # because masked rows contribute zero to scores in the forward)
         contrib = (D_win * Q_fp.view(Nq, 1, Lq, d_out)).sum(dim=-1)  # [Nq, Nd, Lq]
         scores_rebuilt = contrib.sum(dim=-1)  # [Nq, Nd]
 
-        # Backprop grad_scores through scores_rebuilt to collect grad_H_win,
-        # grad_W, grad_b, grad_Q_fp.
-        need_Q = ctx.needs_input_grad[0]
-        need_H = ctx.needs_input_grad[1]
-        need_W = ctx.needs_input_grad[2]
-        need_b = ctx.needs_input_grad[3] and b is not None
-        # d_mask and normalize are non-differentiable
         leaves = []
         if need_Q:
             leaves.append(Q_fp)
@@ -451,11 +453,9 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         if need_b:
             gb = next(it)
 
-        # Scatter grad_H_win back into grad_H_d via index_add_.
         grad_H_d = None
         if need_H:
             grad_H_d = torch.zeros(Nd, Ld, d_model, device=H_d.device, dtype=torch.float32)
-            # am_j is [Nq, Lq], gH_win is [Nq, Nd, Lq, d_model]
             for j in range(Nd):
                 idx_j = am[:, j, :]  # [Nq, Lq]
                 cont_j = gH_win[:, j, :, :]  # [Nq, Lq, d_model]
