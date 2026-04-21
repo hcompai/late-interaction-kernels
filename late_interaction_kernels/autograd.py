@@ -134,17 +134,12 @@ def maxsim(
         )
     if Q.device != D.device:
         raise ValueError(
-            f"Q and D must be on the same device; got Q.device={Q.device} vs "
-            f"D.device={D.device}."
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
         )
     if q_mask is not None and q_mask.device != Q.device:
-        raise ValueError(
-            f"q_mask must be on the same device as Q; got {q_mask.device} vs {Q.device}."
-        )
+        raise ValueError(f"q_mask must be on the same device as Q; got {q_mask.device} vs {Q.device}.")
     if d_mask is not None and d_mask.device != D.device:
-        raise ValueError(
-            f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}."
-        )
+        raise ValueError(f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}.")
 
     Q = Q.contiguous()
     D = D.contiguous()
@@ -184,8 +179,7 @@ def maxsim_inference(
         )
     if Q.device != D.device:
         raise ValueError(
-            f"Q and D must be on the same device; got Q.device={Q.device} vs "
-            f"D.device={D.device}."
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
         )
     scores, _ = maxsim_forward(
         Q,

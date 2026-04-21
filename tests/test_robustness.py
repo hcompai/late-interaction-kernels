@@ -286,12 +286,8 @@ def test_very_small_magnitudes_dont_underflow():
     from late_interaction_kernels.reference import maxsim_reference
 
     d = 128
-    Q = torch.nn.functional.normalize(
-        torch.randn(2, 16, d, device="cuda", dtype=torch.float16), p=2, dim=-1
-    )
-    D = torch.nn.functional.normalize(
-        torch.randn(4, 64, d, device="cuda", dtype=torch.float16), p=2, dim=-1
-    )
+    Q = torch.nn.functional.normalize(torch.randn(2, 16, d, device="cuda", dtype=torch.float16), p=2, dim=-1)
+    D = torch.nn.functional.normalize(torch.randn(4, 64, d, device="cuda", dtype=torch.float16), p=2, dim=-1)
     fast = maxsim(Q, D).float()
     ref = maxsim_reference(Q.float(), D.float())
     assert (fast - ref).abs().max().item() / max(1.0, ref.abs().max().item()) < 5e-3

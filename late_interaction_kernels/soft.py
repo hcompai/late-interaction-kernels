@@ -240,11 +240,7 @@ class _SoftMaxSimFn(torch.autograd.Function):
         # which would make the forward inconsistent with the fp32 backward.
         # For fp32 / fp64 / CPU, fall back to the pure-PyTorch reference so
         # `torch.autograd.gradcheck` sees matching precision on both sides.
-        use_triton = (
-            Q.is_cuda
-            and Q.dtype in (torch.float16, torch.bfloat16)
-            and D.dtype == Q.dtype
-        )
+        use_triton = Q.is_cuda and Q.dtype in (torch.float16, torch.bfloat16) and D.dtype == Q.dtype
         if use_triton:
             scores = _soft_maxsim_triton(Q, D, q_mask, d_mask, beta)
         else:
@@ -327,8 +323,7 @@ def soft_maxsim(
         )
     if Q.device != D.device:
         raise ValueError(
-            f"Q and D must be on the same device; got Q.device={Q.device} vs "
-            f"D.device={D.device}."
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
         )
 
     Q = Q.contiguous()
