@@ -347,6 +347,43 @@ fp32 accumulator, 50-iter average, PyTorch 2.8, Triton 3.6, CUDA 12.9.
 See [`docs/benchmarks.md`](docs/benchmarks.md) for the full tables and
 reproduction commands.
 
+### Head-to-head vs `flash-maxsim` (IBM/roipony) — forward
+
+| Shape                                          | late-interaction-kernels | flash-maxsim | Speedup  |
+| ---------------------------------------------- | ------------------------ | ------------ | -------- |
+| rerank-short  (`Nq=1, Nd=1 000, Lq=32, Ld=300`) | 0.096 ms                 | 0.109 ms     | **1.13×** |
+| rerank-long   (`Nd=1 000, Ld=2 048`)            | 0.153 ms                 | 0.168 ms     | **1.10×** |
+| rerank-colpali (`Lq/Ld=1024`)                   | 0.409 ms                 | 0.495 ms     | **1.21×** |
+| rerank-10k    (`Nq=1, Nd=10 000`)               | 0.310 ms                 | 0.324 ms     | **1.05×** |
+| train-in-batch-32                               | 0.087 ms                 | 0.100 ms     | **1.15×** |
+| train-in-batch-128                              | 0.233 ms                 | 0.294 ms     | **1.26×** |
+| edge-d48 (`Nq=1, Nd=4 000, d=48`)               | 0.320 ms                 | 0.341 ms     | **1.07×** |
+| edge-d64 (`Nq=1, Nd=10 000, d=64`)              | 0.190 ms                 | 0.218 ms     | **1.14×** |
+
+`late-interaction-kernels` additionally ships fused **backward**,
+**quantized** (`maxsim_residual`), **ragged** (`maxsim_varlen`),
+**soft** (`soft_maxsim`), and **top-K retrieval** (`maxsim_topk`)
+paths that `flash-maxsim` does not. Reproduce with
+[`benchmarks/bench_flash_maxsim.py`](benchmarks/bench_flash_maxsim.py).
+
+### Unified backward (0.6.0) — PyLate training step wall-clock
+
+The `"unified"` backward kernel is now the default for every shape
+below `B=256`. End-to-end PyLate `Contrastive` step (full loss +
+backward), vanilla PyLate vs monkey-patched:
+
+| Shape                     | vanilla PyLate | 0.6.0 (unified) | End-to-end speedup |
+| ------------------------- | -------------- | --------------- | ------------------ |
+| `B=16,  Ld=200, d=128`    | 1.08 ms        | 0.94 ms         | **1.15×**          |
+| `B=32,  Ld=200, d=128`    | 0.95 ms        | 0.84 ms         | **1.12×**          |
+| `B=64,  Ld=200, d=128`    | 0.97 ms        | 0.84 ms         | **1.15×**          |
+| **`B=128, Ld=200, d=128`**| **3.16 ms**    | **1.19 ms**     | **2.67×**          |
+| `B=32,  Ld=1 024, d=128`  | 1.02 ms        | 0.85 ms         | **1.21×**          |
+| `B=64,  Ld=256, d=48`     | 1.07 ms        | 0.94 ms         | **1.14×**          |
+
+Reproduce with
+[`benchmarks/bench_pylate_training.py --sweep`](benchmarks/bench_pylate_training.py).
+
 ### Reranking / inference
 
 | Shape                                              | late-interaction-kernels | Naive einsum | Speedup   |
@@ -457,10 +494,19 @@ Two `grad_D` paths — `"auto"` picks per shape (default):
 
 ```python
 from late_interaction_kernels import set_backward_method
-set_backward_method("auto")     # heuristic (default)
-set_backward_method("atomic")   # fp32 atomic_add — fast for small / medium
-set_backward_method("csr")      # sort + bucket reduce — wins at long seqs / huge Nd
+set_backward_method("auto")     # heuristic (default — uses "unified" for almost everything)
+set_backward_method("unified")  # 0.6.0: single-pass fused grad_Q + grad_D (FA-2 style)
+set_backward_method("atomic")   # two-pass, fp32 atomic_add grad_D — fallback
+set_backward_method("csr")      # two-pass, sort + bucket reduce — wins at very high contention (B≥256)
 ```
+
+The unified backward was added in 0.6.0 and hoists `Q[i, s, :]` out of
+the inner doc-batch loop, roughly halving HBM read traffic vs the
+two-pass variant. It is now the default for every training shape
+except very high-contention batches (`Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`),
+where CSR's determinism still wins. End-to-end PyLate training step
+speedups range from **1.12× (small batch) to 2.67× (B=128)** over
+unpatched PyLate on H100.
 
 CSR is bitwise-deterministic across runs; atomic drifts by ~1e-6
 relative (the `atomic_add` reduction order depends on the scheduler).

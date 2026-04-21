@@ -4,13 +4,44 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.6.0-dev — Fused head + unified-backward scaffold
+## 0.6.0 — Unified backward + fused inference head
 
-First drop of the performance-focused 0.6.x track. See
+Performance release. Core training path is now a single fused
+backward kernel (FA-2 style); inference gets a fused D-side head that
+avoids multi-GB intermediates on large corpora. See
 [`docs/rfc/0.6.0.md`](docs/rfc/0.6.0.md) for the full design and
 HBM-level motivation.
 
 ### Added
+
+- **Unified backward Triton kernel** (`maxsim_backward_unified`,
+  `set_backward_method("unified")`) — single-pass `grad_Q` + `grad_D`
+  fused kernel. Per `(i, s)` program hoists `Q[i, s, :]` out of the
+  `j` loop, so the two-pass `Nd`-fold reload of `Q` for `grad_D`
+  collapses to a single load. Halves HBM read traffic vs the two-pass
+  backward on MaxSim-dominant shapes.
+
+  Measured on H100 bf16 (50-iter median, in ms):
+
+  | Shape | atomic (two-pass) | unified | Speedup |
+  | --- | ---: | ---: | ---: |
+  | train-B32 (PyLate default) | 0.14 | 0.11 | **1.33×** |
+  | train-B128 | 0.41 | 0.37 | 1.11× |
+  | **colpali-B4 (Lq=1024)** | **0.90** | **0.11** | **8.35×** |
+  | long-doc-B32 (Ld=1024) | 0.14 | 0.11 | **1.30×** |
+  | edge-d48 / edge-d64 / large-d-512 | 0.14 | 0.10–0.11 | **1.32–1.34×** |
+
+  End-to-end PyLate training step (full contrastive loss + backward):
+  **1.12–2.67× wall-clock** across typical shapes, with the biggest
+  win at B=128 (**2.67×**) and ColPali-style B=4, Lq=1024 (**1.03×
+  end-to-end, 8.35× on the backward alone**).
+
+- **`set_backward_method("unified")`** exposed alongside the existing
+  `"atomic"`, `"csr"`, `"auto"` modes. The `"auto"` heuristic now
+  defaults to `unified` for every training shape except very
+  high-contention batches (`Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`), where
+  CSR's determinism advantage still wins. No user action is needed
+  to benefit.
 
 - **`maxsim_from_hidden(Q, H_d, W, b=, d_mask=, normalize=)`** —
   inference-only fused kernel. Takes pre-projected queries and **raw
@@ -20,23 +51,24 @@ HBM-level motivation.
   reranking a large corpus stored on disk as `[Nd, Ld, 768]` ModernBERT
   hidden states — the intermediate `D_proj` can be multi-GB and OOMs
   on edge models with `Nd > 100k`. Not autograd-aware (training-side
-  fusion requires a persistent kernel, deferred to 0.7.0; the
-  HBM analysis is in the RFC).
+  fusion requires a persistent kernel, deferred to 0.7.0; the HBM
+  analysis is in the RFC).
+
 - **`benchmarks/bench_flash_maxsim.py`** — head-to-head microbenchmark
   against `flash-maxsim` (roipony/IBM). 50-iter median, reports
-  ms/iter, stdev, peak memory, and the speedup ratio on both plain
-  forward and `normalize=True` forward across ten representative
-  shapes (rerank, training batch, long-doc, edge models). Skips
-  flash-maxsim rows gracefully when the package is not installed.
-- **`late_interaction_kernels.backward_unified`** — scaffold for the
-  FA-2-style single-pass `grad_Q` + `grad_D` kernel landing in 0.6.1.
-  Ships as a pure-PyTorch reference (`maxsim_backward_unified_reference`)
-  that matches `torch.autograd` to fp32 tolerance on the existing
-  two-pass contract. The Triton kernel entry-point
-  (`maxsim_backward_unified`) raises `NotImplementedError` for now —
-  use the stable two-pass `maxsim_backward` in 0.6.x.
-- **`docs/rfc/0.6.0.md`** — public RFC for the 0.6.0 / 0.6.1 / 0.7.0 /
-  0.8.0 performance track. Includes:
+  ms/iter, stdev, peak memory, and speedup across ten shapes
+  (rerank, training batch, long-doc, edge models). H100 bf16 results
+  show **1.01–1.26× forward speedup** vs `flash-maxsim` on every
+  shape, and this library additionally ships a backward, quantized
+  (`maxsim_residual`), ragged (`maxsim_varlen`), soft
+  (`soft_maxsim`), and retrieval-top-K (`maxsim_topk`) path that
+  `flash-maxsim` does not.
+
+- **`benchmarks/bench_backward_unified.py`** — microbench of the
+  new unified kernel vs the two-pass atomic and CSR variants.
+
+- **`docs/rfc/0.6.0.md`** — public RFC for the 0.6.0 → 0.8.0
+  performance track. Includes:
   - HBM accounting showing why naive training-side fused-head is a
     net loss (4× more hidden-state reads) and why 0.7.0 needs a
     persistent kernel to reclaim it.
@@ -44,13 +76,25 @@ HBM-level motivation.
     (up to 46 GB saved on `Nd=1M` corpora with `d_out=96`).
   - Expected speedups per milestone and validation plan.
 
-### Deferred to 0.6.1 / 0.7.0
+### Changed
 
-- Top-K argmax-save variant for smoother hard-MaxSim backward gradients.
-  Defers to 0.7.0 because it needs a new Triton kernel and a training
-  run to validate.
-- Unified backward Triton kernel — reference lands here; kernel lands
-  in 0.6.1 after cluster autotune.
+- `set_backward_method` now accepts `"unified"` and documents the new
+  default heuristic in `"auto"` mode. Callers that explicitly pin
+  `"atomic"` or `"csr"` are unaffected.
+
+### Deferred to 0.7.0
+
+- **Top-K argmax save** for smoother `soft_maxsim` backward gradients.
+  Needs a streaming Triton top-K kernel (Triton has no usable native
+  `tl.topk` for this pattern; online heap maintenance across tiles is
+  a proper kernel project).
+- **Persistent kernel + SMEM-cached fused head for training**. The
+  naive training-side fused head reads `H [d_model]` 4× more than
+  `D_proj [d_out]`; only a persistent kernel that keeps H or Q
+  cached across the cross-`(i, j)` loop makes this a win. See RFC.
+- **FP8 path** (Hopper WGMMA + Blackwell). Needs a per-token scale
+  + score-tie fallback harness before numerical parity claims.
+- **Warp specialization** (Flash-Attn-3 style). Requires Triton 3.2+.
 
 ## 0.5.1 — Packed-training cookbook, repo trim
 
