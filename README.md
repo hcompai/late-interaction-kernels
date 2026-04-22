@@ -207,6 +207,19 @@ one fused call. Same hyperparameters LightOn uses for long-doc training
 Reproduce with `scripts/sky_lateon_edge.yaml`. Smaller encoder + bigger
 effective batch ⇒ bigger slice for MaxSim ⇒ bigger e2e speedup.
 
+These numbers use `patch_pylate()` — the drop-in that swaps PyLate's
+`colbert_scores` for `maxsim`. **The fused head
+(`maxsim_from_hidden_train`) is not wired in** because PyLate applies
+the `Dense` projection inside the encoder forward, so `colbert_scores`
+only ever sees `[Nd, Ld, d_out]` tensors. A custom trainer that skips
+PyLate's `Dense` and hands raw `[Nd, Ld, d_model]` hidden states to
+`maxsim_from_hidden_train` directly would recover the extra
+`F.linear + normalize` passes — at these shapes that's another ~1–3 ms
+on the step (encoder-bound), but substantially more peak-memory headroom
+at `Ld ≥ 4k` since the `[bs, Ld, d_out]` scratch disappears. See the
+[Fused D-side head section](#fused-d-side-head-for-custom-trainers-with-raw-hidden-states)
+below.
+
 ### End-to-end LateOn / ModernColBERT training (149 M encoder)
 
 `CachedContrastive`, AdamW, bf16, grad-ckpt. Numbers apply equally to
@@ -275,7 +288,19 @@ reranker, or research pipeline.
 `patch_pylate()` does **not** install these — PyLate already stores
 *projected, normalized* token embeddings. Use these when your training
 or inference loop keeps raw `[Nd, Ld, d_model]` ModernBERT / encoder
-hidden states and applies the projection + normalize yourself:
+hidden states and applies the projection + normalize yourself.
+
+**Which API do I pick?**
+
+- `[Nd, Ld, d_out]` already projected + normalized (PyLate, sentence-transformers,
+  most reranking code) → use `MaxSimScorer` / `maxsim` / `maxsim_inference`.
+- `[Nd, Ld, d_model]` raw encoder hidden states + a separate `Dense` projection
+  → use `maxsim_from_hidden(_train)`; it fuses `F.linear + normalize + maxsim`
+  into one kernel and never materializes the `[Nd, Ld, d_out]` scratch.
+
+Only the **D side** is fused. `Q_proj` is expected already projected + normalized
+(query-side scratch is `[Nq, Lq, d_out]` — small, so not worth fusing). The
+asymmetry is deliberate.
 
 | Function                                  | When to use                                           |
 | ----------------------------------------- | ----------------------------------------------------- |
@@ -293,6 +318,15 @@ W.requires_grad_(True)
 scores = maxsim_from_hidden_train(Q_proj, H_d, W, b=b, normalize=True)
 scores.sum().backward()
 ```
+
+**Why the backward is fast.** Forward saves which doc token won MaxSim per
+query token (the argmax), so backward only has to project `H_d` at the
+`Nq · Nd · Lq` winning positions instead of all `Nd · Ld`. For LateOn-Code
+training shapes (`Lq=32, Ld=2048`), that's ≈1.5 % of the matmul work —
+where the 4.6× fwd+bwd speedup comes from. The win shrinks as `Nq · Lq /
+Ld` grows toward 1: roughly square, pure-reranking shapes (`Nq · Lq ≈ Ld`)
+see little benefit, and small-`d_model` shapes (`<128`) see little benefit
+because the `F.linear` pass is already cheap.
 
 Full derivation + memory accounting:
 [`docs/design.md` → Fused heads](docs/design.md#fused-heads-v06).
