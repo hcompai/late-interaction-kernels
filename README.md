@@ -215,8 +215,10 @@ only ever sees `[Nd, Ld, d_out]` tensors. A custom trainer that skips
 PyLate's `Dense` and hands raw `[Nd, Ld, d_model]` hidden states to
 `maxsim_from_hidden_train` directly would recover the extra
 `F.linear + normalize` passes — at these shapes that's another ~1–3 ms
-on the step (encoder-bound), but substantially more peak-memory headroom
-at `Ld ≥ 4k` since the `[bs, Ld, d_out]` scratch disappears. See the
+on the step (encoder-bound) and ~20–40 MB of peak memory (small here
+because LateOn-Code-edge has a tiny `d_out=48`; the win scales linearly
+with `d_out` and becomes material at `d_out ≥ 128` or with large
+offline teacher-embedding pipelines). See the
 [Fused D-side head section](#fused-d-side-head-for-custom-trainers-with-raw-hidden-states)
 below.
 
