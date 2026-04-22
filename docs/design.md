@@ -236,7 +236,17 @@ round-trips:
 - **`maxsim_from_hidden_train`** (training, autograd-aware). Same
   forward as inference but saves the argmax-gather `H_win` instead of
   the whole `D_proj`, and in 0.8.0 computes the backward in **closed
-  form** — no autograd rebuild:
+  form** — no autograd rebuild.
+
+  *Why the backward is much cheaper than the unfused path.* MaxSim's
+  forward already commits to one winning doc token per query token:
+  the argmax. Only those positions receive gradient signal. The unfused
+  path doesn't know this and reprojects + normalizes all `Nd · Ld`
+  tokens a second time on the way back. The fused backward gathers
+  `H_d` at the `Nq · Nd · Lq` winning positions only — typically
+  `Nq · Lq / Ld ≈ 1–10 %` of the work for ColBERT-style training
+  shapes — then does the projection, normalize-VJP and MaxSim-VJP in
+  closed form:
 
   ```
   grad_D_hat_win  = einsum('ijs,jsv->ijsv', grad_scores, Q)         # bf16 GEMM
@@ -250,7 +260,9 @@ round-trips:
   The only fp32 allocations are small reductions (`grad_W`, `grad_Q`,
   per-token norms). `grad_H` lives in the input dtype and is scattered
   with `index_add_`, so peak memory is on par with or below the
-  unfused path at long `Ld`.
+  unfused path at long `Ld`. The speedup shrinks as `Nq · Lq / Ld → 1`
+  (reranking-shaped square batches) and as `d_model` shrinks below
+  ~128 (the `F.linear` pass stops being the bottleneck).
 
 ## Smooth MaxSim & top-K save (v0.7)
 
