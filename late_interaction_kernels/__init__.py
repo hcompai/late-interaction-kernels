@@ -1,74 +1,22 @@
-"""late-interaction-kernels: fused Triton kernels for late-interaction scoring.
+"""Fused Triton kernels for late-interaction (MaxSim) scoring.
 
-Most users only need two things::
+    from late_interaction_kernels import patch_pylate, MaxSimScorer, retrieve
 
-    from late_interaction_kernels import patch_pylate, MaxSimScorer
-
-    patch_pylate()                         # one-line PyLate speedup
+    patch_pylate()                         # speed up PyLate in one line
     scorer = MaxSimScorer(normalize=True)  # nn.Module for custom training
+    scores, idx = retrieve(Q, D, top_k=100)
 
-Public surface
---------------
-
-High-level
-    * ``MaxSimScorer`` / ``retrieve`` — ``nn.Module`` and top-level retrieval
-      helper. Batteries included: masks, chunking, normalize, mixed precision.
-    * ``patch_pylate()`` / ``unpatch_pylate()`` — one-line PyLate drop-in.
-
-Core MaxSim
-    * ``maxsim(Q, D, q_mask=, d_mask=, normalize=, backward="auto")`` —
-      autograd-aware.
-    * ``maxsim_inference(...)`` — no saved argmax, inference-only.
-    * ``maxsim_varlen(Qp, Dp, cu_q, cu_d)`` — packed / ragged inputs,
-      autograd-aware. Auto-skips the argmax save when neither input needs
-      gradients (``maxsim_varlen_inference`` is a thin alias kept for 0.9.x
-      back-compat).
-    * ``maxsim_topk(Q, D, k=, chunk=)`` — MaxSim + top-k in one call.
-
-Fused heads (raw-hidden-state training / inference)
-    * ``maxsim_from_hidden(Q, H_d, W, b=, normalize=)`` — fused D-side
-      projection + L2-normalize + MaxSim, inference. Skips the
-      ``[Nd, Ld, d_out]`` scratch.
-    * ``maxsim_from_hidden_train(...)`` — same forward, autograd-aware;
-      back-props into ``H_d``, ``W``, ``b``, ``Q``.
-
-PLAID / ColBERTv2 rerank
-    * ``plaid_approx_score(q_cent, codes, doc_lengths)`` — IVF approximate
-      scoring step.
-    * ``maxsim_residual(Q, codes, residuals, ...)`` — fused decompress +
-      L2-normalize + MaxSim, autograd on ``Q``.
-    * ``maxsim_residual_inference(...)`` — forward-only.
-    * ``maxsim_residual_varlen(Q, codes_flat, residuals_flat, cu_seqlens_d, ...)``
-      — same fused decompress + MaxSim over ragged (``cu_seqlens``-indexed)
-      inputs, matching the layout fast-plaid / ColBERTv2 use on disk.
-      Forward-only; no ``[Ntop, max_Ld, packed_dim]`` scratch, no attention
-      mask.
-
-FP8 (Hopper / Blackwell)
-    * ``maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=, scale_D=)`` — fp8
-      tensor-core MaxSim. Auto-falls back to bf16 off Hopper.
-
-Experimental (research-grade, kept out of the top-level surface)
-    * ``from late_interaction_kernels.experimental import`` — ``soft_maxsim``,
-      ``smooth_maxsim``, ``maxsim_xtr``, ``maxsim_matryoshka``.
-
-Low-level FP8 helpers live at ``late_interaction_kernels.fp8``
-(``quantize_fp8_per_tensor / _per_token`` and their dequant counterparts).
-
-Tuning knobs
-    * ``set_backward_method(method)`` / ``get_backward_method()`` — global
-      default for ``grad_D``. Valid values: ``"auto" | "unified" | "csr" |
-      "atomic"``. Prefer the per-call ``backward=`` kwarg on ``maxsim`` /
-      ``MaxSimScorer``.
+See README.md for the full API, benchmarks and supported models.
+FP8 helpers live in ``late_interaction_kernels.fp8``.
+Research kernels (soft / smooth / Matryoshka / XTR MaxSim) live in
+``late_interaction_kernels.experimental``.
 """
 
 __version__ = "0.9.0.dev0"
 
-# The Triton kernels aren't importable on platforms without Triton (macOS,
-# Windows without a CUDA build). We still want ``import late_interaction_kernels``
-# and the reference implementation to work there — the library doubles as a
-# correctness reference in those environments. Only ``patch_pylate`` and the
-# kernel-backed APIs are gated on Triton being available.
+# Triton isn't available everywhere (macOS, Windows without CUDA). On those
+# platforms we still import the package and expose the pure-PyTorch reference;
+# only the fused kernel entry points are gated on Triton being present.
 try:
     import triton  # noqa: F401
 
@@ -113,18 +61,14 @@ else:  # pragma: no cover
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
 
-# `MaxSimScorer` and `retrieve` transparently fall back to the pure-PyTorch
-# reference on non-Triton platforms, so they're always importable — a UX win
-# for macOS / CI users developing training code locally.
+# `MaxSimScorer` and `retrieve` are always importable: they fall back to the
+# pure-PyTorch reference when Triton isn't available, so training / retrieval
+# code can still be developed and unit-tested on macOS or CI.
 from . import reference  # noqa: E402,F401  — always importable (pure PyTorch)
 from .retrieve import MaxSimScorer, retrieve  # noqa: E402
 
-# --- Deprecated re-exports ----------------------------------------------------
-#
-# Four research kernels moved to `late_interaction_kernels.experimental` and
-# four FP8 quantization helpers moved to `late_interaction_kernels.fp8`. We
-# keep them importable from the top level with a DeprecationWarning so 0.9.x
-# code keeps working. Removal is scheduled for the first post-0.9 release.
+# Symbols that moved out of the top level in 0.9.0. Re-exported here with a
+# DeprecationWarning so 0.9.x code keeps working; removed in a future release.
 
 _DEPRECATED_EXPERIMENTAL = {
     "maxsim_matryoshka": "late_interaction_kernels.experimental",
@@ -149,12 +93,11 @@ def __getattr__(name: str):
         import warnings
 
         warnings.warn(
-            "`late_interaction_kernels.maxsim_forward` is deprecated since 0.9.0 and "
-            "will be removed in a future release. It's a forward-only primitive with "
-            "no autograd — use `maxsim_inference(Q, D, ...)` for reranking or "
-            "`maxsim(Q, D, ...)` for gradients. If you really want the low-level "
-            "primitive, import it from the private module: "
-            "`from late_interaction_kernels.forward import maxsim_forward`.",
+            "`late_interaction_kernels.maxsim_forward` is deprecated since 0.9.0 "
+            "and will be removed in a future release. Use `maxsim_inference(Q, D, ...)` "
+            "for reranking or `maxsim(Q, D, ...)` for gradients. The low-level "
+            "primitive is still available at "
+            "`late_interaction_kernels.forward.maxsim_forward`.",
             DeprecationWarning,
             stacklevel=2,
         )

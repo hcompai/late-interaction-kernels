@@ -116,6 +116,71 @@ chaining `index_select + pad + mask + max + sum` and `unpack + F.normalize
 
 - einsum + max + sum`.
 
+## PLAID / ColBERTv2 rerank vs `fast_plaid.engine.search()`
+
+End-to-end comparison on a real fast-plaid index. We build the index with
+fast-plaid, time `engine.search()` as the ground truth, then load the same
+compressed tensors from disk and call `maxsim_residual_varlen` on them —
+same inputs, same output, same numerics. Reproduce with
+`scripts/sky_fastplaid_e2e.yaml`.
+
+
+| corpus shape (nbits=2)  | `engine.search()` | `maxsim_residual_varlen` (4 k cands) | speedup   |
+| ----------------------- | ----------------- | ------------------------------------ | --------- |
+| 5 000 docs  × 200 tok   | 23.4 ms           | 1.22 ms                              | **19.2×** |
+| 10 000 docs × 300 tok   | 48.6 ms           | 1.69 ms                              | **28.7×** |
+| 10 000 docs × 512 tok   | 83.1 ms           | 2.71 ms                              | **30.7×** |
+
+
+Against a PyTorch transliteration of fast-plaid's exact decompress → pad →
+matmul → reduce slice, the fused varlen kernel is **3.4–3.7× faster** at
+10–34× less GPU memory — no `[Ntop, max_Ld, packed_dim]` padded scratch is
+ever allocated. Reproduce with `scripts/sky_decompress_bench.yaml`.
+
+## Fused D-side head (training, v0.8.0)
+
+Replaces `F.linear → F.normalize → maxsim` for the
+hidden-state → embedding → MaxSim path. Forward runs one kernel with argmax
+save; backward is closed-form. H100 bf16, forward + backward:
+
+
+| shape                                            | unfused  | fused   | speedup   |
+| ------------------------------------------------ | -------- | ------- | --------- |
+| LateOn `Nd=128, Ld=1024, d_model=768`            | 1.45 ms  | 0.96 ms | **1.52×** |
+| LateOn-Code `Nd=512, Ld=2048`                    | 7.31 ms  | 1.67 ms | **4.37×** |
+| LateOn-Code `Nd=1024, Ld=2048`                   | 14.15 ms | 3.05 ms | **4.64×** |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384`  | 5.13 ms  | 1.32 ms | **3.88×** |
+
+
+Backward stays fast because the forward saves which doc token won MaxSim per
+query token, so backward only re-projects `H_d` at the `Nq · Nd · Lq` winning
+positions instead of all `Nd · Ld`. For `Lq=32, Ld=2048` that's ~1.5 % of the
+matmul work. The win shrinks as `Nq · Lq / Ld` grows toward 1, and on
+small-`d_model` shapes (`<128`) `F.linear` is already cheap. Derivation and
+memory accounting: [design.md → Fused heads](design.md#fused-heads-v06).
+
+## End-to-end LateOn-Code-edge training (17 M encoder)
+
+`losses.Contrastive`, in-batch negatives, bf16, grad-ckpt, 1×H100.
+
+
+| setup                   | vanilla  | late-interaction-kernels | speedup   | peak (v → f)   |
+| ----------------------- | -------- | ------------------------ | --------- | -------------- |
+| bs=256, Lq=32, Ld=256   | 114.3 ms | 90.3 ms                  | **1.27×** | 11.5 → 9.6 GB  |
+| bs=192, Lq=32, Ld=512   | 152.5 ms | 126.0 ms                 | **1.21×** | 16.6 → 14.7 GB |
+| bs=128, Lq=32, Ld=1024  | 223.7 ms | 196.4 ms                 | **1.14×** | 22.6 → 21.5 GB |
+| bs=64,  Lq=32, Ld=2048  | 293.2 ms | 281.0 ms                 | 1.04×     | 25.8 GB        |
+
+
+Reproduce with `scripts/sky_lateon_edge.yaml`. Smaller encoder + bigger
+effective batch ⇒ bigger MaxSim slice ⇒ bigger end-to-end speedup. These
+numbers use `patch_pylate()`; `maxsim_from_hidden_train` is not wired in
+because PyLate applies its `Dense` projection inside the encoder forward, so
+`colbert_scores` only sees already-projected embeddings. A custom trainer
+that hands raw `[Nd, Ld, d_model]` hidden states to `maxsim_from_hidden_train`
+recovers the `F.linear + normalize` passes (another ~1–3 ms / step and
+~20–40 MB of peak at these shapes).
+
 ## Backward paths (`atomic` vs `csr` vs `auto`)
 
 On H100, fp32 hardware `atomic_add` is *very* good, so CSR only wins at very large
