@@ -21,6 +21,7 @@ import torch
 import triton
 import triton.language as tl
 
+from ._autotune import forward_configs, prune_forward
 from ._utils import ensure_contiguous_last, next_pow2
 
 # -----------------------------------------------------------------------------
@@ -153,6 +154,11 @@ def plaid_approx_score(
 # -----------------------------------------------------------------------------
 
 
+@triton.autotune(
+    configs=forward_configs(),
+    key=["Lq", "max_Ld", "d_pad", "nbits", "normalize", "SAVE_ARGMAX"],
+    prune_configs_by={"early_config_prune": prune_forward},
+)
 @triton.jit
 def _maxsim_residual_kernel(
     Q_ptr,  # [Nq, Lq, d] query embeddings (assumed normalized)
@@ -239,7 +245,8 @@ def _maxsim_residual_kernel(
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
-        am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+        if SAVE_ARGMAX:
+            am = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
@@ -281,17 +288,18 @@ def _maxsim_residual_kernel(
 
             if normalize:
                 en = tl.sum(emb * emb, axis=1)
-                einv = 1.0 / tl.sqrt(tl.maximum(en, 1e-12))
+                einv = tl.rsqrt(tl.maximum(en, 1e-12))
                 emb = emb * einv[:, None]
 
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
             S = tl.where(d_valid[None, :], S, float("-inf"))
             tile_max = tl.max(S, axis=1)
-            tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
-            update = tile_max > m
-            m = tl.where(update, tile_max, m)
-            am = tl.where(update, tile_arg, am)
+            if SAVE_ARGMAX:
+                tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
+                update = tile_max > m
+                am = tl.where(update, tile_arg, am)
+            m = tl.maximum(m, tile_max)
 
         m_finite = m != float("-inf")
         m = tl.where(m_finite & q_valid, m, 0.0)
@@ -431,7 +439,12 @@ def _maxsim_residual_forward(
     codes = codes.contiguous().to(torch.int64)
     residuals = residuals.contiguous().to(torch.uint8)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
-    centroids = centroids.contiguous().to(torch.float32)
+    # Centroids can stay in fp16 / bf16: the kernel casts to fp32 in registers
+    # after the load. Forcing fp32 would double the centroid bandwidth (and
+    # fast-plaid stores centroids as fp16 on disk anyway).
+    if centroids.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        centroids = centroids.to(torch.float32)
+    centroids = centroids.contiguous()
     bucket_weights = bucket_weights.contiguous().to(torch.float32)
 
     Nq, Lq, d = Q.shape
@@ -453,9 +466,6 @@ def _maxsim_residual_forward(
         argmax = torch.empty(Nq, Nd, Lq, device=Q.device, dtype=torch.int32)
     else:
         argmax = torch.empty(1, device=Q.device, dtype=torch.int32)  # dummy
-
-    BLOCK_Q = 32 if Lq >= 32 else max(16, next_pow2(Lq))
-    BLOCK_D = 64 if max_Ld >= 64 else max(16, next_pow2(max_Ld))
 
     am_strides = (argmax.stride(0), argmax.stride(1), argmax.stride(2)) if save_argmax else (0, 0, 0)
 
@@ -493,13 +503,9 @@ def _maxsim_residual_forward(
         am_strides[0],
         am_strides[1],
         am_strides[2],
-        BLOCK_Q=BLOCK_Q,
-        BLOCK_D=BLOCK_D,
         COMPUTE_DTYPE=tl_dtype,
         normalize=normalize,
         SAVE_ARGMAX=save_argmax,
-        num_warps=4,
-        num_stages=2,
     )
     return out, (argmax if save_argmax else None), (Q, codes, residuals, centroids, bucket_weights)
 
@@ -697,6 +703,297 @@ def maxsim_residual_inference(
     return scores
 
 
+# -----------------------------------------------------------------------------
+# C3. maxsim_residual_varlen — packed / ragged decompress + MaxSim
+# -----------------------------------------------------------------------------
+#
+# Fast-plaid stores its per-passage codes and residuals in "strided" tensors
+# (a concatenated flat buffer + cumulative offsets), which is exactly the
+# varlen format. The dense kernel above forces callers to pad every doc up to
+# ``max_Ld`` and to materialize a ``[Ntop, max_Ld, packed_dim]`` residual
+# tensor — a ``Ntop * max_Ld * packed_dim`` byte-scatter on every query.
+# This kernel reads the ragged buffers directly and cuts both the scatter and
+# the attention mask.
+
+
+@triton.autotune(
+    configs=forward_configs(),
+    key=["Lq", "max_Ld", "d_pad", "nbits", "normalize", "SAVE_ARGMAX"],
+    prune_configs_by={"early_config_prune": prune_forward},
+)
+@triton.jit
+def _maxsim_residual_varlen_kernel(
+    Q_ptr,  # [Nq, Lq, d] query embeddings (assumed normalized or we normalize)
+    codes_flat_ptr,  # [sum_Ld] int64 centroid codes, concatenated over docs
+    residuals_flat_ptr,  # [sum_Ld, packed_dim] uint8 packed residuals
+    cu_seqlens_d_ptr,  # [Nd + 1] int32 cumulative doc-token offsets
+    centroids_ptr,  # [n_centroids, d] fp32
+    bucket_weights_ptr,  # [n_buckets] fp32
+    out_ptr,  # [Nq, Nd] fp32
+    argmax_ptr,  # [Nq, Nd, Lq] int32 (only if SAVE_ARGMAX)
+    Nq: tl.constexpr,
+    Nd: tl.constexpr,
+    Lq: tl.constexpr,
+    max_Ld: tl.constexpr,  # worst-case doc length across this batch
+    d: tl.constexpr,
+    d_pad: tl.constexpr,
+    packed_dim: tl.constexpr,
+    nbits: tl.constexpr,
+    codes_per_byte: tl.constexpr,
+    stride_q_n,
+    stride_q_l,
+    stride_q_d,
+    stride_codes_t,  # codes_flat is 1-D so stride is 1, kept for clarity
+    stride_res_t,
+    stride_res_p,
+    stride_cent_c,
+    stride_cent_d,
+    stride_out_n,
+    stride_out_d,
+    stride_am_n,
+    stride_am_d,
+    stride_am_l,
+    BLOCK_Q: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    COMPUTE_DTYPE: tl.constexpr,
+    normalize: tl.constexpr,
+    SAVE_ARGMAX: tl.constexpr,
+):
+    """One program per (query, doc). Same inner math as the padded kernel,
+    but the per-doc-token reads index into a ragged `[sum_Ld, *]` flat buffer
+    via ``cu_seqlens_d``. No padded scratch, no attention mask.
+    """
+    pid = tl.program_id(0)
+    q_idx = pid // Nd
+    d_idx = pid % Nd
+
+    d_lo = tl.load(cu_seqlens_d_ptr + d_idx).to(tl.int32)
+    d_hi = tl.load(cu_seqlens_d_ptr + d_idx + 1).to(tl.int32)
+    doc_len = d_hi - d_lo
+
+    k_off = tl.arange(0, d_pad)
+    k_mask = k_off < d
+
+    score_acc = tl.zeros([], dtype=tl.float32)
+
+    byte_idx = (k_off // codes_per_byte).to(tl.int32)
+    slot_idx = (k_off % codes_per_byte).to(tl.int32)
+    shift = (slot_idx * nbits).to(tl.int32)
+    code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
+
+    if doc_len == 0:
+        tl.store(out_ptr + q_idx * stride_out_n + d_idx * stride_out_d, score_acc)
+        return
+
+    for q_start in tl.static_range(0, Lq, BLOCK_Q):
+        q_off = q_start + tl.arange(0, BLOCK_Q)
+        q_valid = q_off < Lq
+        Qf = tl.load(
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
+            mask=q_valid[:, None] & k_mask[None, :],
+            other=0.0,
+        ).to(tl.float32)
+        if normalize:
+            qn = tl.sum(Qf * Qf, axis=1)
+            qinv = tl.rsqrt(tl.maximum(qn, 1e-12))
+            Qf = Qf * qinv[:, None]
+        Q_block = Qf.to(COMPUTE_DTYPE)
+
+        m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
+        if SAVE_ARGMAX:
+            am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+
+        for d_start in range(0, max_Ld, BLOCK_D):
+            d_off = d_start + tl.arange(0, BLOCK_D)
+            d_valid = d_off < doc_len
+            t_idx = d_lo + d_off  # ragged row indices into flat buffers
+
+            cent_codes = tl.load(
+                codes_flat_ptr + t_idx * stride_codes_t,
+                mask=d_valid,
+                other=0,
+            ).to(tl.int32)
+            cent = tl.load(
+                centroids_ptr + cent_codes[:, None] * stride_cent_c + k_off[None, :] * stride_cent_d,
+                mask=d_valid[:, None] & k_mask[None, :],
+                other=0.0,
+            ).to(tl.float32)
+
+            byte_vals = tl.load(
+                residuals_flat_ptr
+                + t_idx[:, None] * stride_res_t
+                + byte_idx[None, :] * stride_res_p,
+                mask=d_valid[:, None] & k_mask[None, :],
+                other=0,
+            ).to(tl.int32)
+            bucket_codes = (byte_vals >> shift[None, :]) & code_mask[None, :]
+
+            bucket_vals = tl.load(
+                bucket_weights_ptr + bucket_codes,
+                mask=d_valid[:, None] & k_mask[None, :],
+                other=0.0,
+            ).to(tl.float32)
+
+            emb = cent + bucket_vals
+            if normalize:
+                en = tl.sum(emb * emb, axis=1)
+                einv = tl.rsqrt(tl.maximum(en, 1e-12))
+                emb = emb * einv[:, None]
+
+            D_block = emb.to(COMPUTE_DTYPE)
+            S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
+            S = tl.where(d_valid[None, :], S, float("-inf"))
+            tile_max = tl.max(S, axis=1)
+            if SAVE_ARGMAX:
+                tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
+                update = tile_max > m
+                am = tl.where(update, tile_arg, am)
+            m = tl.maximum(m, tile_max)
+
+        m_finite = m != float("-inf")
+        m = tl.where(m_finite & q_valid, m, 0.0)
+        score_acc += tl.sum(m)
+
+        if SAVE_ARGMAX:
+            am_safe = tl.where(q_valid, am, 0)
+            tl.store(
+                argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
+                am_safe,
+                mask=q_valid,
+            )
+
+    tl.store(out_ptr + q_idx * stride_out_n + d_idx * stride_out_d, score_acc)
+
+
+def maxsim_residual_varlen(
+    Q: torch.Tensor,
+    codes_flat: torch.Tensor,
+    residuals_flat: torch.Tensor,
+    cu_seqlens_d: torch.Tensor,
+    centroids: torch.Tensor,
+    bucket_weights: torch.Tensor,
+    nbits: int,
+    *,
+    max_seqlen_d: int | None = None,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Packed / ragged PLAID residual-decompression + MaxSim (inference only).
+
+    Matches the storage fast-plaid uses internally for ``doc_codes_strided``
+    and ``doc_residuals_strided``: a single flat tensor per field plus
+    cumulative offsets. This skips the padded ``[Ntop, max_Ld, packed_dim]``
+    residual scratch and the attention mask entirely — the two big
+    allocations per-query in the standard PLAID pipeline.
+
+    Args:
+        Q: ``[Nq, Lq, d]`` (or ``[Lq, d]``) query embeddings.
+        codes_flat: ``[total_d_tokens]`` int64 concatenated centroid codes.
+        residuals_flat: ``[total_d_tokens, packed_dim]`` uint8 concatenated
+            packed residuals, where ``packed_dim = d * nbits / 8``.
+        cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets into the flat
+            buffers (``cu_seqlens_d[0] = 0``, ``cu_seqlens_d[-1] = total_d_tokens``).
+        centroids: ``[n_centroids, d]`` fp32.
+        bucket_weights: ``[2**nbits]`` fp32.
+        nbits: one of ``{2, 4, 8}``.
+        max_seqlen_d: worst-case doc length. Inferred from ``cu_seqlens_d``
+            if omitted.
+        normalize: L2-normalize Q and the reconstructed emb inside the kernel
+            (standard PLAID convention).
+
+    Returns:
+        scores: ``[Nq, Nd]`` fp32. If ``Q`` was 2-D, returns ``[Nd]``.
+
+    This path is inference-only (no autograd). Use ``maxsim_residual`` if you
+    need gradients on ``Q`` — quantization codes are integers and
+    non-differentiable by construction either way, but the dense kernel has
+    a fused backward.
+    """
+    if nbits not in (2, 4, 8):
+        raise ValueError(f"nbits must be 2, 4, or 8; got {nbits}")
+    q_squeeze = Q.dim() == 2
+    if q_squeeze:
+        Q = Q.unsqueeze(0)
+    if codes_flat.dim() != 1:
+        raise ValueError("codes_flat must be 1-D [total_d_tokens]")
+    if residuals_flat.dim() != 2:
+        raise ValueError("residuals_flat must be 2-D [total_d_tokens, packed_dim]")
+    if cu_seqlens_d.dim() != 1:
+        raise ValueError("cu_seqlens_d must be 1-D [Nd + 1]")
+
+    Q = ensure_contiguous_last(Q).contiguous()
+    codes_flat = codes_flat.contiguous().to(torch.int64)
+    residuals_flat = residuals_flat.contiguous().to(torch.uint8)
+    cu_seqlens_d = cu_seqlens_d.contiguous().to(torch.int32)
+    if centroids.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        centroids = centroids.to(torch.float32)
+    centroids = centroids.contiguous()
+    bucket_weights = bucket_weights.contiguous().to(torch.float32)
+
+    Nq, Lq, d = Q.shape
+    Nd = cu_seqlens_d.numel() - 1
+    packed_dim = residuals_flat.shape[-1]
+    expected_pd = (d * nbits + 7) // 8
+    if packed_dim != expected_pd:
+        raise ValueError(
+            f"residuals_flat last dim {packed_dim} != expected {expected_pd} for d={d}, nbits={nbits}"
+        )
+
+    if max_seqlen_d is None:
+        # One D2H sync per call; batch your queries if this matters.
+        starts = cu_seqlens_d[:-1]
+        ends = cu_seqlens_d[1:]
+        max_seqlen_d = int((ends - starts).max().item()) if Nd > 0 else 0
+    max_seqlen_d = max(int(max_seqlen_d), 1)
+
+    d_pad = next_pow2(d)
+    codes_per_byte = 8 // nbits
+    compute_dtype = torch.float16 if Q.dtype == torch.float16 else torch.bfloat16
+    tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
+
+    out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
+    argmax = torch.empty(1, device=Q.device, dtype=torch.int32)  # unused placeholder
+
+    grid = (Nq * max(Nd, 1),)
+    _maxsim_residual_varlen_kernel[grid](
+        Q,
+        codes_flat,
+        residuals_flat,
+        cu_seqlens_d,
+        centroids,
+        bucket_weights,
+        out,
+        argmax,
+        Nq,
+        Nd,
+        Lq,
+        max_seqlen_d,
+        d,
+        d_pad,
+        packed_dim,
+        nbits,
+        codes_per_byte,
+        Q.stride(0),
+        Q.stride(1),
+        Q.stride(2),
+        codes_flat.stride(0),
+        residuals_flat.stride(0),
+        residuals_flat.stride(1),
+        centroids.stride(0),
+        centroids.stride(1),
+        out.stride(0),
+        out.stride(1),
+        0,
+        0,
+        0,
+        COMPUTE_DTYPE=tl_dtype,
+        normalize=normalize,
+        SAVE_ARGMAX=False,
+    )
+    if q_squeeze:
+        return out.squeeze(0)
+    return out
+
+
 # Reference implementations live in ``late_interaction_kernels.reference``
 # so they're importable on CPU-only platforms without Triton. Re-export for
 # convenience.
@@ -711,4 +1008,5 @@ __all__ = [
     "maxsim_residual",
     "maxsim_residual_inference",
     "maxsim_residual_reference",
+    "maxsim_residual_varlen",
 ]

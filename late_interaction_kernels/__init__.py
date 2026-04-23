@@ -47,6 +47,11 @@ Retrieval / fused heads
       rerank step). Autograd-aware on Q; lets you train directly on
       compressed doc embeddings.
     * ``maxsim_residual_inference(...)`` — no saved argmax, inference-only.
+    * ``maxsim_residual_varlen(Q, codes_flat, residuals_flat, cu_seqlens_d, ...)``
+      — same fused decompress + MaxSim but over ragged (``cu_seqlens``-indexed)
+      codes / residuals, matching the storage format fast-plaid / ColBERTv2
+      use internally. Skips the ``[Ntop, max_Ld, packed_dim]`` padded scratch
+      and attention mask. Inference-only.
 
 Variants
     * ``maxsim_matryoshka(Q, D, dims=[...])`` — multi-dim scoring in one pass.
@@ -91,7 +96,12 @@ if _HAS_TRITON:
     )
     from .fused_head import maxsim_from_hidden, maxsim_from_hidden_train
     from .matryoshka import maxsim_matryoshka
-    from .plaid import maxsim_residual, maxsim_residual_inference, plaid_approx_score
+    from .plaid import (
+        maxsim_residual,
+        maxsim_residual_inference,
+        maxsim_residual_varlen,
+        plaid_approx_score,
+    )
     from .pylate_compat import patch_pylate, unpatch_pylate
     from .smooth import smooth_maxsim
     from .soft import soft_maxsim
@@ -114,7 +124,7 @@ else:  # pragma: no cover
     dequantize_fp8_per_tensor = dequantize_fp8_per_token = _needs_triton
     soft_maxsim = smooth_maxsim = maxsim_varlen = maxsim_varlen_inference = _needs_triton
     maxsim_topk = maxsim_matryoshka = maxsim_xtr = _needs_triton
-    plaid_approx_score = maxsim_residual = maxsim_residual_inference = _needs_triton
+    plaid_approx_score = maxsim_residual = maxsim_residual_inference = maxsim_residual_varlen = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
     patch_pylate = unpatch_pylate = _needs_triton
 
@@ -177,6 +187,7 @@ __all__ = [
     "plaid_approx_score",
     "maxsim_residual",
     "maxsim_residual_inference",
+    "maxsim_residual_varlen",
     # variants
     "maxsim_matryoshka",
     "maxsim_xtr",

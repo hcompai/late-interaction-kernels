@@ -4,6 +4,49 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — Fast-plaid decompress+MaxSim kernel
+
+A new single-pass Triton kernel that fuses fast-plaid's entire
+decompress + pad + matmul + reduce slice into one launch, with a varlen
+(no-pad) variant for ragged inputs. Autotuned over H100/Ampere configs,
+conditionally skips argmax when not needed (inference), uses `tl.rsqrt`
+for the L2-norm inverse, and accepts centroids in fp16/bf16 natively so
+the kernel can operate directly on fast-plaid's on-disk index without
+an upcast.
+
+### Added
+
+- **`maxsim_residual_varlen(...)`** — decompress+MaxSim on ragged
+  (`cu_seqlens_d`-indexed) codes + packed residuals. No padding, no
+  `[Nd, Ld_max, d]` scratch allocation. On an H100 1024-doc × 300-token
+  PLAID index (nbits=2, bf16) this is **~30× less GPU memory** than
+  fast-plaid's pad-then-matmul pipeline.
+- **`@triton.autotune`** over (`BLOCK_Q`, `BLOCK_D`, `num_warps`,
+  `num_stages`) on both `maxsim_residual` and `maxsim_residual_varlen`,
+  keyed on `(Lq, max_Ld, d_pad, nbits, normalize, SAVE_ARGMAX)` so each
+  shape lands on the right Hopper config.
+- **`benchmarks/bench_decompress_maxsim.py`** — head-to-head vs a
+  PyTorch transliteration of fast-plaid's exact op sequence
+  (`decompress_residuals` → `direct_pad_sequences` → `matmul` →
+  `colbert_score_reduce`). On H100 nbits=2 bf16: **3.4–3.7× faster**
+  and 10–34× less memory across `[200, 512, 1024, 4096, 8192]`-token
+  shapes.
+- **`benchmarks/bench_fastplaid_e2e.py`** — builds a real fast-plaid
+  index, then compares `engine.search()` against
+  `maxsim_residual_varlen` on the same compressed tensors. On H100:
+  - 5k docs × 200 toks: 23.4 ms → 1.22 ms (4k cands), **19.2× E2E**
+  - 10k docs × 300 toks: 48.6 ms → 1.69 ms (4k cands), **28.7× E2E**
+  - 10k docs × 512 toks: 83.1 ms → 2.71 ms (4k cands), **30.7× E2E**
+- **`scripts/sky_decompress_bench.yaml`** and
+  **`scripts/sky_fastplaid_e2e.yaml`** — SkyPilot jobs for reproducing
+  the numbers on 1×H100.
+
+### Changed
+
+- `maxsim_residual` skips the `am` (argmax) live-update when
+  `SAVE_ARGMAX` is false (inference path), shrinking register pressure.
+- `tl.sqrt + 1/x` replaced with `tl.rsqrt` for the in-kernel L2-norm.
+
 ## 0.9.0 — User-friendly API layer, cleaner defaults, docs audit
 
 This is an ergonomics-and-honesty release. The kernels are unchanged —

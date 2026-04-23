@@ -272,6 +272,86 @@ def test_residual_inference_does_not_save_argmax():
     assert (fast - ref).abs().max().item() / max(1e-6, ref.abs().max().item()) < 3e-2
 
 
+# --------------------------------------------------------------------------- #
+# C3. maxsim_residual_varlen                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _dense_to_varlen(idx):
+    """Pack a padded _make_quant_index output into a ragged (cu_seqlens) layout."""
+    codes_p = idx["codes"]
+    res_p = idx["residuals"]
+    dlens = idx["doc_lengths"]
+    Nd, _max_Ld = codes_p.shape
+    flat_codes = []
+    flat_res = []
+    for i in range(Nd):
+        li = int(dlens[i].item())
+        flat_codes.append(codes_p[i, :li])
+        flat_res.append(res_p[i, :li])
+    codes_flat = torch.cat(flat_codes, dim=0) if flat_codes else codes_p.new_zeros(0)
+    res_flat = torch.cat(flat_res, dim=0) if flat_res else res_p.new_zeros(0, res_p.shape[-1])
+    cu = torch.zeros(Nd + 1, dtype=torch.int32, device=codes_p.device)
+    cu[1:] = dlens.to(torch.int32).cumsum(0)
+    return codes_flat, res_flat, cu
+
+
+@pytest.mark.parametrize("nbits", [2, 4, 8])
+def test_residual_varlen_matches_dense(nbits):
+    from late_interaction_kernels import maxsim_residual_inference, maxsim_residual_varlen
+
+    idx = _make_quant_index(Nd=5, max_Ld=32, d=128, n_centroids=64, nbits=nbits)
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
+
+    codes_flat, res_flat, cu = _dense_to_varlen(idx)
+
+    dense = maxsim_residual_inference(
+        Q,
+        idx["codes"],
+        idx["residuals"],
+        idx["doc_lengths"],
+        idx["centroids"],
+        idx["bucket_weights"],
+        nbits=nbits,
+        normalize=True,
+    )
+    varlen = maxsim_residual_varlen(
+        Q,
+        codes_flat,
+        res_flat,
+        cu,
+        idx["centroids"],
+        idx["bucket_weights"],
+        nbits=nbits,
+        normalize=True,
+    )
+    # Varlen and dense must agree up to kernel-schedule rounding. They use the
+    # same math and the same fp32-accumulator dot, so the bar is tight.
+    assert dense.shape == varlen.shape
+    denom = max(1e-6, dense.abs().max().item())
+    assert (dense - varlen).abs().max().item() / denom < 1e-4
+
+
+def test_residual_varlen_handles_empty_docs():
+    from late_interaction_kernels import maxsim_residual_varlen
+
+    centroids = torch.randn(32, 128, device="cuda", dtype=torch.float32)
+    buckets = torch.linspace(-0.1, 0.1, 16, device="cuda", dtype=torch.float32)
+    codes = torch.randint(0, 32, (20,), device="cuda", dtype=torch.int64)
+    # Packed residual for nbits=4 and d=128 -> packed_dim = 64.
+    res = torch.randint(0, 256, (20, 64), device="cuda", dtype=torch.uint8)
+    # Three docs: lengths 0, 20, 0.
+    cu = torch.tensor([0, 0, 20, 20], device="cuda", dtype=torch.int32)
+    Q = torch.randn(1, 32, 128, device="cuda", dtype=torch.bfloat16)
+
+    scores = maxsim_residual_varlen(
+        Q, codes, res, cu, centroids, buckets, nbits=4, normalize=True
+    )
+    assert scores.shape == (1, 3)
+    assert scores[0, 0].item() == 0.0
+    assert scores[0, 2].item() == 0.0
+
+
 def test_residual_matches_dense_maxsim():
     """With nbits=8 and identity bucket weights, residual scoring should
     recover exact dense MaxSim up to rounding."""
