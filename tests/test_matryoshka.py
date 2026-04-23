@@ -11,7 +11,8 @@ pytestmark = pytest.mark.cuda
 @pytest.mark.parametrize("dims", [[64], [32, 64, 128], [16, 32]])
 @pytest.mark.parametrize("normalize", [False, True])
 def test_matryoshka_parity(dims, normalize, rel):
-    from late_interaction_kernels import maxsim, maxsim_matryoshka
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.experimental import maxsim_matryoshka
 
     Nq, Nd, Lq, Ld, d = 2, 4, 32, 128, 128
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
@@ -32,7 +33,7 @@ def test_matryoshka_parity(dims, normalize, rel):
 
 def test_matryoshka_ordering_invariant():
     """Passing dims in different orders yields the same per-dim score."""
-    from late_interaction_kernels import maxsim_matryoshka
+    from late_interaction_kernels.experimental import maxsim_matryoshka
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -46,7 +47,8 @@ def test_matryoshka_ordering_invariant():
 
 
 def test_matryoshka_full_dim_matches_plain_maxsim():
-    from late_interaction_kernels import maxsim, maxsim_matryoshka
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.experimental import maxsim_matryoshka
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -57,7 +59,8 @@ def test_matryoshka_full_dim_matches_plain_maxsim():
 
 
 def test_matryoshka_with_masks():
-    from late_interaction_kernels import maxsim, maxsim_matryoshka
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.experimental import maxsim_matryoshka
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 128, 128, device="cuda", dtype=torch.bfloat16)

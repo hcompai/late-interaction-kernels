@@ -64,7 +64,7 @@ def test_gradcheck_soft_maxsim_smooth():
     falls back to a pure-PyTorch reference whose backward must match
     finite-difference to tight tolerances.
     """
-    from late_interaction_kernels import soft_maxsim
+    from late_interaction_kernels.experimental import soft_maxsim
 
     Nq, Nd, Lq, Ld, d = 1, 2, 3, 5, 32
     torch.manual_seed(0)
@@ -296,7 +296,7 @@ def test_very_small_magnitudes_dont_underflow():
 def test_soft_maxsim_backward_deterministic():
     """soft_maxsim has a dense gradient (no argmax); it must be bitwise
     deterministic across repeated calls on fp32."""
-    from late_interaction_kernels import soft_maxsim
+    from late_interaction_kernels.experimental import soft_maxsim
 
     Q0 = torch.randn(2, 16, 128, device="cuda", dtype=torch.float32)
     D0 = torch.randn(4, 64, 128, device="cuda", dtype=torch.float32)

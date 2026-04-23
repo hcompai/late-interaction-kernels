@@ -89,7 +89,7 @@ def test_reference_top_k_clamped_to_ld():
 @pytest.mark.parametrize("top_k", [1, 4, 8])
 @pytest.mark.parametrize("aggregation", ["mean", "sum"])
 def test_smooth_maxsim_kernel_parity(shape, top_k, aggregation):
-    from late_interaction_kernels import smooth_maxsim
+    from late_interaction_kernels.experimental import smooth_maxsim
 
     Nq, Nd, Lq, Ld, d = shape
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
@@ -107,7 +107,8 @@ def test_smooth_maxsim_kernel_parity(shape, top_k, aggregation):
 @pytest.mark.cuda
 def test_smooth_maxsim_topk1_sum_equals_hard_maxsim():
     """Flagship invariant: (top_k=1, sum) == hard maxsim, bit-for-bit on bf16."""
-    from late_interaction_kernels import maxsim_inference, smooth_maxsim
+    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels.experimental import smooth_maxsim
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 96, 128, device="cuda", dtype=torch.bfloat16)
@@ -139,7 +140,7 @@ def test_reference_backward_numeric_gradcheck():
 @pytest.mark.cuda
 def test_smooth_maxsim_kernel_backward_matches_reference():
     """Kernel backward (atomic scatter) must match pure-PyTorch gradients."""
-    from late_interaction_kernels import smooth_maxsim
+    from late_interaction_kernels.experimental import smooth_maxsim
 
     torch.manual_seed(0)
     Q = torch.randn(2, 16, 64, device="cuda", dtype=torch.float32, requires_grad=True)
@@ -164,7 +165,7 @@ def test_smooth_maxsim_kernel_backward_matches_reference():
 
 @pytest.mark.cuda
 def test_smooth_maxsim_validates_inputs():
-    from late_interaction_kernels import smooth_maxsim
+    from late_interaction_kernels.experimental import smooth_maxsim
 
     Q = torch.randn(1, 4, 8, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(1, 4, 16, device="cuda", dtype=torch.bfloat16)

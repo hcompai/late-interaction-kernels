@@ -9,8 +9,9 @@ For very large corpora (``Nq * Nd`` too big to hold in HBM), we still compute
 scores in chunks of documents and reduce the top-k as we go, so peak memory is
 ``O(Nq * (chunk + k))`` rather than ``O(Nq * Nd)``.
 
-This is intentionally a thin, honest wrapper — a future release can replace the
-body with a single fused in-kernel heap reduction without changing the API.
+The current implementation is a thin wrapper around the fused MaxSim forward.
+A future release can swap it for a fully-fused in-kernel heap reduction
+without changing the API.
 """
 
 from __future__ import annotations

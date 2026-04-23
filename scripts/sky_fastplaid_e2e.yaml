@@ -1,0 +1,58 @@
+# End-to-end fast-plaid vs fused kernel comparison on 1xH100.
+#   sky launch scripts/sky_fastplaid_e2e.yaml -c lik-e2e
+# Reuses an existing cluster:
+#   sky exec lik-e2e scripts/sky_fastplaid_e2e.yaml
+
+name: lik-fastplaid-e2e
+
+resources:
+  infra: kubernetes
+  # Use the official pytorch image (vanilla torch 2.8.0) — NGC ships a
+  # pre-release torch with a different ABI that the fast-plaid wheel
+  # can't link against (undefined symbol in at::kthvalue).
+  image_id: docker:pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+  accelerators: H100:1
+  cpus: 8+
+
+workdir: .
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        priorityClassName: low
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Stock pytorch image lacks triton — install it from pypi (matches torch 2.8).
+  pip install --no-cache-dir triton
+  pip install --no-cache-dir -e ".[dev]"
+  # fast-plaid ships per-torch-version wheels: 1.4.6.280 is the torch-2.8 one.
+  pip install --no-cache-dir fast-plaid==1.4.6.280
+
+run: |
+  set -eux
+  cd ~/sky_workdir
+  # If we launched fresh, setup already ran. If `sky exec` reused the cluster
+  # the setup block is skipped → install here too. Stock pytorch image has no
+  # triton, no lik, no fast-plaid.
+  python -c "import fast_plaid, triton, late_interaction_kernels" 2>/dev/null || {
+    pip install --no-cache-dir triton
+    pip install --no-cache-dir -e ".[dev]"
+    pip install --no-cache-dir fast-plaid==1.4.6.280
+  }
+  python -c "import torch, triton, fast_plaid; print('torch', torch.__version__, 'triton', triton.__version__)"
+  python -c "import torch; print(torch.cuda.get_device_name())"
+
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  GPU=$(python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
+  ART=/tmp/artifacts/${STAMP}_${GPU}_e2e
+  mkdir -p "${ART}"
+
+  echo ">>> fast-plaid e2e comparison"
+  python benchmarks/bench_fastplaid_e2e.py --outdir "${ART}" --small 2>&1 | tee "${ART}/bench_e2e.log"
+
+  echo ">>> artifact summary"
+  find "${ART}" -type f | sort
+  echo "Artifacts at: ${ART}"

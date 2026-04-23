@@ -4,6 +4,64 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — PLAID-on-ragged kernel, trimmed public surface
+
+Two themes. A new varlen kernel closes a real bottleneck in the PLAID
+rerank path, and the top-level API gets smaller so that what you see
+when you `from late_interaction_kernels import …` is what you should
+actually reach for.
+
+### Added
+
+- `maxsim_residual_varlen(Q, codes_flat, residuals_flat, cu_seqlens_d, centroids, …)` — fused decompress + L2-normalize + MaxSim over
+ragged, `cu_seqlens`-indexed documents. Same layout fast-plaid and
+ColBERTv2 already use on disk. Forward-only, no
+`[Ntop, max_Ld, packed_dim]` scratch, no attention mask. On an H100
+10k-doc × 300-token nbits=2 PLAID index: **~30× less GPU memory** and
+**3.4–3.7× faster** than a PyTorch transliteration of fast-plaid's
+decompress → pad → matmul → reduce path.
+- `triton.autotune` on `maxsim_residual` and `maxsim_residual_varlen`,
+keyed on `(Lq, max_Ld, d_pad, nbits, normalize, SAVE_ARGMAX)`.
+- `benchmarks/bench_decompress_maxsim.py` — head-to-head
+micro-benchmark vs a PyTorch transliteration of fast-plaid's exact
+op sequence.
+- `benchmarks/bench_fastplaid_e2e.py` — builds a real fast-plaid index,
+times `engine.search()`, then reruns the same compressed tensors
+through `maxsim_residual_varlen`. On H100:
+  - 5 k docs × 200 tok: `engine.search()` 23.4 ms → varlen 1.22 ms
+  (4 k candidates) — 19.2× end-to-end.
+  - 10 k docs × 300 tok: 48.6 ms → 1.69 ms — 28.7×.
+  - 10 k docs × 512 tok: 83.1 ms → 2.71 ms — 30.7×.
+- `scripts/sky_decompress_bench.yaml`, `scripts/sky_fastplaid_e2e.yaml`
+— SkyPilot jobs reproducing the numbers on 1×H100.
+- `late_interaction_kernels.experimental` submodule. Canonical home
+for the four research kernels that have tests but no active users:
+`soft_maxsim`, `smooth_maxsim`, `maxsim_xtr`, `maxsim_matryoshka`.
+
+### Changed
+
+- `maxsim_residual` skips the argmax live-update when it won't be used
+(inference path). Reduces register pressure.
+- L2-norm uses `tl.rsqrt` instead of `tl.sqrt` + reciprocal.
+- `maxsim_residual*` accept centroids in `fp16` / `bf16` directly —
+fast-plaid and standard PLAID indexes store them that way on disk.
+
+### Deprecated
+
+Top-level re-exports, imported with a `DeprecationWarning`:
+
+- `soft_maxsim`, `smooth_maxsim`, `maxsim_xtr`, `maxsim_matryoshka` →
+`late_interaction_kernels.experimental`.
+- `quantize_fp8_per_tensor`, `quantize_fp8_per_token`,
+`dequantize_fp8_per_tensor`, `dequantize_fp8_per_token` →
+`late_interaction_kernels.fp8`. `maxsim_inference_fp8` stays at the
+top level; the helpers are rarely imported outside a full FP8
+pipeline and shouldn't compete for shelf space with the shipping
+kernels.
+
+No removal this release. Full removal scheduled for the first post-0.9
+version.
+
 ## 0.9.0 — User-friendly API layer, cleaner defaults, docs audit
 
 This is an ergonomics-and-honesty release. The kernels are unchanged —
@@ -11,92 +69,92 @@ every speedup number in the README / `docs/benchmarks.md` still
 reproduces bit-for-bit. What changed is the surface area:
 
 - A high-level `nn.Module` (`MaxSimScorer`) and a top-level `retrieve()`
-  entry point so you don't have to assemble `maxsim + topk + chunk`
-  yourself.
+entry point so you don't have to assemble `maxsim + topk + chunk`
+yourself.
 - Per-call `backward=` kwarg on `maxsim`, so different experiments can
-  pick different `grad_D` paths without global state.
+pick different `grad_D` paths without global state.
 - A sweep of documentation fixes where code and prose had drifted out
-  of sync after 0.6 / 0.7 / 0.8.
+of sync after 0.6 / 0.7 / 0.8.
 
 ### Added
 
-- **`MaxSimScorer(nn.Module)`** — stateless scoring layer with
-  `normalize=True`, `backward="auto"` defaults and an optional
-  `mask_pad_token=` shortcut. Composes with any encoder module and
-  round-trips through `torch.compile`.
-- **`retrieve(Q, D, top_k, *, chunk=None, normalize=True)`** — the
-  one-liner answer to "how do I actually search 100k docs". Wraps
-  `maxsim_topk` with friendlier defaults and clearer docs.
+- `**MaxSimScorer(nn.Module)`** — stateless scoring layer with
+`normalize=True`, `backward="auto"` defaults and an optional
+`mask_pad_token=` shortcut. Composes with any encoder module and
+round-trips through `torch.compile`.
+- `**retrieve(Q, D, top_k, *, chunk=None, normalize=True)**` — the
+one-liner answer to "how do I actually search 100k docs". Wraps
+`maxsim_topk` with friendlier defaults and clearer docs.
 - **CPU / non-Triton fallback for the high-level API** —
-  `MaxSimScorer` and `retrieve` are now importable *and runnable* on
-  macOS / Windows / CPU-only CI. They transparently dispatch to the
-  pure-PyTorch reference, preserving the full API contract (including
-  autograd and `torch.autograd.gradcheck`). Lets you unit-test
-  training / retrieval code locally before renting a GPU.
+`MaxSimScorer` and `retrieve` are now importable *and runnable* on
+macOS / Windows / CPU-only CI. They transparently dispatch to the
+pure-PyTorch reference, preserving the full API contract (including
+autograd and `torch.autograd.gradcheck`). Lets you unit-test
+training / retrieval code locally before renting a GPU.
 - **CPU-reachable test suite** — `tests/test_retrieve_cpu.py`
-  (30 assertions incl. `gradcheck`) plus a `test_public_all_exports_are_resolvable`
-  guard that flags `__all__` drift without needing a GPU.
-- **Per-call `backward=` kwarg on `maxsim`** —
-  `maxsim(Q, D, ..., backward="csr")` pins a single call's `grad_D`
-  path without touching global state. `set_backward_method(...)` still
-  works as the process-wide default.
+(30 assertions incl. `gradcheck`) plus a `test_public_all_exports_are_resolvable`
+guard that flags `__all__` drift without needing a GPU.
+- **Per-call `backward=` kwarg on `maxsim**` —
+`maxsim(Q, D, ..., backward="csr")` pins a single call's `grad_D`
+path without touching global state. `set_backward_method(...)` still
+works as the process-wide default.
 - **Unnormalized-input warning** — `maxsim(..., normalize=False)`
-  emits a one-time `UserWarning` when Q's median token L2 norm is
-  clearly ≠ 1.0 (the top footgun for users coming from PyLate).
-  Silence with `LIK_SUPPRESS_NORM_WARN=1`.
+emits a one-time `UserWarning` when Q's median token L2 norm is
+clearly ≠ 1.0 (the top footgun for users coming from PyLate).
+Silence with `LIK_SUPPRESS_NORM_WARN=1`.
 - **Loss-module patch warning** — `patch_pylate()` now emits a
-  `RuntimeWarning` if it cannot reach one of the internal PyLate loss
-  symbols (e.g. PyLate refactors `contrastive.colbert_scores`),
-  instead of silently leaving that loss unpatched.
+`RuntimeWarning` if it cannot reach one of the internal PyLate loss
+symbols (e.g. PyLate refactors `contrastive.colbert_scores`),
+instead of silently leaving that loss unpatched.
 
 ### Changed
 
 - **Design doc rewrite** — `docs/design.md` §Backward now describes
-  the real `unified` + `csr` selector. The 0.5.x atomic-vs-CSR
-  heuristic had survived the 0.6.0 rewrite in prose only.
-- **`docs/rfc/0.6.0.md` and `docs/rfc/0.7.0.md`** — now clearly marked
-  as historical planning documents, with a banner pointing to the
-  `CHANGELOG` for what actually shipped. In particular, 0.7.0's
-  "persistent SMEM-cached fused head" is documented as **not** the
-  route 0.8.0 took (closed-form backward, same perf outcome).
-- **`maxsim` / `maxsim_inference` docstrings** — clarified `normalize`
-  default behavior and the per-call `backward=` semantics.
+the real `unified` + `csr` selector. The 0.5.x atomic-vs-CSR
+heuristic had survived the 0.6.0 rewrite in prose only.
+- `**docs/rfc/0.6.0.md` and `docs/rfc/0.7.0.md**` — now clearly marked
+as historical planning documents, with a banner pointing to the
+`CHANGELOG` for what actually shipped. In particular, 0.7.0's
+"persistent SMEM-cached fused head" is documented as **not** the
+route 0.8.0 took (closed-form backward, same perf outcome).
+- `**maxsim` / `maxsim_inference` docstrings** — clarified `normalize`
+default behavior and the per-call `backward=` semantics.
 - **Varlen input validation** — `_varlen_forward` now raises
-  `ValueError` with actionable messages instead of bare `assert`s.
-- **`bench_backward_method.py`** — added a `unified ms` column and
-  fixed the `auto_pick` annotation to match the real selector
-  (`unified` vs `csr`, never `atomic`).
-- **`bench_cached_maxsim.py`** — defaults bumped to `50` iters / `5`
-  warmup to match the rest of the bench suite (docs/benchmarks.md
-  claim is now consistent with every script).
+`ValueError` with actionable messages instead of bare `assert`s.
+- `**bench_backward_method.py**` — added a `unified ms` column and
+fixed the `auto_pick` annotation to match the real selector
+(`unified` vs `csr`, never `atomic`).
+- `**bench_cached_maxsim.py**` — defaults bumped to `50` iters / `5`
+warmup to match the rest of the bench suite (docs/benchmarks.md
+claim is now consistent with every script).
 - **README Quickstart** — restructured around the three canonical
-  entry points (`patch_pylate`, `MaxSimScorer`, `retrieve`) instead
-  of only PyLate + raw `maxsim_inference`.
+entry points (`patch_pylate`, `MaxSimScorer`, `retrieve`) instead
+of only PyLate + raw `maxsim_inference`.
 - **Module-preamble docstrings** (`forward.py`, `smooth.py`, `fp8.py`,
-  `backward_csr.py`, `backward_unified.py`) — trimmed the RFC-style
-  motivation/derivation sections and cross-link to `docs/design.md`
-  for the long form.
-- **`maxsim_reference` dtype policy** — preserves fp64 inputs instead
-  of down-casting to fp32. Required for `torch.autograd.gradcheck` on
-  the high-level API. fp16 / bf16 still promote to fp32 as before; fp32
-  behavior is unchanged.
+`backward_csr.py`, `backward_unified.py`) — trimmed the RFC-style
+motivation/derivation sections and cross-link to `docs/design.md`
+for the long form.
+- `**maxsim_reference` dtype policy** — preserves fp64 inputs instead
+of down-casting to fp32. Required for `torch.autograd.gradcheck` on
+the high-level API. fp16 / bf16 still promote to fp32 as before; fp32
+behavior is unchanged.
 - **Test naming** — `test_contrastive_loss_uses_flash` →
-  `test_contrastive_loss_uses_patched_scores` (and sibling cached /
-  distillation tests). There is no FlashAttention anywhere in this
-  project; the historical name was misleading.
-- **`CONTRIBUTING.md`** — PR checklist no longer references a
-  non-existent "Unreleased" CHANGELOG section.
+`test_contrastive_loss_uses_patched_scores` (and sibling cached /
+distillation tests). There is no FlashAttention anywhere in this
+project; the historical name was misleading.
+- `**CONTRIBUTING.md**` — PR checklist no longer references a
+non-existent "Unreleased" CHANGELOG section.
 
 ### Deprecated
 
-- **`late_interaction_kernels.maxsim_forward`** — still importable
-  (emits `DeprecationWarning`), scheduled for removal. Use
-  `maxsim_inference` for reranking or
-  `from late_interaction_kernels.forward import maxsim_forward` if
-  you genuinely need the low-level primitive.
-- **`maxsim_varlen_inference`** — redundant alias, emits
-  `DeprecationWarning`. `maxsim_varlen` auto-skips the argmax save
-  when neither input has `requires_grad=True`.
+- `**late_interaction_kernels.maxsim_forward**` — still importable
+(emits `DeprecationWarning`), scheduled for removal. Use
+`maxsim_inference` for reranking or
+`from late_interaction_kernels.forward import maxsim_forward` if
+you genuinely need the low-level primitive.
+- `**maxsim_varlen_inference**` — redundant alias, emits
+`DeprecationWarning`. `maxsim_varlen` auto-skips the argmax save
+when neither input has `requires_grad=True`.
 
 ### Removed
 
@@ -106,55 +164,53 @@ reproduces bit-for-bit. What changed is the surface area:
 
 Perf + integration release. The 0.7.0 `maxsim_from_hidden_train` shipped
 an autograd-aware wrapper that was **numerically correct** (≤ 2 % RMS
-vs unfused) but **~2× slower** than plain `F.linear + F.normalize +
-maxsim`, because the backward rebuilt the winners slice through Python
+vs unfused) but **~2× slower** than plain `F.linear + F.normalize + maxsim`, because the backward rebuilt the winners slice through Python
 autograd. 0.8.0 rewrites it to a closed-form backward and drops the
 rebuild entirely. It also aligns benchmarks and docs with LightOn's
-new [`lightonai/LateOn`](https://huggingface.co/lightonai/LateOn)
+new `[lightonai/LateOn](https://huggingface.co/lightonai/LateOn)`
 model family.
 
 ### Added
 
 - **End-to-end `LateOn-Code-edge` training benchmark** (17 M Ettin
-  encoder) at huge-batch / long-context shapes — the 1 × H100 numbers
-  measured here are **1.04–1.27× end-to-end** (see README “End-to-end
-  LateOn-Code-edge training” table). The small encoder makes MaxSim a
-  material slice of the step, so the kernel swap actually moves the
-  wall-clock. Reproduce with `scripts/sky_lateon_edge.yaml`.
-- **`benchmarks/bench_fused_head_train.py`** — microbench of the
-  rewritten `maxsim_from_hidden_train` vs the unfused
-  `F.linear + F.normalize + maxsim` path across LateOn / LateOn-Code /
-  LateOn-Code-edge shapes. Reports forward, backward, total, and peak
-  memory.
+encoder) at huge-batch / long-context shapes — the 1 × H100 numbers
+measured here are **1.04–1.27× end-to-end** (see README “End-to-end
+LateOn-Code-edge training” table). The small encoder makes MaxSim a
+material slice of the step, so the kernel swap actually moves the
+wall-clock. Reproduce with `scripts/sky_lateon_edge.yaml`.
+- `**benchmarks/bench_fused_head_train.py**` — microbench of the
+rewritten `maxsim_from_hidden_train` vs the unfused
+`F.linear + F.normalize + maxsim` path across LateOn / LateOn-Code /
+LateOn-Code-edge shapes. Reports forward, backward, total, and peak
+memory.
 
 ### Changed
 
-- **`maxsim_from_hidden_train` backward** — closed-form instead of a
-  Python autograd rebuild. Forward still saves only `argmax`, `H_d`,
-  `Q`, `W`, `b`; backward:
+- `**maxsim_from_hidden_train` backward** — closed-form instead of a
+Python autograd rebuild. Forward still saves only `argmax`, `H_d`,
+`Q`, `W`, `b`; backward:
   - gathers `H_win` at winning positions,
   - recomputes `D_unnorm_win = H_win @ W + b` and `D_hat_win` in
-    `compute_dtype` (bf16/fp16 × fp32 accumulator),
+  `compute_dtype` (bf16/fp16 × fp32 accumulator),
   - applies the L2-normalize Jacobian directly (no `autograd.grad`),
   - computes `grad_Q`, `grad_W`, `grad_b` with plain `einsum` /
-    `matmul`,
+  `matmul`,
   - scatters `grad_H` into a tensor allocated in `H_d.dtype` via
-    `index_add_` (no large fp32 intermediates).
-
+  `index_add_` (no large fp32 intermediates).
   Measured on 1 × H100 bf16, `LateOn` / `LateOn-Code-edge` shapes:
   **1.01–4.64× faster** than the unfused reference, with peak memory
   on par with or below it. No change to numerics (same atol/rtol
   tests pass as in 0.7.0).
 - **Default benchmark model renamed** — `bench_moderncolbert.py` →
-  `bench_lateon.py`, `bench_pylate_moderncolbert.py` →
-  `bench_pylate_lateon.py`, default checkpoint flipped to
-  `lightonai/LateOn`. `lightonai/GTE-ModernColBERT-v1` remains
-  supported and numbers remain valid — same ModernBERT-base backbone.
+`bench_lateon.py`, `bench_pylate_moderncolbert.py` →
+`bench_pylate_lateon.py`, default checkpoint flipped to
+`lightonai/LateOn`. `lightonai/GTE-ModernColBERT-v1` remains
+supported and numbers remain valid — same ModernBERT-base backbone.
 - **Docs** — `docs/design.md` gets a new *Fused heads* section
-  describing the 0.6+ inference head, the 0.8.0 closed-form backward,
-  the 0.7.0 top-K argmax save for `smooth_maxsim`, the FP8 inference
-  path, and Triton 3.2+ warp specialization. `docs/supported_models.md`
-  and `docs/benchmarks.md` are refreshed for LateOn.
+describing the 0.6+ inference head, the 0.8.0 closed-form backward,
+the 0.7.0 top-K argmax save for `smooth_maxsim`, the FP8 inference
+path, and Triton 3.2+ warp specialization. `docs/supported_models.md`
+and `docs/benchmarks.md` are refreshed for LateOn.
 
 ## 0.7.0 — FP8 inference, smooth top-K MaxSim, warp-specialized autotune
 
@@ -162,122 +218,116 @@ Feature release. Adds Hopper/Blackwell FP8 inference, a top-K MaxSim
 variant with smoother training gradients, warp-specialized autotune
 configs (FA-3 style), and an autograd-aware training wrapper for
 `maxsim_from_hidden`. See
-[`docs/rfc/0.7.0.md`](docs/rfc/0.7.0.md) for design.
+`[docs/rfc/0.7.0.md](docs/rfc/0.7.0.md)` for design.
 
 ### Added
 
 - **FP8 MaxSim inference** (`maxsim_fp8`, `quantize_fp8`) — per-tensor
-  / per-token e4m3 inputs with fp32 accumulator and a score-tie
-  fallback harness that re-runs `(i, j)` cells in bf16 when the FP8
-  score is within a ULP-equivalent threshold of the runner-up.
-  Preserves top-K ranking on retrieval benchmarks at ~80 % of the raw
-  tensor-core speedup.
-- **`smooth_maxsim`** — finite-K variant of MaxSim: score is the mean
-  of the top-K per-query-token inner products. Implemented as a
-  streaming argmax-union Triton kernel that writes a
-  `[Nq·Nd·Lq·K]` argmax buffer consumed by an `index_add`-based
-  backward. `K=1` degenerates to hard MaxSim; `K ≥ 4` gives softer
-  gradients than the β-tuned `soft_maxsim` without a temperature
-  knob.
+/ per-token e4m3 inputs with fp32 accumulator and a score-tie
+fallback harness that re-runs `(i, j)` cells in bf16 when the FP8
+score is within a ULP-equivalent threshold of the runner-up.
+Preserves top-K ranking on retrieval benchmarks at ~80 % of the raw
+tensor-core speedup.
+- `**smooth_maxsim`** — finite-K variant of MaxSim: score is the mean
+of the top-K per-query-token inner products. Implemented as a
+streaming argmax-union Triton kernel that writes a
+`[Nq·Nd·Lq·K]` argmax buffer consumed by an `index_add`-based
+backward. `K=1` degenerates to hard MaxSim; `K ≥ 4` gives softer
+gradients than the β-tuned `soft_maxsim` without a temperature
+knob.
 - **Warp specialization** (Triton ≥ 3.2) — producer/consumer schedule
-  wired into the MaxSim forward autotune, with transparent fallback
-  on older Triton. Overlaps `D_tile` loads with the previous
-  `Q·Dᵀ` issue, buying another ~10–20 % on H100.
-- **`maxsim_from_hidden_train`** — autograd-aware training wrapper
-  around `maxsim_from_hidden` (experimental in 0.7.0; backward rebuilt
-  the winners slice in Python autograd — **correct (≤ 2 % RMS vs
-  unfused) but ~2× slower**; 0.8.0 rewrites this in closed form).
+wired into the MaxSim forward autotune, with transparent fallback
+on older Triton. Overlaps `D_tile` loads with the previous
+`Q·Dᵀ` issue, buying another ~10–20 % on H100.
+- `**maxsim_from_hidden_train`** — autograd-aware training wrapper
+around `maxsim_from_hidden` (experimental in 0.7.0; backward rebuilt
+the winners slice in Python autograd — **correct (≤ 2 % RMS vs
+unfused) but ~2× slower**; 0.8.0 rewrites this in closed form).
 
 ## 0.6.0 — Unified backward + fused inference head
 
 Performance release. Core training path is now a single fused
 backward kernel (FA-2 style); inference gets a fused D-side head that
 avoids multi-GB intermediates on large corpora. See
-[`docs/rfc/0.6.0.md`](docs/rfc/0.6.0.md) for the full design and
+`[docs/rfc/0.6.0.md](docs/rfc/0.6.0.md)` for the full design and
 HBM-level motivation.
 
 ### Added
 
 - **Unified backward Triton kernel** (`maxsim_backward_unified`,
-  `set_backward_method("unified")`) — single-pass `grad_Q` + `grad_D`
-  fused kernel. Per `(i, s)` program hoists `Q[i, s, :]` out of the
-  `j` loop, so the two-pass `Nd`-fold reload of `Q` for `grad_D`
-  collapses to a single load. Halves HBM read traffic vs the two-pass
-  backward on MaxSim-dominant shapes.
-
+`set_backward_method("unified")`) — single-pass `grad_Q` + `grad_D`
+fused kernel. Per `(i, s)` program hoists `Q[i, s, :]` out of the
+`j` loop, so the two-pass `Nd`-fold reload of `Q` for `grad_D`
+collapses to a single load. Halves HBM read traffic vs the two-pass
+backward on MaxSim-dominant shapes.
   Measured on H100 bf16 (50-iter median, in ms):
 
-  | Shape | atomic (two-pass) | unified | Speedup |
-  | --- | ---: | ---: | ---: |
-  | train-B32 (PyLate default) | 0.14 | 0.11 | **1.33×** |
-  | train-B128 | 0.41 | 0.37 | 1.11× |
-  | **colpali-B4 (Lq=1024)** | **0.90** | **0.11** | **8.35×** |
-  | long-doc-B32 (Ld=1024) | 0.14 | 0.11 | **1.30×** |
-  | edge-d48 / edge-d64 / large-d-512 | 0.14 | 0.10–0.11 | **1.32–1.34×** |
+  | Shape                             | atomic (two-pass) | unified   | Speedup        |
+  | --------------------------------- | ----------------- | --------- | -------------- |
+  | train-B32 (PyLate default)        | 0.14              | 0.11      | **1.33×**      |
+  | train-B128                        | 0.41              | 0.37      | 1.11×          |
+  | **colpali-B4 (Lq=1024)**          | **0.90**          | **0.11**  | **8.35×**      |
+  | long-doc-B32 (Ld=1024)            | 0.14              | 0.11      | **1.30×**      |
+  | edge-d48 / edge-d64 / large-d-512 | 0.14              | 0.10–0.11 | **1.32–1.34×** |
 
   End-to-end PyLate training step (full contrastive loss + backward):
   **1.12–2.67× wall-clock** across typical shapes, with the biggest
   win at B=128 (**2.67×**) and ColPali-style B=4, Lq=1024 (**1.03×
   end-to-end, 8.35× on the backward alone**).
-
-- **`set_backward_method("unified")`** exposed alongside the existing
-  `"atomic"`, `"csr"`, `"auto"` modes. The `"auto"` heuristic now
-  defaults to `unified` for every training shape except very
-  high-contention batches (`Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`), where
-  CSR's determinism advantage still wins. No user action is needed
-  to benefit.
-
-- **`maxsim_from_hidden(Q, H_d, W, b=, d_mask=, normalize=)`** —
-  inference-only fused kernel. Takes pre-projected queries and **raw
-  hidden-state** documents (`[Nd, Ld, d_model]`), applies the
-  projection + L2-normalize + MaxSim in a single pass so the
-  `[Nd, Ld, d_out]` intermediate never hits HBM. Target use case:
-  reranking a large corpus stored on disk as `[Nd, Ld, 768]` ModernBERT
-  hidden states — the intermediate `D_proj` can be multi-GB and OOMs
-  on edge models with `Nd > 100k`. Not autograd-aware (training-side
-  fusion requires a persistent kernel, deferred to 0.7.0; the HBM
-  analysis is in the RFC).
-
-- **`benchmarks/bench_flash_maxsim.py`** — head-to-head microbenchmark
-  against `flash-maxsim` (roipony/IBM). 50-iter median, reports
-  ms/iter, stdev, peak memory, and speedup across ten shapes
-  (rerank, training batch, long-doc, edge models). H100 bf16 results
-  show **1.01–1.26× forward speedup** vs `flash-maxsim` on every
-  shape, and this library additionally ships a backward, quantized
-  (`maxsim_residual`), ragged (`maxsim_varlen`), soft
-  (`soft_maxsim`), and retrieval-top-K (`maxsim_topk`) path that
-  `flash-maxsim` does not.
-
-- **`benchmarks/bench_backward_unified.py`** — microbench of the
-  new unified kernel vs the two-pass atomic and CSR variants.
-
-- **`docs/rfc/0.6.0.md`** — public RFC for the 0.6.0 → 0.8.0
-  performance track. Includes:
+- `**set_backward_method("unified")`** exposed alongside the existing
+`"atomic"`, `"csr"`, `"auto"` modes. The `"auto"` heuristic now
+defaults to `unified` for every training shape except very
+high-contention batches (`Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`), where
+CSR's determinism advantage still wins. No user action is needed
+to benefit.
+- `**maxsim_from_hidden(Q, H_d, W, b=, d_mask=, normalize=)**` —
+inference-only fused kernel. Takes pre-projected queries and **raw
+hidden-state** documents (`[Nd, Ld, d_model]`), applies the
+projection + L2-normalize + MaxSim in a single pass so the
+`[Nd, Ld, d_out]` intermediate never hits HBM. Target use case:
+reranking a large corpus stored on disk as `[Nd, Ld, 768]` ModernBERT
+hidden states — the intermediate `D_proj` can be multi-GB and OOMs
+on edge models with `Nd > 100k`. Not autograd-aware (training-side
+fusion requires a persistent kernel, deferred to 0.7.0; the HBM
+analysis is in the RFC).
+- `**benchmarks/bench_flash_maxsim.py`** — head-to-head microbenchmark
+against `flash-maxsim` (roipony/IBM). 50-iter median, reports
+ms/iter, stdev, peak memory, and speedup across ten shapes
+(rerank, training batch, long-doc, edge models). H100 bf16 results
+show **1.01–1.26× forward speedup** vs `flash-maxsim` on every
+shape, and this library additionally ships a backward, quantized
+(`maxsim_residual`), ragged (`maxsim_varlen`), soft
+(`soft_maxsim`), and retrieval-top-K (`maxsim_topk`) path that
+`flash-maxsim` does not.
+- `**benchmarks/bench_backward_unified.py`** — microbench of the
+new unified kernel vs the two-pass atomic and CSR variants.
+- `**docs/rfc/0.6.0.md**` — public RFC for the 0.6.0 → 0.8.0
+performance track. Includes:
   - HBM accounting showing why naive training-side fused-head is a
-    net loss (4× more hidden-state reads) and why 0.7.0 needs a
-    persistent kernel to reclaim it.
+  net loss (4× more hidden-state reads) and why 0.7.0 needs a
+  persistent kernel to reclaim it.
   - `D_proj` scratch estimates showing the `maxsim_from_hidden` win
-    (up to 46 GB saved on `Nd=1M` corpora with `d_out=96`).
+  (up to 46 GB saved on `Nd=1M` corpora with `d_out=96`).
   - Expected speedups per milestone and validation plan.
 
 ### Changed
 
 - `set_backward_method` now accepts `"unified"` and documents the new
-  default heuristic in `"auto"` mode. Callers that explicitly pin
-  `"atomic"` or `"csr"` are unaffected.
+default heuristic in `"auto"` mode. Callers that explicitly pin
+`"atomic"` or `"csr"` are unaffected.
 
 ### Deferred to 0.7.0
 
 - **Top-K argmax save** for smoother `soft_maxsim` backward gradients.
-  Needs a streaming Triton top-K kernel (Triton has no usable native
-  `tl.topk` for this pattern; online heap maintenance across tiles is
-  a proper kernel project).
+Needs a streaming Triton top-K kernel (Triton has no usable native
+`tl.topk` for this pattern; online heap maintenance across tiles is
+a proper kernel project).
 - **Persistent kernel + SMEM-cached fused head for training**. The
-  naive training-side fused head reads `H [d_model]` 4× more than
-  `D_proj [d_out]`; only a persistent kernel that keeps H or Q
-  cached across the cross-`(i, j)` loop makes this a win. See RFC.
+naive training-side fused head reads `H [d_model]` 4× more than
+`D_proj [d_out]`; only a persistent kernel that keeps H or Q
+cached across the cross-`(i, j)` loop makes this a win. See RFC.
 - **FP8 path** (Hopper WGMMA + Blackwell). Needs a per-token scale
-  + score-tie fallback harness before numerical parity claims.
+  - score-tie fallback harness before numerical parity claims.
 - **Warp specialization** (Flash-Attn-3 style). Requires Triton 3.2+.
 
 ## 0.5.1 — Packed-training cookbook, repo trim
@@ -287,32 +337,32 @@ are unchanged and numerically identical.
 
 ### Added
 
-- **`docs/packed_training.md`** — cookbook for wiring `maxsim_varlen` into a
-  heterogeneous-length training loop: when packing is worth it (a
-  padding-waste rule of thumb), the three pieces a packed pipeline needs
-  (collator, varlen-aware encoder forward, packed loss), correctness
-  checks against the padded path, and caveats around `torch.compile`,
-  gradient checkpointing, and distributed training.
-- **`examples/packed_training.py`** — runnable padded-vs-packed
-  comparison on synthetic long-tailed data. Reports per-step loss,
-  wall-clock, and peak memory so the padding-waste vs packing-win
-  tradeoff is visible on your hardware. Runs on CPU for smoke-testing.
+- `**docs/packed_training.md`** — cookbook for wiring `maxsim_varlen` into a
+heterogeneous-length training loop: when packing is worth it (a
+padding-waste rule of thumb), the three pieces a packed pipeline needs
+(collator, varlen-aware encoder forward, packed loss), correctness
+checks against the padded path, and caveats around `torch.compile`,
+gradient checkpointing, and distributed training.
+- `**examples/packed_training.py**` — runnable padded-vs-packed
+comparison on synthetic long-tailed data. Reports per-step loss,
+wall-clock, and peak memory so the padding-waste vs packing-win
+tradeoff is visible on your hardware. Runs on CPU for smoke-testing.
 
 ### Removed
 
 - `CODE_OF_CONDUCT.md`, `SECURITY.md` — redundant boilerplate for a
-  small kernel library. Apache-2.0 `LICENSE` and `CONTRIBUTING.md` stay
-  as the canonical contributor-facing docs.
+small kernel library. Apache-2.0 `LICENSE` and `CONTRIBUTING.md` stay
+as the canonical contributor-facing docs.
 - `docs/liger.md` — speculative upstreaming essay; the Related projects
-  section in the README keeps the short factual reference to Liger.
+section in the README keeps the short factual reference to Liger.
 
 ### Changed
 
 - `README.md`: dropped the `CODE_OF_CONDUCT.md` / `docs/liger.md` links,
-  added a pointer from the Varlen section to `docs/packed_training.md`
-  and `examples/packed_training.py`.
+added a pointer from the Varlen section to `docs/packed_training.md`
+and `examples/packed_training.py`.
 - `.github/ISSUE_TEMPLATE/config.yml`: replaced the SECURITY contact
-  link with a Packed-training docs entry.
+link with a Packed-training docs entry.
 
 ## 0.5.0 — Fused backward for `maxsim_residual`, autograd-aware `maxsim_varlen`
 
@@ -354,68 +404,68 @@ fits (and does not fit) in the story.
 ### Changed
 
 - `maxsim_residual` now returns an autograd-aware result when `Q`
-  requires grad — previously it silently dropped gradient. Behavior on
-  non-grad inputs is unchanged and byte-for-byte identical to 0.4.
+requires grad — previously it silently dropped gradient. Behavior on
+non-grad inputs is unchanged and byte-for-byte identical to 0.4.
 - `maxsim_varlen` likewise is now autograd-aware when either input
-  requires grad. Previous 0.4.x callers that pass non-grad tensors see
-  no change.
-- **`soft_maxsim` is now autograd-aware** — wrapped in a
-  `torch.autograd.Function` with a Triton forward (fp16 / bf16) and a
-  stable fp32 PyTorch reference backward (softmax-reweighted einsum).
-  fp32 / fp64 / CPU inputs transparently fall back to a pure-PyTorch
-  reference forward so `torch.autograd.gradcheck` passes cleanly on
-  fp64. Previous callers that only used the forward see no change
-  beyond the output now having a `grad_fn`.
-- **`maxsim` and `maxsim_inference` now validate the shape / device
-  contract up front** (`Q.shape[-1] == D.shape[-1]`, same device, masks
-  on matching devices). Previously a mismatch could silently produce
-  garbage scores; now it raises `ValueError` with a clear message.
+requires grad. Previous 0.4.x callers that pass non-grad tensors see
+no change.
+- `**soft_maxsim` is now autograd-aware** — wrapped in a
+`torch.autograd.Function` with a Triton forward (fp16 / bf16) and a
+stable fp32 PyTorch reference backward (softmax-reweighted einsum).
+fp32 / fp64 / CPU inputs transparently fall back to a pure-PyTorch
+reference forward so `torch.autograd.gradcheck` passes cleanly on
+fp64. Previous callers that only used the forward see no change
+beyond the output now having a `grad_fn`.
+- `**maxsim` and `maxsim_inference` now validate the shape / device
+contract up front** (`Q.shape[-1] == D.shape[-1]`, same device, masks
+on matching devices). Previously a mismatch could silently produce
+garbage scores; now it raises `ValueError` with a clear message.
 
 ### Fixed
 
-- **`patch_pylate()` signature compatibility with current PyLate.** The
-  patched `colbert_scores` / `colbert_kd_scores` now match PyLate's
-  current signature `(Q, D, queries_mask=None, documents_mask=None)`
-  exactly. Previously we only accepted a single positional `mask=` kwarg,
-  which meant `Contrastive`, `CachedContrastive`, and `Distillation`
-  (which all call into the score fn with keyword args `queries_mask=` /
-  `documents_mask=`) would raise `TypeError` after `patch_pylate()`.
-  The legacy `mask=` kwarg is still silently accepted so the patch
-  remains a drop-in.
+- `**patch_pylate()` signature compatibility with current PyLate.** The
+patched `colbert_scores` / `colbert_kd_scores` now match PyLate's
+current signature `(Q, D, queries_mask=None, documents_mask=None)`
+exactly. Previously we only accepted a single positional `mask=` kwarg,
+which meant `Contrastive`, `CachedContrastive`, and `Distillation`
+(which all call into the score fn with keyword args `queries_mask=` /
+`documents_mask=`) would raise `TypeError` after `patch_pylate()`.
+The legacy `mask=` kwarg is still silently accepted so the patch
+remains a drop-in.
 - **Pinned PyLate to ≥ 1.3.3** in `pyproject.toml`'s `[pylate]` extra
-  (PyLate 1.3 is the first release with the new mask-kwarg signature).
-  Older PyLate (1.2.x) is no longer targeted — use
-  `late-interaction-kernels==0.4.x` if you need PyLate 1.2 compatibility.
+(PyLate 1.3 is the first release with the new mask-kwarg signature).
+Older PyLate (1.2.x) is no longer targeted — use
+`late-interaction-kernels==0.4.x` if you need PyLate 1.2 compatibility.
 
 ### Tests
 
-- **`tests/test_pylate_compat.py`** rewritten to target only the current
-  PyLate signature. Adds coverage for `colbert_kd_scores` (distillation
-  call site), CPU fallback, `LIK_DISABLE=1` kill switch, and verifying
-  that `unpatch_pylate()` fully restores PyLate's original references
-  in every loss module.
-- **`tests/test_robustness.py`** — a new senior-review-grade test file:
-  forward determinism (bitwise equality on repeated calls), gradcheck
-  on `soft_maxsim` (smooth forward → valid FD gradcheck), `torch.compile`
-  smoke, `torch.inference_mode()` / `torch.no_grad()` VRAM accounting
-  (argmax buffer is actually skipped), CUDA Graphs capture + replay,
-  API contract errors (shape / device mismatch), small-magnitude
-  numerical stability, and `soft_maxsim` backward determinism.
+- `**tests/test_pylate_compat.py`** rewritten to target only the current
+PyLate signature. Adds coverage for `colbert_kd_scores` (distillation
+call site), CPU fallback, `LIK_DISABLE=1` kill switch, and verifying
+that `unpatch_pylate()` fully restores PyLate's original references
+in every loss module.
+- `**tests/test_robustness.py**` — a new senior-review-grade test file:
+forward determinism (bitwise equality on repeated calls), gradcheck
+on `soft_maxsim` (smooth forward → valid FD gradcheck), `torch.compile`
+smoke, `torch.inference_mode()` / `torch.no_grad()` VRAM accounting
+(argmax buffer is actually skipped), CUDA Graphs capture + replay,
+API contract errors (shape / device mismatch), small-magnitude
+numerical stability, and `soft_maxsim` backward determinism.
 
 ### Honest performance notes
 
 - Fused residual backward is a **small wins at small `Nd` (training
-  regime)** path: ~1.3–1.5× faster than `unpack → maxsim` at
-  `Nq=8, Nd=64, Ld=300`. At rerank scale (`Nd ≥ 512`) the reference
-  `unpack`-once + `maxsim` path is faster wall-clock-wise because the
-  decompression amortizes across query tokens. The fused path still
-  wins on **VRAM** at every shape (no dense `[Nd, Ld, d]` fp32
-  scratch). If you need autograd at large `Nd` use the dense unpack
-  path; if you only need inference use `maxsim_residual_inference`.
+regime)** path: ~1.3–1.5× faster than `unpack → maxsim` at
+`Nq=8, Nd=64, Ld=300`. At rerank scale (`Nd ≥ 512`) the reference
+`unpack`-once + `maxsim` path is faster wall-clock-wise because the
+decompression amortizes across query tokens. The fused path still
+wins on **VRAM** at every shape (no dense `[Nd, Ld, d]` fp32
+scratch). If you need autograd at large `Nd` use the dense unpack
+path; if you only need inference use `maxsim_residual_inference`.
 - Fused varlen backward is a **free win (~1.05–1.1×)** at typical code-
-  retrieval and long-doc shapes, with zero repadding. The real value
-  is correctness: ragged inputs that go in never have to come out as
-  padded.
+retrieval and long-doc shapes, with zero repadding. The real value
+is correctness: ragged inputs that go in never have to come out as
+padded.
 
 ## 0.4.0 — New kernels: fused normalize, top-k, Matryoshka, XTR, PLAID
 
@@ -426,7 +476,7 @@ reference + GPU kernel) and a benchmark. All changes are additive — the
 
 ### Added
 
-- `**normalize=True**` on `maxsim`, `maxsim_inference`, `maxsim_matryoshka`,
+- `**normalize=True`** on `maxsim`, `maxsim_inference`, `maxsim_matryoshka`,
 `maxsim_residual`. L2-normalization is fused into the forward kernel (no HBM
 round-trip) and the backward correctly applies the L2-norm Jacobian.
 Measured **3.4× – 16.7× faster** than explicit `F.normalize + maxsim`
@@ -436,7 +486,7 @@ call; `chunk` bounds peak memory for very large corpora.
 - `**maxsim_matryoshka(Q, D, dims=[...], normalize=False)`** — evaluate
 MaxSim at multiple embedding-prefix dims in a single launch (1.56× on 3
 dims vs running 3 separate kernels).
-- `**maxsim_xtr(Q, D, top_k=k, normalize_by_k=True)**` — XTR-style
+- `**maxsim_xtr(Q, D, top_k=k, normalize_by_k=True)`** — XTR-style
 top-k-aggregated MaxSim. `top_k=1` path dispatches to the fused MaxSim;
 a fully-fused in-kernel heap for `top_k > 1` is on the roadmap.
 - `**plaid_approx_score(query_centroid_scores, codes, doc_lengths)**` —

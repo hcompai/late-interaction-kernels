@@ -12,9 +12,9 @@ at one cutoff, reading only the first ``dims[k]`` features from both Q and D.
 The kernel is nearly identical to the main MaxSim forward but parameterized
 by ``d_active`` (the current cutoff).
 
-Compute cost is ``O(K * Nq * Nd * Lq * Ld * d_max)`` which is the honest cost
-of computing K different MaxSim scores; we do it in one launch with shared
-autotuning and no Python loop. Memory for the output is ``[K, Nq, Nd]`` fp32.
+Compute cost is ``O(K * Nq * Nd * Lq * Ld * d_max)`` — the cost of computing
+K different MaxSim scores — but in one launch with shared autotuning and no
+Python loop. Output memory is ``[K, Nq, Nd]`` fp32.
 """
 
 from __future__ import annotations

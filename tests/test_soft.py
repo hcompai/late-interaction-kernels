@@ -10,7 +10,7 @@ pytestmark = pytest.mark.cuda
 
 @pytest.mark.parametrize("beta", [1.0, 5.0, 25.0])
 def test_soft_parity(beta):
-    from late_interaction_kernels import soft_maxsim
+    from late_interaction_kernels.experimental import soft_maxsim
     from late_interaction_kernels.reference import maxsim_reference_soft
 
     Nq, Nd, Lq, Ld, d = 4, 4, 32, 128, 128
@@ -30,7 +30,8 @@ def test_soft_parity(beta):
 
 
 def test_soft_approaches_max_as_beta_grows():
-    from late_interaction_kernels import maxsim, soft_maxsim
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.experimental import soft_maxsim
 
     Nq, Nd, Lq, Ld, d = 2, 2, 16, 64, 128
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)

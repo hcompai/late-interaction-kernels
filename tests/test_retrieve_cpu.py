@@ -271,6 +271,56 @@ def test_maxsim_forward_is_deprecated_but_still_importable():
     ]
 
 
+@pytest.mark.parametrize(
+    "name,new_home",
+    [
+        ("maxsim_matryoshka", "late_interaction_kernels.experimental"),
+        ("maxsim_xtr", "late_interaction_kernels.experimental"),
+        ("soft_maxsim", "late_interaction_kernels.experimental"),
+        ("smooth_maxsim", "late_interaction_kernels.experimental"),
+        ("quantize_fp8_per_tensor", "late_interaction_kernels.fp8"),
+        ("quantize_fp8_per_token", "late_interaction_kernels.fp8"),
+        ("dequantize_fp8_per_tensor", "late_interaction_kernels.fp8"),
+        ("dequantize_fp8_per_token", "late_interaction_kernels.fp8"),
+    ],
+)
+def test_demoted_symbols_warn_but_still_work(name, new_home):
+    """Symbols that moved out of the top-level import in 0.9.x still resolve
+    from ``late_interaction_kernels`` with a ``DeprecationWarning`` pointing
+    to their new home. Dropping the shim outright would silently break
+    pinned users.
+    """
+    import warnings
+
+    import late_interaction_kernels as lik
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        fn = getattr(lik, name)
+    assert callable(fn)
+    msgs = [str(x.message) for x in w if issubclass(x.category, DeprecationWarning)]
+    assert any(name in m and new_home in m for m in msgs), msgs
+
+
+def test_demoted_symbols_not_in_dunder_all():
+    """``from late_interaction_kernels import *`` must not pull the demoted
+    symbols back in — they should live at their new home only.
+    """
+    import late_interaction_kernels as lik
+
+    demoted = {
+        "maxsim_matryoshka",
+        "maxsim_xtr",
+        "soft_maxsim",
+        "smooth_maxsim",
+        "quantize_fp8_per_tensor",
+        "quantize_fp8_per_token",
+        "dequantize_fp8_per_tensor",
+        "dequantize_fp8_per_token",
+    }
+    assert demoted.isdisjoint(lik.__all__), demoted & set(lik.__all__)
+
+
 def test_reference_topk_path_matches_fused_topk_contract_on_ties():
     """Top-k must be stable under the same-ordering convention torch.topk uses.
 
