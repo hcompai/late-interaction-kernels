@@ -43,6 +43,21 @@ back to a pure-PyTorch implementation, so training and retrieval code
 runs locally before renting a GPU. The PyLate drop-in targets PyLate
 ≥ 1.3.
 
+**Alternative — HuggingFace Kernels Hub:** the forward / inference surface
+is also published as a pinned, prebuilt kernel:
+
+```python
+from kernels import get_kernel
+
+lik = get_kernel("Hcompany/late-interaction-kernels")
+scores = lik.maxsim_inference(Q, D, normalize=True)        # [Nq, Nd]
+```
+
+No `pip install`, no local Triton compile — the kernel is versioned and
+cached by the Hub. See [`docs/hf_kernels.md`](docs/hf_kernels.md) for the
+full forward-only surface and the `MaxSim` `nn.Module` layer compatible
+with `kernels.kernelize()`.
+
 ---
 
 ## Quickstart
