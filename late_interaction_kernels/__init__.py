@@ -13,7 +13,7 @@ FP8 helpers live in ``late_interaction_kernels.fp8``.
 Research kernels live in ``late_interaction_kernels.experimental``.
 """
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 # The kernels need Triton (Linux + CUDA). On macOS / Windows we still want
 # `import late_interaction_kernels` to succeed so users can develop against

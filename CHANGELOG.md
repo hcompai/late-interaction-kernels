@@ -4,10 +4,12 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — final 0.9.0 polish (release candidate)
+## 0.10.0 — PLAID-on-ragged + scatter kernel, public-surface trim, doc audit
 
-Adds the last missing kernel for vLLM-style reranker scheduling and
-finishes trimming the public surface. Documentation rewritten end-to-end.
+Two new kernels and a full audit of the public surface. The PLAID
+ragged kernel closes the real bottleneck on top of fast-plaid /
+ColBERTv2 indices; the scatter kernel is the missing piece for vLLM-
+style reranker scheduling. Documentation rewritten end-to-end.
 
 ### Added
 
