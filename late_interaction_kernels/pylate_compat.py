@@ -173,11 +173,12 @@ def patch_pylate():
 
     if missed:
         warnings.warn(
-            "patch_pylate(): could not reach "
+            "late-interaction-kernels: `patch_pylate()` could not reach "
             + ", ".join(missed)
-            + ". `pylate.scores.colbert_scores` is hooked, but loss modules "
-            "with cached imports will keep running vanilla PyLate. "
-            "Check you're on `pylate>=1.3.3`.",
+            + ". `pylate.scores.colbert_scores` is hooked, but any loss module that "
+            "captured the un-patched symbol at import time will keep using vanilla "
+            "PyLate. This usually means PyLate was refactored — check you're on a "
+            "supported version (`pylate>=1.3.3`).",
             RuntimeWarning,
             stacklevel=2,
         )

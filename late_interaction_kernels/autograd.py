@@ -67,10 +67,10 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
     if not (0.9 <= med <= 1.1):
         _WARNED_UNNORMALIZED = True
         warnings.warn(
-            f"maxsim(..., normalize=False) but Q's median L2 norm is {med:.3f} "
-            "(ColBERT-style models expect ≈1.0). Pass `normalize=True` to fuse "
-            "the L2-norm into the kernel, or pre-normalize with "
-            "`F.normalize(Q, dim=-1)`. Silence with `LIK_SUPPRESS_NORM_WARN=1`.",
+            f"late-interaction-kernels: `maxsim(..., normalize=False)` but Q's median L2 norm "
+            f"is {med:.3f} (ColBERT-style models expect ≈1.0). Pass `normalize=True` to fuse "
+            "the L2-norm into the kernel, or pre-normalize with `F.normalize(Q, dim=-1)`. "
+            "Silence with `LIK_SUPPRESS_NORM_WARN=1`.",
             UserWarning,
             stacklevel=3,
         )
