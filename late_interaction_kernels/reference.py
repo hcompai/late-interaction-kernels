@@ -347,3 +347,27 @@ def maxsim_reference_varlen(
             S = qi @ dj.T  # [lq, ld]
             out[i, j] = S.max(dim=-1).values.sum()
     return out
+
+
+def maxsim_reference_scatter(
+    Q_packed: torch.Tensor,
+    D_packed: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_d: torch.Tensor,
+    pair_q_idx: torch.Tensor,
+    pair_d_idx: torch.Tensor,
+) -> torch.Tensor:
+    """Pair-list reference for ``maxsim_inference_scatter``: scores ``[num_pairs]``."""
+    num_pairs = pair_q_idx.numel()
+    out = torch.empty(num_pairs, device=Q_packed.device, dtype=torch.float32)
+    for k in range(num_pairs):
+        i = int(pair_q_idx[k].item())
+        j = int(pair_d_idx[k].item())
+        qi = Q_packed[cu_seqlens_q[i].item() : cu_seqlens_q[i + 1].item()].float()
+        dj = D_packed[cu_seqlens_d[j].item() : cu_seqlens_d[j + 1].item()].float()
+        if qi.shape[0] == 0 or dj.shape[0] == 0:
+            out[k] = 0.0
+            continue
+        S = qi @ dj.T
+        out[k] = S.max(dim=-1).values.sum()
+    return out

@@ -1,12 +1,9 @@
-"""Fused Triton forward kernel for MaxSim with fused masks and normalize.
+"""Fused MaxSim forward kernel (FlashAttention-style tiling).
 
-One program per ``(q_batch, d_batch)`` pair; streams tiles of ``Q`` and
-``D`` through SRAM so the full ``[Nq · Nd · Lq · Ld]`` similarity tensor
-is never materialized. Optional ``save_argmax`` writes a small
-``[Nq · Nd, Lq]`` int32 buffer used by the training backward paths.
-
-See :doc:`../docs/design.md` for the full walk-through of tiling, mask
-semantics, numerical accuracy, and differences vs flash-maxsim.
+One program per ``(q_batch, d_batch)``. ``[Nq · Nd · Lq · Ld]`` similarities
+never hit HBM. Optional ``save_argmax`` writes a ``[Nq · Nd, Lq]`` int32
+buffer used by the training backward paths. See ``docs/design.md`` for the
+algorithm.
 """
 
 from __future__ import annotations
@@ -233,24 +230,19 @@ def maxsim_forward(
     save_argmax: bool = False,
     normalize: bool = False,
 ):
-    """Fused forward MaxSim with mask support.
+    """Fused MaxSim forward.
 
     Args:
-        Q: [Nq, Lq, d] or [Lq, d].
-        D: [Nd, Ld, d] or [Ld, d].
-        q_mask: [Nq, Lq] or [Lq] bool tensor. True=keep.
-        d_mask: [Nd, Ld] or [Ld] bool tensor. True=keep.
-        save_argmax: if True, return the winning doc-token index per
-            (q_batch, d_batch, q_token). Used by the exact backward.
-        normalize: if True, L2-normalize each Q and D row (per-token)
-            inside the kernel. Equivalent to calling ``F.normalize(.., dim=-1)``
-            on Q and D before MaxSim, but without an HBM round-trip.
-            Saves ``2 * (Nq·Lq + Nd·Ld) * d * sizeof(dtype)`` bytes of
-            bandwidth per call.
+        Q: ``[Nq, Lq, d]`` or ``[Lq, d]``.
+        D: ``[Nd, Ld, d]`` or ``[Ld, d]``.
+        q_mask, d_mask: optional bool masks (``True`` = keep).
+        save_argmax: if ``True``, also return the winning doc-token index
+            per ``(q_batch, d_batch, q_token)``.
+        normalize: L2-normalize Q and D per-token inside the kernel.
 
     Returns:
-        scores: [Nq, Nd] fp32. If both inputs were 2-D returns a scalar.
-        argmax: [Nq*Nd, Lq] int32 (or None).
+        scores: ``[Nq, Nd]`` fp32 (scalar if both inputs were 2-D).
+        argmax: ``[Nq*Nd, Lq]`` int32 or ``None``.
     """
     q_was_2d = Q.dim() == 2
     d_was_2d = D.dim() == 2

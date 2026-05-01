@@ -1,37 +1,14 @@
-"""PyLate drop-in: monkey-patch `pylate.scores.colbert_scores` with our kernel.
+"""PyLate drop-in: replace ``pylate.scores.colbert_scores`` with our kernel.
 
-Usage
------
-    from late_interaction_kernels.pylate_compat import patch_pylate
-    patch_pylate()             # after this, PyLate training & rerank use late-interaction-kernels
+::
 
-    # to revert:
-    from late_interaction_kernels.pylate_compat import unpatch_pylate
-    unpatch_pylate()
+    from late_interaction_kernels import patch_pylate, unpatch_pylate
+    patch_pylate()                # PyLate trainers + rerank now use the fused kernel
+    # ... train / rerank ...
+    unpatch_pylate()              # restore the original
 
-The replacement honors PyLate's exact signature:
-
-    colbert_scores(
-        queries_embeddings,        # [Nq, Lq, d]
-        documents_embeddings,      # [Nd, Ld, d]
-        queries_mask=None,         # [Nq, Lq] float/bool
-        documents_mask=None,       # [Nd, Ld] float/bool
-    ) -> [Nq, Nd]
-
-As of PyLate 1.2.x the loss modules (``Contrastive``, ``CachedContrastive``,
-``Distillation``) call into ``colbert_scores`` with keyword arguments
-``queries_mask=`` and ``documents_mask=``. For backward compatibility we
-also accept the legacy single ``mask=`` kwarg (older PyLate versions had
-that signature) and a third positional / keyword alias that some forks
-use. In every case the document mask is the primary mask applied to the
-``max`` reduction; the query mask, when present, is applied to query
-token rows before the scatter.
-
-We fall back to the original PyTorch implementation when:
-  * tensors are on CPU,
-  * CUDA device isn't Ampere-or-newer,
-  * `d` (embedding dim) is ridiculously small (< 8) — naive is fine,
-  * the environment variable `LIK_DISABLE=1` is set.
+Falls back to vanilla PyLate on CPU, sub-Ampere GPUs, ``d < 8``, or when
+``LIK_DISABLE=1`` is set.
 """
 
 from __future__ import annotations
@@ -99,23 +76,9 @@ def patched_colbert_scores(
     queries_mask=None,
     documents_mask=None,
     *,
-    mask=None,  # legacy PyLate kwarg — accepted and mapped to documents_mask
+    mask=None,  # legacy single-mask alias, mapped to documents_mask
 ):
-    """Drop-in replacement for :func:`pylate.scores.colbert_scores`.
-
-    PyLate current signature (>= 1.1)::
-
-        colbert_scores(Q, D, queries_mask=None, documents_mask=None)
-
-    ``Contrastive`` / ``CachedContrastive`` call this with **keyword** args
-    ``queries_mask=`` and ``documents_mask=``. We also accept the legacy
-    single ``mask=`` kwarg to stay compatible with older PyLate releases.
-
-    PyLate implements masks by multiplication (``scores * mask``); we
-    preserve the same algebraic result by masking-out tokens (``-inf``) so
-    they can't win the max, which matches PyLate whenever real scores are
-    non-negative (the common case after L2-normalization).
-    """
+    """Drop-in replacement for :func:`pylate.scores.colbert_scores`."""
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
     Q = convert_to_tensor(queries_embeddings)
@@ -138,13 +101,8 @@ def patched_colbert_kd_scores(
 ):
     """Drop-in replacement for :func:`pylate.scores.colbert_kd_scores`.
 
-    PyLate current signature (>= 1.1)::
-
-        colbert_kd_scores(Q, D, queries_mask=None, documents_mask=None)
-
-    Shape convention: ``D`` is ``[Nq, Nd, Ld, d]`` — each query has its
-    own candidate list — and ``documents_mask`` is ``[Nq, Nd, Ld]``.
-    ``queries_mask``, when supplied, is ``[Nq, Lq]``.
+    KD shape: ``D`` is ``[Nq, Nd, Ld, d]`` (each query has its own
+    candidate list), ``documents_mask`` ``[Nq, Nd, Ld]``.
     """
     from pylate.utils.tensor import convert_to_tensor  # type: ignore
 
@@ -172,7 +130,7 @@ def patched_colbert_kd_scores(
 
 
 def patch_pylate():
-    """Install late-interaction-kernels as the default MaxSim inside `pylate.scores`."""
+    """Install the fused kernel as the default MaxSim across ``pylate.scores`` and PyLate's loss modules."""
     import pylate.scores as api  # type: ignore
     import pylate.scores.scores as s  # type: ignore
 
@@ -187,10 +145,9 @@ def patch_pylate():
     api.colbert_scores = patched_colbert_scores
     api.colbert_kd_scores = patched_colbert_kd_scores
 
-    # Losses hold a direct reference captured at import time — patch those too.
-    # If a future PyLate refactor moves these symbols, we warn (loudly, once)
-    # so the user isn't silently running unpatched loss modules while
-    # believing they're getting the speedup.
+    # PyLate loss modules capture `colbert_scores` at import time; patch
+    # those references too. Warn if any are unreachable so users notice
+    # silent fallbacks after a future PyLate refactor.
     import importlib
     import warnings
 
@@ -216,13 +173,11 @@ def patch_pylate():
 
     if missed:
         warnings.warn(
-            "late-interaction-kernels: `patch_pylate()` could not reach the "
-            "following loss-module symbols: "
+            "patch_pylate(): could not reach "
             + ", ".join(missed)
-            + ". The top-level `pylate.scores.colbert_scores` hook is installed, "
-            "but any loss module that captured the un-patched symbol at import "
-            "time will keep using vanilla PyLate. This usually means PyLate was "
-            "refactored — check you're on a supported version (pylate>=1.3.3).",
+            + ". `pylate.scores.colbert_scores` is hooked, but loss modules "
+            "with cached imports will keep running vanilla PyLate. "
+            "Check you're on `pylate>=1.3.3`.",
             RuntimeWarning,
             stacklevel=2,
         )

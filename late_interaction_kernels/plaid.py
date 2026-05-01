@@ -1,18 +1,15 @@
-"""PLAID / ColBERTv2 kernels: approximate scoring + fused residual-decompress + MaxSim.
+"""PLAID / ColBERTv2 kernels.
 
-Two Triton kernels for the core operations of a ColBERTv2-style reranker
-(approximate scoring over centroid codes, exact rerank over packed
-residuals), so you can build one end-to-end in Python without hand-writing
-the fused ops.
+Three kernels for the ColBERTv2-style retrieval pipeline:
 
-* :func:`plaid_approx_score` — the approximate scoring step. Gathers
-  per-token query↔centroid scores, masks padded positions, takes
-  max-over-doc-tokens and sum-over-query-tokens, all in one kernel.
-
-* :func:`maxsim_residual` — the exact rerank step. Takes per-token
-  centroid codes + packed residuals (2/4/8-bit) + centroid table + bucket
-  weights, decompresses on-the-fly in SRAM, L2-normalizes, and computes
-  MaxSim against the query embedding — all in a single kernel.
+* :func:`plaid_approx_score` — IVF-prune step. Gathers per-token
+  query↔centroid scores and runs the masked max-then-sum reduction.
+* :func:`maxsim_residual` — exact rerank on padded ``(codes, residuals)``
+  with on-the-fly decompression + L2-normalize + MaxSim, autograd-aware
+  on Q.
+* :func:`maxsim_residual_varlen` — same kernel on ragged
+  ``cu_seqlens``-indexed flat buffers, matching the on-disk layout of
+  fast-plaid and ColBERTv2 (forward only).
 """
 
 from __future__ import annotations
@@ -90,21 +87,14 @@ def plaid_approx_score(
     codes: torch.Tensor,
     doc_lengths: torch.Tensor,
 ) -> torch.Tensor:
-    """Fused PLAID-style approximate scoring.
-
-    Performs the ColBERTv2 IVF-prune step — gather per-token centroid
-    scores, mask padded positions, max-over-doc, sum-over-query — in a
-    single kernel launch. Input codes are padded (not bit-packed); the
-    API matches what ColBERTv2 / PLAID-style retrievers pass into their
-    ``colbert_score_reduce`` routine.
+    """ColBERTv2 IVF-prune step, fused.
 
     Args:
-        query_centroid_scores: ``[n_centroids, Lq]`` fp32.
-            ``= centroids @ Q.T``, computed once per query.
-        codes: ``[B, max_Ld]`` int64 centroid codes. Positions beyond the real
-            doc length are masked out via ``doc_lengths``; their values are
-            not read.
-        doc_lengths: ``[B]`` int64 actual doc lengths (``<= max_Ld``).
+        query_centroid_scores: ``[n_centroids, Lq]`` fp32. Typically
+            ``centroids @ Q.T``, computed once per query.
+        codes: ``[B, max_Ld]`` int64 centroid codes. Positions beyond
+            ``doc_lengths`` are masked.
+        doc_lengths: ``[B]`` int64 real per-doc lengths.
 
     Returns:
         scores: ``[B]`` fp32 approximate MaxSim scores.
@@ -623,49 +613,34 @@ def maxsim_residual(
     *,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Fused PLAID residual-decompression + MaxSim (autograd-aware on Q).
+    """Fused PLAID residual-decompression + L2-normalize + MaxSim.
 
-    Decompresses PLAID / ColBERTv2 compressed embeddings on-the-fly in
-    SRAM and scores them against the query — the exact-rerank step, fused
-    into a single Triton kernel.
+    Compressed format (PLAID / ColBERTv2):
 
-    Compressed format (following the PLAID / ColBERTv2 convention):
-
-    * ``codes[n, t]`` is an integer index into ``centroids`` for token ``t``
-      of doc ``n``.
-    * ``residuals[n, t, :]`` is ``ceil(d * nbits / 8)`` bytes; each byte packs
-      ``8 / nbits`` bucket indices (little-endian within the byte).
-    * ``bucket_weights[b]`` gives the scalar quantization offset added onto
-      the centroid feature.
+    * ``codes[n, t]`` — int64 centroid index for doc ``n``, token ``t``.
+    * ``residuals[n, t, :]`` — ``ceil(d * nbits / 8)`` bytes; each byte
+      packs ``8 / nbits`` bucket codes (little-endian within the byte).
+    * ``bucket_weights[b]`` — scalar quantization offset added to the
+      centroid feature.
 
     Args:
-        Q: ``[Nq, Lq, d]`` query embeddings (fp16/bf16/fp32). Requires-grad
-            is honored via a fused backward (see Autograd below).
+        Q: ``[Nq, Lq, d]`` (or ``[Lq, d]``) query embeddings.
         codes: ``[Nd, max_Ld]`` int64 centroid codes.
-        residuals: ``[Nd, max_Ld, packed_dim]`` uint8. ``packed_dim = d * nbits / 8``.
-        doc_lengths: ``[Nd]`` int64 real lengths.
-        centroids: ``[n_centroids, d]`` fp32 centroid table.
-        bucket_weights: ``[n_buckets]`` fp32. ``n_buckets = 2 ** nbits``.
+        residuals: ``[Nd, max_Ld, packed_dim]`` uint8 packed residuals.
+        doc_lengths: ``[Nd]`` int64 real per-doc lengths.
+        centroids: ``[n_centroids, d]`` fp16/bf16/fp32.
+        bucket_weights: ``[2**nbits]`` fp32.
         nbits: one of ``{2, 4, 8}``.
-        normalize: if True, L2-normalize Q and the reconstructed embedding
-            (standard ColBERTv2 / PLAID convention). Backward applies the
-            Q-side L2-norm Jacobian.
+        normalize: L2-normalize Q and the reconstructed embedding inside
+            the kernel (standard PLAID convention).
 
     Returns:
         scores: ``[Nq, Nd]`` fp32.
 
-    Autograd
-    --------
-    Only ``Q`` is treated as differentiable. ``codes`` / ``residuals`` are
-    integer tensors; ``centroids`` and ``bucket_weights`` are typically
-    frozen post-k-means and no gradient is propagated into them. The fused
-    backward kernel recovers the winning doc token per ``(query, doc, q_tok)``
-    from a saved argmax buffer, re-decompresses its embedding in SRAM, and
-    accumulates ``grad_Q += grad_scores * emb`` — no dense unpack, no
-    ``[Nq, Nd, Lq, Ld]`` scratch.
-
-    Use ``maxsim_residual_inference`` if you don't need gradients and want
-    to skip saving the argmax buffer.
+    Autograd flows into ``Q`` (only). ``codes`` / ``residuals`` are integer;
+    ``centroids`` / ``bucket_weights`` are treated as frozen.
+    The argmax save and fused backward kernel run only when
+    ``Q.requires_grad`` is True.
     """
     if Q.dim() == 2:
         Q = Q.unsqueeze(0)
@@ -690,11 +665,15 @@ def maxsim_residual_inference(
     *,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Same as ``maxsim_residual`` but skips the argmax save (no autograd).
+    """Deprecated alias for :func:`maxsim_residual`."""
+    import warnings
 
-    Use this for pure reranking / inference — it avoids a ``[Nq, Nd, Lq]``
-    int32 buffer that would otherwise be reserved for the backward pass.
-    """
+    warnings.warn(
+        "`maxsim_residual_inference` is deprecated; `maxsim_residual` "
+        "auto-skips the argmax save when `Q.requires_grad=False`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if Q.dim() == 2:
         Q = Q.unsqueeze(0)
     scores, _, _ = _maxsim_residual_forward(
@@ -704,16 +683,12 @@ def maxsim_residual_inference(
 
 
 # -----------------------------------------------------------------------------
-# C3. maxsim_residual_varlen — packed / ragged decompress + MaxSim
+# C3. maxsim_residual_varlen — ragged decompress + MaxSim
 # -----------------------------------------------------------------------------
-#
-# Fast-plaid stores its per-passage codes and residuals in "strided" tensors
-# (a concatenated flat buffer + cumulative offsets), which is exactly the
-# varlen format. The dense kernel above forces callers to pad every doc up to
-# ``max_Ld`` and to materialize a ``[Ntop, max_Ld, packed_dim]`` residual
-# tensor — a ``Ntop * max_Ld * packed_dim`` byte-scatter on every query.
-# This kernel reads the ragged buffers directly and cuts both the scatter and
-# the attention mask.
+# Reads concatenated ``codes_flat`` / ``residuals_flat`` + ``cu_seqlens``
+# directly (the on-disk layout fast-plaid and ColBERTv2 use), so neither
+# the ``[Ntop, max_Ld, packed_dim]`` scratch nor the attention mask are
+# materialized.
 
 
 @triton.autotune(
@@ -820,9 +795,7 @@ def _maxsim_residual_varlen_kernel(
             ).to(tl.float32)
 
             byte_vals = tl.load(
-                residuals_flat_ptr
-                + t_idx[:, None] * stride_res_t
-                + byte_idx[None, :] * stride_res_p,
+                residuals_flat_ptr + t_idx[:, None] * stride_res_t + byte_idx[None, :] * stride_res_p,
                 mask=d_valid[:, None] & k_mask[None, :],
                 other=0,
             ).to(tl.int32)
@@ -877,36 +850,30 @@ def maxsim_residual_varlen(
     max_seqlen_d: int | None = None,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Packed / ragged PLAID residual-decompression + MaxSim (inference only).
+    """Ragged PLAID residual-decompression + MaxSim. Inference only.
 
-    Matches the storage fast-plaid uses internally for ``doc_codes_strided``
-    and ``doc_residuals_strided``: a single flat tensor per field plus
-    cumulative offsets. This skips the padded ``[Ntop, max_Ld, packed_dim]``
-    residual scratch and the attention mask entirely — the two big
-    allocations per-query in the standard PLAID pipeline.
+    Reads ``codes_flat`` / ``residuals_flat`` + ``cu_seqlens`` directly —
+    matches the on-disk layout fast-plaid and ColBERTv2 use, so neither
+    the ``[Ntop, max_Ld, packed_dim]`` scratch nor the attention mask
+    need to be materialized.
 
     Args:
         Q: ``[Nq, Lq, d]`` (or ``[Lq, d]``) query embeddings.
         codes_flat: ``[total_d_tokens]`` int64 concatenated centroid codes.
-        residuals_flat: ``[total_d_tokens, packed_dim]`` uint8 concatenated
-            packed residuals, where ``packed_dim = d * nbits / 8``.
-        cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets into the flat
-            buffers (``cu_seqlens_d[0] = 0``, ``cu_seqlens_d[-1] = total_d_tokens``).
-        centroids: ``[n_centroids, d]`` fp32.
+        residuals_flat: ``[total_d_tokens, packed_dim]`` uint8 packed
+            residuals (``packed_dim = ceil(d * nbits / 8)``).
+        cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets.
+        centroids: ``[n_centroids, d]`` fp16/bf16/fp32.
         bucket_weights: ``[2**nbits]`` fp32.
         nbits: one of ``{2, 4, 8}``.
-        max_seqlen_d: worst-case doc length. Inferred from ``cu_seqlens_d``
-            if omitted.
-        normalize: L2-normalize Q and the reconstructed emb inside the kernel
-            (standard PLAID convention).
+        max_seqlen_d: optional; inferred from ``cu_seqlens_d`` otherwise.
+        normalize: L2-normalize Q and the reconstructed embedding inside
+            the kernel (standard PLAID convention).
 
     Returns:
-        scores: ``[Nq, Nd]`` fp32. If ``Q`` was 2-D, returns ``[Nd]``.
+        scores: ``[Nq, Nd]`` fp32. ``[Nd]`` if Q was 2-D.
 
-    This path is inference-only (no autograd). Use ``maxsim_residual`` if you
-    need gradients on ``Q`` — quantization codes are integers and
-    non-differentiable by construction either way, but the dense kernel has
-    a fused backward.
+    For autograd on Q, use the dense :func:`maxsim_residual`.
     """
     if nbits not in (2, 4, 8):
         raise ValueError(f"nbits must be 2, 4, or 8; got {nbits}")

@@ -1,19 +1,17 @@
-"""FP8 MaxSim inference for Hopper (SM90+) and Blackwell.
+"""FP8 MaxSim inference (Hopper SM90+ / Blackwell).
 
-Quantize once, score many — halves HBM footprint and doubles
-tensor-core throughput on WGMMA-class GPUs. Inference-only; training
-FP8 is a separate RFC.
+Halves HBM and doubles tensor-core throughput on WGMMA-class GPUs.
+Inference only.
 
-Usage::
+::
 
-    Q_fp8, sq = quantize_fp8_per_tensor(Q)       # or _per_token(...)
+    Q_fp8, sq = quantize_fp8_per_tensor(Q)
     D_fp8, sd = quantize_fp8_per_tensor(D)
     scores = maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sq, scale_D=sd)
 
-Uses ``torch.float8_e4m3fn`` (better dynamic range than ``e5m2`` for
-normalized embeddings); scores returned in fp32. Falls back to bf16
-with a one-shot warning when the Triton FP8 ``tl.dot`` path is
-unavailable.
+Uses ``torch.float8_e4m3fn`` (e5m2's range isn't needed on normalized
+embeddings); scores returned in fp32. Falls back to bf16 with a one-shot
+warning when the Triton FP8 ``tl.dot`` path isn't available.
 """
 
 from __future__ import annotations
@@ -26,12 +24,12 @@ try:
     import triton
     import triton.language as tl
 
+    from ._autotune import forward_configs, prune_forward
+    from ._utils import next_pow2
+
     _HAS_TRITON = True
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
-
-from ._autotune import forward_configs, prune_forward
-from ._utils import next_pow2
 
 _FP8_E4M3_MAX = 448.0  # torch.finfo(torch.float8_e4m3fn).max — hard-coded for old torch compat.
 

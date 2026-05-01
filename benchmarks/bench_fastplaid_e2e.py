@@ -89,9 +89,9 @@ def read_fastplaid_index(index_path: str, device: str = "cuda") -> dict:
     centroids = torch.from_numpy(np.load(os.path.join(index_path, "centroids.npy"))).to(
         device=device, dtype=torch.float16
     )
-    bucket_weights = torch.from_numpy(
-        np.load(os.path.join(index_path, "bucket_weights.npy"))
-    ).to(device=device, dtype=torch.float32)
+    bucket_weights = torch.from_numpy(np.load(os.path.join(index_path, "bucket_weights.npy"))).to(
+        device=device, dtype=torch.float32
+    )
 
     doc_lens = []
     for i in range(num_chunks):
@@ -110,11 +110,12 @@ def read_fastplaid_index(index_path: str, device: str = "cuda") -> dict:
         # (it skips the merge for tiny indices).
         chunk_codes = sorted(glob.glob(os.path.join(index_path, "codes.*.npy")))
         chunk_resid = sorted(glob.glob(os.path.join(index_path, "residuals.*.npy")))
-        codes_flat = torch.cat(
-            [torch.from_numpy(np.load(p)).view(-1).to(torch.int64) for p in chunk_codes]
-        )
+        codes_flat = torch.cat([torch.from_numpy(np.load(p)).view(-1).to(torch.int64) for p in chunk_codes])
         residuals_flat = torch.cat(
-            [torch.from_numpy(np.load(p)).to(torch.uint8).view(-1, int((D_MODEL * nbits + 7) // 8)) for p in chunk_resid]
+            [
+                torch.from_numpy(np.load(p)).to(torch.uint8).view(-1, int((D_MODEL * nbits + 7) // 8))
+                for p in chunk_resid
+            ]
         )
     else:
         codes_flat = torch.from_numpy(np.load(merged_codes_path)).view(-1).to(torch.int64)
@@ -189,9 +190,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
             build_s = time.time() - t0
             print(f"  built fast-plaid index in {build_s:.1f}s")
 
-            queries = torch.nn.functional.normalize(
-                torch.randn(args.n_queries, LQ, D_MODEL), dim=-1
-            )
+            queries = torch.nn.functional.normalize(torch.randn(args.n_queries, LQ, D_MODEL), dim=-1)
 
             def _search():
                 _ = engine.search(
@@ -225,9 +224,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         f"bucket_weights={idx['bucket_weights'].shape}"
     )
 
-    Q = torch.nn.functional.normalize(
-        torch.randn(1, LQ, D_MODEL, device="cuda"), dim=-1
-    ).to(torch.bfloat16)
+    Q = torch.nn.functional.normalize(torch.randn(1, LQ, D_MODEL, device="cuda"), dim=-1).to(torch.bfloat16)
 
     # --- Full corpus rerank (all docs) ---
     def _lik_full():
@@ -254,15 +251,10 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
     # what a Python rerank wrapper around fast-plaid's IVF would do.
     start_per_doc = idx["cu_seqlens_d"][:-1].index_select(0, cand_ids.to(torch.int32))
     # Build a ragged index set via concat in fp. For ~4k docs this is cheap.
-    rows_per_doc = [
-        (int(start_per_doc[i].item()), int(doc_lengths_cand[i].item()))
-        for i in range(n_cand)
-    ]
+    rows_per_doc = [(int(start_per_doc[i].item()), int(doc_lengths_cand[i].item())) for i in range(n_cand)]
     total_cand = int(doc_lengths_cand.sum().item())
     codes_cand = torch.empty(total_cand, dtype=torch.int64, device="cuda")
-    resid_cand = torch.empty(
-        total_cand, idx["residuals_flat"].shape[-1], dtype=torch.uint8, device="cuda"
-    )
+    resid_cand = torch.empty(total_cand, idx["residuals_flat"].shape[-1], dtype=torch.uint8, device="cuda")
     off = 0
     for s, l in rows_per_doc:
         codes_cand[off : off + l] = idx["codes_flat"][s : s + l]
@@ -289,10 +281,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
     if e2e_ms_per_q is not None:
         speedup_full = e2e_ms_per_q / lik_full_ms
         speedup_partial = e2e_ms_per_q / lik_partial_ms
-        print(
-            f"  speedup vs engine.search(): full={speedup_full:.2f}× "
-            f"partial={speedup_partial:.2f}×"
-        )
+        print(f"  speedup vs engine.search(): full={speedup_full:.2f}× partial={speedup_partial:.2f}×")
 
     row = {
         "name": name,
@@ -307,7 +296,6 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         "n_tokens_total": idx["total_tokens"],
     }
 
-    del engine, idx, codes_cand, resid_cand
     gc.collect()
     torch.cuda.empty_cache()
     if os.path.exists(idx_dir):
@@ -327,9 +315,7 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    gpu = (
-        torch.cuda.get_device_name().replace(" ", "_") if torch.cuda.is_available() else "cpu"
-    )
+    gpu = torch.cuda.get_device_name().replace(" ", "_") if torch.cuda.is_available() else "cpu"
     print(f"GPU: {gpu}")
 
     corpora = [

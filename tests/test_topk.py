@@ -1,4 +1,9 @@
-"""Parity tests for `maxsim_topk`."""
+"""Parity tests for ``maxsim_topk``.
+
+``maxsim_topk`` is the kernel under :func:`late_interaction_kernels.retrieve`;
+since 0.9.0 it lives at ``late_interaction_kernels.topk`` (no longer in the
+top-level namespace).
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,8 @@ pytestmark = pytest.mark.cuda
 @pytest.mark.parametrize("shape", [(1, 100, 32, 200, 128), (4, 50, 32, 128, 128)])
 @pytest.mark.parametrize("k", [1, 5, 10])
 def test_topk_parity(shape, k, rel):
-    from late_interaction_kernels import maxsim, maxsim_topk
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.topk import maxsim_topk
 
     Nq, Nd, Lq, Ld, d = shape
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
@@ -27,7 +33,7 @@ def test_topk_parity(shape, k, rel):
 
 @pytest.mark.parametrize("chunk", [50, 100])
 def test_topk_chunked_matches_unchunked(chunk):
-    from late_interaction_kernels import maxsim_topk
+    from late_interaction_kernels.topk import maxsim_topk
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(300, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -35,15 +41,13 @@ def test_topk_chunked_matches_unchunked(chunk):
     s_full, i_full = maxsim_topk(Q, D, 10)
     s_chunk, i_chunk = maxsim_topk(Q, D, 10, chunk_size=chunk)
 
-    # Scores should match exactly at fp32 (same underlying kernel, different
-    # reduction order only).
     assert (s_full.float() - s_chunk.float()).abs().max().item() < 1e-4
-    # Indices should match when scores are distinct (random → safe).
     assert torch.equal(i_full, i_chunk)
 
 
 def test_topk_with_masks():
-    from late_interaction_kernels import maxsim, maxsim_topk
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.topk import maxsim_topk
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(50, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -61,7 +65,7 @@ def test_topk_with_masks():
 
 
 def test_topk_2d_query():
-    from late_interaction_kernels import maxsim_topk
+    from late_interaction_kernels.topk import maxsim_topk
 
     Q = torch.randn(32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(20, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -69,5 +73,4 @@ def test_topk_2d_query():
     s, idx = maxsim_topk(Q, D, 3)
     assert s.shape == (3,)
     assert idx.shape == (3,)
-    # Scores should be sorted descending.
     assert (s[:-1] >= s[1:]).all()

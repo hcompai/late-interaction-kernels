@@ -1,37 +1,10 @@
 """Variable-length (packed) MaxSim kernel — forward + fused backward.
 
-This is the **zero-padding** path: queries and docs arrive as `[total_tokens, d]`
-tensors, and per-sequence lengths come via `cu_seqlens` (CSR-style offsets),
-exactly like FlashAttention's varlen mode.
-
-Why it matters for ColBERT / ColPali
-------------------------------------
-PyLate's ``rerank()`` does ``torch.nn.utils.rnn.pad_sequence`` on documents
-before scoring. That's a deep-copy of every doc up to ``Ld_max``, with ~50 %
-waste on realistic distributions (some docs 32 tokens, some 512). Varlen
-skips padding entirely in both the forward and the backward.
-
-Forward API
------------
-    scores = maxsim_varlen(
-        Q_packed,            # [sum(Lq_i), d]
-        D_packed,            # [sum(Ld_j), d]
-        cu_seqlens_q,        # [Nq + 1] int32, cumulative sum
-        cu_seqlens_d,        # [Nd + 1] int32, cumulative sum
-        max_seqlen_q,        # int (optional, inferred if omitted)
-        max_seqlen_d,        # int
-    )                        # -> [Nq, Nd] fp32
-
-Backward
---------
-When ``Q_packed`` or ``D_packed`` requires grad, the forward saves an argmax
-buffer of shape ``[Nq, Nd, max_seqlen_q]`` (int32, ``-1`` for invalid query
-positions) and a fused backward kernel recovers ``grad_Q`` (row-owned, no
-atomics) and ``grad_D`` (fp32 ``atomic_add`` into the packed grad tensor).
-
-Internally we dispatch one Triton program per ``(q_batch, d_batch)`` pair.
-Each program reads its own ``cu_seqlens`` entries, bounds-checks loads, and
-runs the same inner loop as the padded kernel.
+Queries and docs arrive as ``[sum(L), d]`` tensors with ``cu_seqlens``
+offsets (FlashAttention varlen convention). When either input requires
+grad, the forward saves a ``[Nq, Nd, max_lq]`` argmax buffer and a fused
+backward produces ``grad_Q`` (row-owned) and ``grad_D`` (atomic scatter
+into the packed grad tensor) directly on the packed layout.
 """
 
 from __future__ import annotations
@@ -462,28 +435,22 @@ def maxsim_varlen(
     max_seqlen_q: int | None = None,
     max_seqlen_d: int | None = None,
 ) -> torch.Tensor:
-    """Run MaxSim on packed (no-padding) inputs. Autograd-aware.
+    """MaxSim on packed (no-padding) inputs. Autograd-aware.
 
     Args:
-        Q_packed: ``[sum(Lq_i), d]`` fp16/bf16/fp32. Requires-grad honored.
-        D_packed: ``[sum(Ld_j), d]``. Requires-grad honored.
-        cu_seqlens_q: ``[Nq+1]`` int32, cumulative sums so seq ``i`` is
-            ``Q_packed[cu[i] : cu[i+1]]``.
-        cu_seqlens_d: ``[Nd+1]`` int32, same for docs.
-        max_seqlen_q / max_seqlen_d: hints for tile counts. Computed from
-            ``cu_seqlens`` if not passed.
+        Q_packed: ``[sum(Lq_i), d]`` fp16 / bf16 / fp32.
+        D_packed: ``[sum(Ld_j), d]``.
+        cu_seqlens_q: ``[Nq + 1]`` int32 cumulative offsets.
+        cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets.
+        max_seqlen_q, max_seqlen_d: tile-count hints; inferred from
+            ``cu_seqlens`` if omitted.
 
     Returns:
         scores: ``[Nq, Nd]`` fp32.
 
-    Notes:
-        * When either input requires grad, the forward saves an argmax
-          buffer of shape ``[Nq, Nd, max_seqlen_q]`` (int32). The fused
-          backward then produces ``grad_Q`` and ``grad_D`` directly on the
-          packed layout — no repad, no materialized ``[Nq, Nd, Lq, Ld]``.
-        * For pure reranking, just pass tensors with ``requires_grad=False``
-          — the argmax save is skipped automatically. The separate
-          ``maxsim_varlen_inference`` alias is deprecated since 0.9.0.
+    The argmax save and fused backward kernels run only when either input
+    has ``requires_grad=True``; for pure reranking the inference path is
+    automatic.
     """
     if Q_packed.requires_grad or D_packed.requires_grad:
         return _MaxSimVarlenFn.apply(
@@ -508,19 +475,12 @@ def maxsim_varlen_inference(
     max_seqlen_q: int | None = None,
     max_seqlen_d: int | None = None,
 ) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim_varlen`.
-
-    :func:`maxsim_varlen` already skips the argmax save when neither input
-    requires gradients; this alias exists for backward compatibility only
-    and emits a :class:`DeprecationWarning`. Scheduled for removal in a
-    future release.
-    """
+    """Deprecated alias for :func:`maxsim_varlen`."""
     import warnings
 
     warnings.warn(
-        "`maxsim_varlen_inference` is deprecated since 0.9.0 — use "
-        "`maxsim_varlen(...)` directly. The argmax save is skipped "
-        "automatically when neither input has `requires_grad=True`.",
+        "`maxsim_varlen_inference` is deprecated; use `maxsim_varlen(...)`. "
+        "It auto-skips the argmax save when neither input has requires_grad.",
         DeprecationWarning,
         stacklevel=2,
     )

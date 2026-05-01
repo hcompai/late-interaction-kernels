@@ -1,24 +1,10 @@
-"""Log-sum-exp / soft-MaxSim variant.
+"""Log-sum-exp (soft) MaxSim variant.
 
-    score[i, j] = sum_{s : q_mask} (1 / beta) * logsumexp_t(beta * S[i, j, s, t])
+    score[i, j] = sum_{s : q_mask} (1 / beta) · logsumexp_t(beta · ⟨Q[i,s], D[j,t]⟩)
 
-where S[i, j, s, t] = Q[i, s] · D[j, t], and masked doc tokens are forced to
--inf before the logsumexp.
-
-Compared to hard max:
-  * gradient is a softmax-weighted combination of ALL doc tokens, not just
-    the argmax → denser, smoother training signal
-  * the forward converges to hard max as beta -> inf
-  * still a single streaming pass over doc tiles, same memory footprint
-
-This is the "FlashAttention for retrieval" formulation — identical loop
-structure as attention with the final scale swapped from `1/sqrt(d)` to
-`beta`, and with no value-tensor projection.
-
-The backward is obtained for free via `tl.dot` + softmax reweighting, but we
-use a simpler path here: rely on `torch.autograd` through a fused forward
-that returns the online (m, l) streaming stats, then recompute. This keeps
-the code small while still being fast.
+``beta -> inf`` recovers hard MaxSim. The backward is a softmax-weighted
+combination of all doc tokens (denser gradient than the argmax-only hard
+backward).
 """
 
 from __future__ import annotations

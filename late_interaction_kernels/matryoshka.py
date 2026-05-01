@@ -1,20 +1,8 @@
-"""Matryoshka MaxSim — score at multiple embedding dimensions in one call.
+"""Matryoshka MaxSim — score K nested embedding-dim cutoffs in one launch.
 
-Matryoshka Representation Learning (MRL) trains embeddings so that any prefix
-``emb[:, :, :d_i]`` for a nested set of dimensions ``d_1 < d_2 < ... < d_K`` is
-itself a valid embedding. This is useful for adaptive retrieval: cheap low-dim
-scoring first, then rerank with the full dim.
-
-Implementation
---------------
-We launch a 3-D grid ``(Nq, Nd, K)``. Each program computes one MaxSim score
-at one cutoff, reading only the first ``dims[k]`` features from both Q and D.
-The kernel is nearly identical to the main MaxSim forward but parameterized
-by ``d_active`` (the current cutoff).
-
-Compute cost is ``O(K * Nq * Nd * Lq * Ld * d_max)`` — the cost of computing
-K different MaxSim scores — but in one launch with shared autotuning and no
-Python loop. Output memory is ``[K, Nq, Nd]`` fp32.
+Each program in the ``(Nq, Nd, K)`` grid computes one MaxSim at one
+cutoff, reading the first ``dims[k]`` features only. Output is
+``[K, Nq, Nd]`` fp32.
 """
 
 from __future__ import annotations

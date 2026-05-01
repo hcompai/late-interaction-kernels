@@ -1,14 +1,9 @@
-"""Smooth MaxSim — top-K per-query-token aggregation with O(K) backward.
+"""Top-K MaxSim with O(K) backward.
 
-Sits between hard :func:`maxsim` (sparse: one winner gets all the
-gradient) and :func:`soft_maxsim` (dense softmax over ``Ld`` in the
-backward, materializes a ``[Nq, Nd, Lq, Ld]`` tensor). The forward
-aggregates the top-K doc tokens per query token; the backward
-distributes gradient across those K winners only — O(K) extra work on
-top of the hard backward, no ``Ld``-scale scratch.
-
-``top_k=1, aggregation="sum"`` is bit-identical to hard :func:`maxsim`.
-See :doc:`../docs/design.md` for the kernel structure.
+Aggregates the top-K doc tokens per query token; the backward
+distributes gradient across those K winners only (O(K) extra work on
+top of the hard backward, no ``[Nq, Nd, Lq, Ld]`` scratch).
+``top_k=1, aggregation="sum"`` is bit-identical to hard MaxSim.
 """
 
 from __future__ import annotations
