@@ -1,37 +1,17 @@
-"""Fused D-side projection + normalize + MaxSim.
+"""Fused D-side projection + L2-normalize + MaxSim.
 
-Motivation
-----------
-When the on-disk format is ``[Nd, Ld, d_model]`` hidden states (e.g. the
-last layer of a ModernBERT encoder) and the MaxSim dimension is
-``d_out`` (typically 64-128), the standard pipeline is::
+For corpora stored as ``[Nd, Ld, d_model]`` hidden states (e.g. ModernBERT
+last-layer outputs) with a small projection to ``d_out`` (typically 64-128),
+the unfused pipeline materializes a multi-GB ``D_proj`` scratch tensor.
+The fused kernel folds ``H @ W.T (+ b) → L2-normalize → MaxSim`` into one
+pass.
 
-    D_proj = F.normalize(H_d @ W.T)          # [Nd, Ld, d_out]  <-- big HBM scratch
-    scores = maxsim(Q, D_proj)
-
-For large corpora the ``D_proj`` intermediate can be multi-GB. The fused
-kernel folds projection + L2-normalize + MaxSim into a single pass, so
-the corpus only has to exist in HBM as ``[Nd, Ld, d_model]`` hidden
-states.
-
-Scope (0.8.0)
--------------
-- **Inference**: :func:`maxsim_from_hidden` — no ``D_proj`` ever
-  materialized, no autograd.
-- **Training**: :func:`maxsim_from_hidden_train` — autograd-aware
-  wrapper. Forward runs the same fused kernel with an extra
-  ``save_argmax`` store. Backward gathers ``H`` only at winning
-  positions (``Nq · Nd · Lq`` rows, typically <10 % of ``Nd · Ld``),
-  runs the projection + normalize + maxsim gradient in closed form
-  using bf16/fp16 matmuls with fp32 accumulator (no autograd rebuild,
-  no full-precision ``F.linear`` recompute), and flows gradients into
-  ``H_d`` via a single ``index_add_`` scatter. Numerically matches the
-  unfused path (``F.linear -> F.normalize -> maxsim``) to bf16 tolerance.
-
-API
----
-``maxsim_from_hidden(Q, H_d, W, b=None, d_mask=None, normalize=True)``
-``maxsim_from_hidden_train(Q, H_d, W, b=None, d_mask=None, normalize=True)``
+* :func:`maxsim_from_hidden` — inference, no autograd.
+* :func:`maxsim_from_hidden_train` — autograd-aware. The backward gathers
+  ``H_d`` at winning positions only (``Nq · Nd · Lq`` rows, typically
+  <10 % of ``Nd · Ld``) and computes the projection + normalize + MaxSim
+  Jacobians in closed form. Matches the unfused
+  ``F.linear → F.normalize → maxsim`` path to bf16 tolerance.
 """
 
 from __future__ import annotations
@@ -278,34 +258,30 @@ def maxsim_from_hidden(
     d_mask: torch.Tensor | None = None,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Inference-only fused MaxSim with on-the-fly D-side projection.
+    """Fused MaxSim with on-the-fly D-side projection. Inference only.
 
-    Computes::
+    Equivalent to::
 
-        D = F.linear(H_d, W, b)                 # [Nd, Ld, d_out]
-        D = F.normalize(D, dim=-1) if normalize # else D
-        scores = maxsim_inference(Q, D)          # [Nq, Nd]
+        D = F.linear(H_d, W, b)
+        D = F.normalize(D, dim=-1) if normalize else D
+        scores = maxsim_inference(Q, D)
 
-    but without ever materializing ``D`` in HBM. For large corpora stored
-    as hidden states this saves multi-GB of scratch memory.
+    but ``D`` is never materialized in HBM.
 
     Args:
-        Q: ``[Lq, d_out]`` or ``[Nq, Lq, d_out]``. Already projected and,
-           if you pass ``normalize=True``, already L2-normalized.
-        H_d: ``[Nd, Ld, d_model]``. Raw last-layer hidden states.
-        W: ``[d_out, d_model]``. Projection weight (same convention as
-           ``torch.nn.Linear.weight``).
-        b: ``[d_out]`` or ``None``. Projection bias.
-        d_mask: ``[Nd, Ld]`` boolean mask (``True`` = keep).
-        normalize: if ``True`` (default), L2-normalize each projected
-           D token across the ``d_out`` dimension before scoring.
+        Q: ``[Lq, d_out]`` or ``[Nq, Lq, d_out]``. Pre-projected; pre-L2
+            -normalized if ``normalize=True``.
+        H_d: ``[Nd, Ld, d_model]``. Raw hidden states.
+        W: ``[d_out, d_model]`` (``torch.nn.Linear.weight`` convention).
+        b: ``[d_out]`` or ``None``.
+        d_mask: ``[Nd, Ld]`` bool mask.
+        normalize: L2-normalize each projected D token.
 
     Returns:
-        ``scores: [Nq, Nd]`` fp32.
+        scores: ``[Nq, Nd]`` fp32.
 
-    Notes:
-        Inference only — not autograd-aware. Use the non-fused path if you
-        need to backprop through the projection.
+    Use :func:`maxsim_from_hidden_train` if you need autograd through
+    the projection.
     """
     q_was_2d = Q.dim() == 2
     if q_was_2d:
@@ -337,26 +313,7 @@ def maxsim_from_hidden(
 
 
 class _MaxSimFromHiddenFn(torch.autograd.Function):
-    """Autograd-aware fused head for training.
-
-    Forward runs the same fused kernel as inference plus an ``argmax``
-    store (``[Nq*Nd, Lq]`` int32). Backward does the minimum-work
-    closed-form gradient:
-
-    1. Gather ``H_d`` at winning positions once → ``[Nq, Nd, Lq, d_model]``.
-    2. Recompute ``D_proj_win = F.linear(H_win, W, b)`` and ``D_hat_win``
-       in the input dtype (bf16/fp16) with fp32 accumulator — the only
-       big matmul in the backward.
-    3. Apply the L2-normalize Jacobian in fp32, in place.
-    4. Close-form gradients for ``Q``, ``W``, ``b`` via two more matmuls
-       on the winners slice, and scatter ``grad_H_win`` into
-       ``grad_H_d`` with a single ``index_add_``.
-
-    No autograd rebuild, no fp32 ``F.linear`` recompute: backward does
-    ~3 matmuls of shape ``[Nq·Nd·Lq, d_model] × [d_model, d_out]``,
-    versus the unfused ``[Nd·Ld, d_model] × [d_model, d_out]`` triple —
-    typically 3–5× cheaper at training shapes where ``Nq·Lq ≪ Ld``.
-    """
+    """Autograd-aware fused head: closed-form backward on winning positions only."""
 
     @staticmethod
     def forward(ctx, Q, H_d, W, b, d_mask, normalize):
@@ -481,35 +438,17 @@ def maxsim_from_hidden_train(
     *,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Autograd-aware fused MaxSim with on-the-fly D-side projection.
+    """Autograd-aware fused head. Drop-in for the unfused projection path.
 
-    Forward fuses ``F.linear + F.normalize + maxsim`` into a single
-    streaming pass (no ``[Nd, Ld, d_out]`` ``D_proj`` scratch). Backward
-    gathers ``H_d`` at winning positions only (``Nq · Nd · Lq`` rows,
-    typically <10 % of ``Nd · Ld``) and produces gradients in closed
-    form — no autograd rebuild, no fp32 ``F.linear`` recompute.
-    Numerically matches the unfused path
-    (``F.normalize(F.linear(H_d, W, b)) -> maxsim(Q, D)``) to bf16
-    tolerance (<2 % RMS vs PyTorch reference, verified under gradcheck
-    with fp32 inputs).
+    Equivalent to (with autograd)::
 
-    Drop-in replacement for::
+        D = F.normalize(F.linear(H_d, W, b), p=2, dim=-1)
+        scores = maxsim(Q, D, d_mask=d_mask)
 
-        D_proj = F.linear(H_d, W, b)
-        D_proj = F.normalize(D_proj, p=2, dim=-1) if normalize else D_proj
-        scores = maxsim(Q, D_proj, d_mask=d_mask)
-
-    Args match :func:`maxsim_from_hidden`. The gradient flows into
-    whichever of ``Q``, ``H_d``, ``W``, ``b`` have ``requires_grad=True``.
-    If none do, backward is a no-op.
-
-    Notes:
-        For training shapes where ``Nq · Lq ≪ Ld`` (i.e. most
-        ColBERT-style late-interaction training — LateOn / LateOn-Code
-        at ``Ld ∈ {300, 2k, 8k}``, LateOn-Code-edge at ``Ld=2k``,
-        ColPali at ``Ld=1024``), the backward does ~``Nq · Lq / Ld``
-        the matmul work of the unfused path and skips the full
-        ``D_proj`` scratch entirely.
+    The backward gathers ``H_d`` only at winning positions, so its work
+    scales with ``Nq · Lq / Ld`` (typically 1-10 % at ColBERT shapes).
+    Args match :func:`maxsim_from_hidden`; gradients flow into whichever
+    of ``Q`` / ``H_d`` / ``W`` / ``b`` have ``requires_grad=True``.
     """
     q_was_2d = Q.dim() == 2
     if q_was_2d:

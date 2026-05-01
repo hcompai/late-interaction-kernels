@@ -241,15 +241,14 @@ def test_residual_backward_grad_Q_matches_dense_autograd(nbits, normalize):
 
 
 def test_residual_inference_does_not_save_argmax():
-    """``maxsim_residual_inference`` must return correct scores without
-    allocating the argmax buffer (no autograd path)."""
-    from late_interaction_kernels import maxsim_residual_inference
+    """``maxsim_residual`` with ``Q.requires_grad=False`` skips the argmax buffer."""
+    from late_interaction_kernels import maxsim_residual
     from late_interaction_kernels.plaid import maxsim_residual_reference
 
     idx = _make_quant_index(Nd=3, max_Ld=16, d=128, n_centroids=32, nbits=4)
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
 
-    fast = maxsim_residual_inference(
+    fast = maxsim_residual(
         Q,
         idx["codes"],
         idx["residuals"],
@@ -298,14 +297,14 @@ def _dense_to_varlen(idx):
 
 @pytest.mark.parametrize("nbits", [2, 4, 8])
 def test_residual_varlen_matches_dense(nbits):
-    from late_interaction_kernels import maxsim_residual_inference, maxsim_residual_varlen
+    from late_interaction_kernels import maxsim_residual, maxsim_residual_varlen
 
     idx = _make_quant_index(Nd=5, max_Ld=32, d=128, n_centroids=64, nbits=nbits)
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
 
     codes_flat, res_flat, cu = _dense_to_varlen(idx)
 
-    dense = maxsim_residual_inference(
+    dense = maxsim_residual(
         Q,
         idx["codes"],
         idx["residuals"],
@@ -344,9 +343,7 @@ def test_residual_varlen_handles_empty_docs():
     cu = torch.tensor([0, 0, 20, 20], device="cuda", dtype=torch.int32)
     Q = torch.randn(1, 32, 128, device="cuda", dtype=torch.bfloat16)
 
-    scores = maxsim_residual_varlen(
-        Q, codes, res, cu, centroids, buckets, nbits=4, normalize=True
-    )
+    scores = maxsim_residual_varlen(Q, codes, res, cu, centroids, buckets, nbits=4, normalize=True)
     assert scores.shape == (1, 3)
     assert scores[0, 0].item() == 0.0
     assert scores[0, 2].item() == 0.0

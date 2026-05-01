@@ -1,31 +1,12 @@
-"""Backward kernels for fused MaxSim.
+"""Two-pass backward (``grad_Q`` then ``grad_D``).
 
-We provide two paths:
+Forward saves a ``[Nq * Nd, Lq]`` int32 argmax buffer. Backward scatters:
 
-1. **Exact from argmax** (default) — the forward kernel optionally writes
-   `[Nq*Nd, Lq]` int32 argmax indices. The backward is then a simple scatter.
+    grad_Q[i, s] = q_active[i, s] · Σ_j grad_scores[i, j] · D[j, argmax[i, j, s]]
+    grad_D[j, t] = Σ_{(i,s) : argmax[i, j, s] == t} q_active[i, s] · grad_scores[i, j] · Q[i, s]
 
-       grad_Q[i, s, :] = q_active[i, s] * sum_j grad_scores[i, j] * D[j, argmax[i, j, s], :]
-       grad_D[j, t, :] = sum_{(i, s) : argmax[i, j, s] == t} q_active[i, s] * grad_scores[i, j] * Q[i, s, :]
-
-   grad_D is implemented with fp32 atomic adds — on H100 this is effectively
-   one instruction with near-peak bandwidth. The extra memory for the argmax
-   buffer is Nq*Nd*Lq*4 bytes (e.g. 4 MiB for 64x64x256).
-
-2. **Recompute-free** — in the backward, re-read Q and D tiles, recompute
-   similarity, and find the winner on the fly. Saves the argmax buffer, costs
-   one extra GEMM. Matches the FlashAttention-bwd pattern. Useful for very
-   large (Nq, Nd, Lq) where the argmax buffer starts to hurt.
-
-Numerical notes
----------------
-- Accumulators are fp32 throughout; output gradients are cast to the dtype of
-  the corresponding input.
-- Masked query tokens (q_mask == False) produce zero gradient into both Q and D.
-- Masked doc tokens never appear as an argmax (they were forced to -inf in the
-  forward), so they trivially receive zero gradient.
-- Ties in argmax are broken deterministically by `tl.argmax` (lowest index).
-  This matches the forward's rule and is bitwise reproducible run to run.
+``grad_D`` accumulates with fp32 ``atomic_add``. Argmax ties are broken
+by ``tl.argmax`` (lowest index), bitwise-reproducible.
 """
 
 from __future__ import annotations

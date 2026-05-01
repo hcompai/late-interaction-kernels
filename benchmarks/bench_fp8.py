@@ -24,11 +24,8 @@ import time
 
 import torch
 
-from late_interaction_kernels import (
-    maxsim_inference,
-    maxsim_inference_fp8,
-    quantize_fp8_per_token,
-)
+from late_interaction_kernels import maxsim_inference, maxsim_inference_fp8
+from late_interaction_kernels.fp8 import quantize_fp8_per_token
 
 SHAPES = [
     # (Nq, Nd, Lq, Ld, d, label)

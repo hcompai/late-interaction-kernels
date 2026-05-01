@@ -1,29 +1,12 @@
-"""XTR-style MaxSim — aggregate top-k doc-token scores per query token.
+"""XTR-style MaxSim — sum of top-K per-query-token inner products.
 
-The original ColBERT MaxSim sums the single argmax per query token:
+    score = sum_s topk_t(⟨Q[s], D[t]⟩) / k
 
-    score = sum_s max_t  Q[s] @ D[t]
-
-XTR (Lee et al., NeurIPS 2023) and related variants sum the top-k instead:
-
-    score = sum_s  (1/k) * sum_{t in topk_t(Q[s] @ D[t])}  Q[s] @ D[t]
-
-When k=1 this degenerates to plain MaxSim. Larger k gives smoother gradients
-and in practice slightly different retrieval behavior.
-
-Implementation
---------------
-Our forward kernel tracks, per query token, a **k-element max-heap** as we tile
-over doc tokens. The heap is stored as two parallel register vectors
-``(heap_vals[k], heap_idxs[k])``. For each tile we compare each new score
-against the heap-min, and if larger, replace it and rebubble.
-
-For k <= 8 this is efficient; for larger k we fall back to a two-pass approach
-(forward materializes scores, then ``torch.topk`` over Ld).
-
-The backward for XTR is not fused in Triton here — we use PyTorch autograd
-against the saved top-k indices. This is correct and typically fast enough
-because the grad matmul has the same shape as the main MaxSim backward.
+For ``k <= 8`` the kernel keeps a register-resident max-heap; larger ``k``
+falls back to materialising scores and ``torch.topk``. Backward goes
+through PyTorch autograd against the saved top-k indices (correct;
+typically fast enough since the matmul has the same shape as the main
+MaxSim backward).
 """
 
 from __future__ import annotations

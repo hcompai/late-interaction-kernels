@@ -105,9 +105,7 @@ def _build_index(n_docs: int, ld: int, nbits: int, device: str = "cuda", seed: i
     # Pre-compute the per-doc-id and per-token-id scatter indices once — they're
     # fixed for a given corpus and reused every query.
     doc_ids = torch.arange(n_docs, device=device).repeat_interleave(doc_lengths)
-    tok_ids = torch.cat(
-        [torch.arange(int(l.item()), device=device) for l in doc_lengths.cpu()]
-    )
+    tok_ids = torch.cat([torch.arange(int(l.item()), device=device) for l in doc_lengths.cpu()])
 
     return {
         "n_docs": n_docs,
@@ -207,9 +205,9 @@ def fastplaid_exact_pipeline(idx: dict, Q: torch.Tensor) -> torch.Tensor:
 
 def lik_dense(idx: dict, Q: torch.Tensor) -> torch.Tensor:
     """Our existing fused kernel over the padded [Nd, ld_max, packed_dim] format."""
-    from late_interaction_kernels import maxsim_residual_inference
+    from late_interaction_kernels import maxsim_residual
 
-    return maxsim_residual_inference(
+    return maxsim_residual(
         Q.unsqueeze(0),  # [1, Lq, d]
         idx["codes_padded"],
         idx["residuals_padded"],
@@ -280,9 +278,7 @@ def run(args) -> list[dict]:
     rows = []
     for name, n_docs, ld in shapes:
         idx = _build_index(n_docs, ld, args.nbits, seed=args.seed)
-        Q = torch.nn.functional.normalize(
-            torch.randn(LQ, D_MODEL, device="cuda", dtype=dtype), dim=-1
-        )
+        Q = torch.nn.functional.normalize(torch.randn(LQ, D_MODEL, device="cuda", dtype=dtype), dim=-1)
         row = {"shape": name, "n_docs": n_docs, "ld": ld, "nbits": args.nbits}
 
         # Correctness first.
@@ -297,9 +293,7 @@ def run(args) -> list[dict]:
             row["rel_err_dense"] = rel_dense
             row["rel_err_varlen"] = rel_varlen
             if rel_dense > 5e-2 or rel_varlen > 5e-2:
-                print(
-                    f"  WARN {name} rel err dense={rel_dense:.3e} varlen={rel_varlen:.3e}"
-                )
+                print(f"  WARN {name} rel err dense={rel_dense:.3e} varlen={rel_varlen:.3e}")
         except torch.cuda.OutOfMemoryError:
             print(f"  {name}: OOM on correctness check; skipping")
             torch.cuda.empty_cache()
@@ -346,7 +340,6 @@ def run(args) -> list[dict]:
             f"{r(fp_ms, dense_ms):>7.2f}x {r(fp_ms, varlen_ms):>9.2f}x "
             f"{fp_mb:>7.1f}M {varlen_mb:>9.1f}M"
         )
-        del idx, Q
         torch.cuda.empty_cache()
         gc.collect()
 

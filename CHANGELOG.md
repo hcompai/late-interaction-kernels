@@ -4,63 +4,58 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — PLAID-on-ragged kernel, trimmed public surface
+## Unreleased — final 0.9.0 polish (release candidate)
 
-Two themes. A new varlen kernel closes a real bottleneck in the PLAID
-rerank path, and the top-level API gets smaller so that what you see
-when you `from late_interaction_kernels import …` is what you should
-actually reach for.
+Adds the last missing kernel for vLLM-style reranker scheduling and
+finishes trimming the public surface. Documentation rewritten end-to-end.
 
 ### Added
 
-- `maxsim_residual_varlen(Q, codes_flat, residuals_flat, cu_seqlens_d, centroids, …)` — fused decompress + L2-normalize + MaxSim over
-ragged, `cu_seqlens`-indexed documents. Same layout fast-plaid and
-ColBERTv2 already use on disk. Forward-only, no
-`[Ntop, max_Ld, packed_dim]` scratch, no attention mask. On an H100
-10k-doc × 300-token nbits=2 PLAID index: **~30× less GPU memory** and
-**3.4–3.7× faster** than a PyTorch transliteration of fast-plaid's
-decompress → pad → matmul → reduce path.
+- `maxsim_inference_scatter(Q, D, cu_q, cu_d, pair_q, pair_d)` —
+  pair-list MaxSim. Scores arbitrary `(query_index, doc_index)` pairs
+  from packed batches and returns `[num_pairs]` directly. Skips the
+  `[Nq, Nd]` allocation when the pair list is sparse — typical
+  reranker scheduling inside vLLM and similar serving stacks.
+- `maxsim_residual_varlen` — fused PLAID decompress + L2-normalize +
+  MaxSim over `cu_seqlens`-indexed flat buffers (the on-disk layout
+  fast-plaid and ColBERTv2 already use). Forward only. ~30× less GPU
+  memory and 3.4–3.7× faster than a PyTorch transliteration; 19–30×
+  vs `fast_plaid.engine.search()` end-to-end.
 - `triton.autotune` on `maxsim_residual` and `maxsim_residual_varlen`,
-keyed on `(Lq, max_Ld, d_pad, nbits, normalize, SAVE_ARGMAX)`.
-- `benchmarks/bench_decompress_maxsim.py` — head-to-head
-micro-benchmark vs a PyTorch transliteration of fast-plaid's exact
-op sequence.
-- `benchmarks/bench_fastplaid_e2e.py` — builds a real fast-plaid index,
-times `engine.search()`, then reruns the same compressed tensors
-through `maxsim_residual_varlen`. On H100:
-  - 5 k docs × 200 tok: `engine.search()` 23.4 ms → varlen 1.22 ms
-  (4 k candidates) — 19.2× end-to-end.
-  - 10 k docs × 300 tok: 48.6 ms → 1.69 ms — 28.7×.
-  - 10 k docs × 512 tok: 83.1 ms → 2.71 ms — 30.7×.
-- `scripts/sky_decompress_bench.yaml`, `scripts/sky_fastplaid_e2e.yaml`
-— SkyPilot jobs reproducing the numbers on 1×H100.
-- `late_interaction_kernels.experimental` submodule. Canonical home
-for the four research kernels that have tests but no active users:
-`soft_maxsim`, `smooth_maxsim`, `maxsim_xtr`, `maxsim_matryoshka`.
+  keyed on `(Lq, max_Ld, d_pad, nbits, normalize, SAVE_ARGMAX)`.
+- `late_interaction_kernels.experimental` — research kernels
+  (`soft_maxsim`, `smooth_maxsim`, `maxsim_xtr`, `maxsim_matryoshka`).
+- `late_interaction_kernels.fp8` — FP8 quantize / dequantize helpers.
 
 ### Changed
 
-- `maxsim_residual` skips the argmax live-update when it won't be used
-(inference path). Reduces register pressure.
-- L2-norm uses `tl.rsqrt` instead of `tl.sqrt` + reciprocal.
-- `maxsim_residual*` accept centroids in `fp16` / `bf16` directly —
-fast-plaid and standard PLAID indexes store them that way on disk.
+- `maxsim_residual` skips the argmax live-update on the inference path,
+  reducing register pressure.
+- L2-norm uses `tl.rsqrt` instead of `tl.sqrt + reciprocal`.
+- `maxsim_residual*` accept centroids in `fp16` / `bf16` directly.
+- README / `docs/*.md` rewritten: shorter, no marketing prose, every
+  cross-reference checked.
 
-### Deprecated
+### Deprecated (back-compat shim, removal scheduled post-0.9)
 
-Top-level re-exports, imported with a `DeprecationWarning`:
+- `maxsim_topk` → use `retrieve(Q, D, top_k=...)` (same semantics, CPU
+  fallback included). The kernel still lives at
+  `late_interaction_kernels.topk`.
+- `maxsim_residual_inference` → `maxsim_residual` skips the argmax save
+  when `Q.requires_grad=False`. Same speed, same numerics.
+- `maxsim_varlen_inference` → `maxsim_varlen` skips the argmax save
+  when neither input has `requires_grad=True`.
+- `maxsim_forward` → `maxsim_inference` (or `maxsim` for autograd).
+- Research kernels and FP8 helpers moved to their own submodules
+  (`experimental` / `fp8`).
 
-- `soft_maxsim`, `smooth_maxsim`, `maxsim_xtr`, `maxsim_matryoshka` →
-`late_interaction_kernels.experimental`.
-- `quantize_fp8_per_tensor`, `quantize_fp8_per_token`,
-`dequantize_fp8_per_tensor`, `dequantize_fp8_per_token` →
-`late_interaction_kernels.fp8`. `maxsim_inference_fp8` stays at the
-top level; the helpers are rarely imported outside a full FP8
-pipeline and shouldn't compete for shelf space with the shipping
-kernels.
+### Removed
 
-No removal this release. Full removal scheduled for the first post-0.9
-version.
+- `benchmarks/bench_new_kernels.py`, `scripts/sky_dev.yaml`,
+  `scripts/sky_full.yaml`, `scripts/sky_quick_run.yaml`,
+  `scripts/sky_pylate_only.yaml`, `scripts/smoke_fp8.py` — superseded
+  by per-kernel benchmarks and the `sky_test.yaml` / `sky_lateon_edge.yaml`
+  workflow.
 
 ## 0.9.0 — User-friendly API layer, cleaner defaults, docs audit
 

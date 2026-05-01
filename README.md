@@ -18,16 +18,16 @@ ColBERT · ColPali · ModernColBERT · LateOn · LateOn-Code · ColBERTv2 · PyL
 
 ---
 
-Drop-in, numerically-identical replacements for the MaxSim math that
-late-interaction models compute during training, reranking and retrieval.
-One line patches PyLate; the rest is `nn.Module` and function-level APIs
-for custom pipelines.
+Drop-in, numerically-identical replacements for the MaxSim math behind
+late-interaction training, reranking and retrieval. One line patches
+PyLate; the rest is `nn.Module` and function-level APIs for custom
+pipelines.
 
 > Not a search engine. For end-to-end retrieval use
 > [FastPlaid](https://github.com/lightonai/fast-plaid),
-> [NextPlaid / ColGrep](https://github.com/lightonai/next-plaid)
+> [NextPlaid / ColGrep](https://github.com/lightonai/next-plaid),
 > or [PyLate](https://github.com/lightonai/pylate).
-> This library is the MaxSim math their reranking / training steps compile down to.
+> This library is the MaxSim math their reranking / training compiles down to.
 
 ---
 
@@ -37,35 +37,34 @@ for custom pipelines.
 pip install late-interaction-kernels
 ```
 
-Linux + CUDA for the fused kernels. CPU / macOS / Windows still works —
+Linux + CUDA for the fused kernels. macOS / Windows / CPU still works —
 `MaxSimScorer`, `retrieve` and `late_interaction_kernels.reference` fall
-back to a pure-PyTorch implementation, so you can develop and unit-test
-training / retrieval code locally before renting a GPU.
-
-PyLate drop-in targets PyLate ≥ 1.3.
+back to a pure-PyTorch implementation, so training and retrieval code
+runs locally before renting a GPU. The PyLate drop-in targets PyLate
+≥ 1.3.
 
 ---
 
 ## Quickstart
 
-**Speed up PyLate — one line:**
+**Speed up PyLate, one line:**
 
 ```python
 from late_interaction_kernels import patch_pylate
 
 patch_pylate()
-# ... your PyLate training / rerank code is unchanged ...
+# PyLate training / rerank code is unchanged
 ```
 
-`LIK_DISABLE=1` in the environment makes patched entry points fall back to
-vanilla PyLate at runtime — no restart needed.
+`LIK_DISABLE=1` in the environment makes patched entry points fall back
+to vanilla PyLate at runtime.
 
 **Score MaxSim in any training loop:**
 
 ```python
 from late_interaction_kernels import MaxSimScorer
 
-scorer = MaxSimScorer(normalize=True)            # nn.Module, no parameters
+scorer = MaxSimScorer(normalize=True)                # nn.Module, no parameters
 scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
@@ -84,17 +83,13 @@ scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
 ```python
 from late_interaction_kernels import maxsim_residual_varlen
 
-# codes_flat:    [total_tokens] uint8
-# residuals_flat:[total_tokens, packed_dim] uint8
-# cu_seqlens_d:  [Nd+1] int32 — fast-plaid / ColBERTv2 on-disk layout
+# fast-plaid / ColBERTv2 on-disk layout
 scores = maxsim_residual_varlen(
     Q, codes_flat, residuals_flat, cu_seqlens_d,
     centroids=centroids, bucket_weights=bucket_weights,
     nbits=2, normalize=True,
-)  # [Nd] fp32
+)  # [Nd] fp32 — one kernel does decompress + L2-normalize + MaxSim
 ```
-
-One kernel does decompress + L2-normalize + MaxSim. No padded scratch.
 
 ---
 
@@ -103,24 +98,24 @@ One kernel does decompress + L2-normalize + MaxSim. No padded scratch.
 1×H100 80 GB SXM, bf16 / fp16 compute, fp32 accumulator, 50-iter median.
 Every baseline is the same operation in plain PyTorch.
 
-| Workload                                                | Speedup            |
-| ------------------------------------------------------- | ------------------ |
-| Reranking / inference vs naive einsum                   | **7–23×**          |
-| Long-context (`Ld ≥ 8k`) reranking                      | runs; naive OOMs   |
-| PyLate cached-contrastive MaxSim + backward             | up to **13.8×**    |
-| PLAID rerank vs `fast_plaid.engine.search()`            | **19–30×**         |
-| Fused D-side head (training)                            | **1.5–4.6×**       |
-| FP8 MaxSim inference (Hopper)                           | up to **1.4×**     |
-| LateOn-Code-edge end-to-end training (17 M)             | **1.04–1.27×**     |
-| LateOn / ModernColBERT end-to-end training (149 M)      | 1.00–1.06× (free)  |
+| Workload                                            | Speedup           |
+| --------------------------------------------------- | ----------------- |
+| Reranking / inference vs naive einsum               | **7–23×**         |
+| Long-context (`Ld ≥ 8k`) reranking                  | runs; naive OOMs  |
+| PyLate cached-contrastive MaxSim + backward         | up to **13.8×**   |
+| PLAID rerank vs `fast_plaid.engine.search()`        | **19–30×**        |
+| Fused D-side head (training)                        | **1.5–4.6×**      |
+| FP8 MaxSim inference (Hopper)                       | up to **1.4×**    |
+| LateOn-Code-edge end-to-end training (17 M)         | **1.04–1.27×**    |
+| LateOn / ModernColBERT end-to-end training (149 M)  | 1.00–1.06× (free) |
 
-ModernBERT-class encoders dominate step time, so on a full 149 M training
-run the kernel is essentially a free swap. Anywhere MaxSim stops being
-negligible — inference, reranking, long docs, big effective batch, KD,
-compressed indices, small encoders — the fused path moves.
+ModernBERT-class encoders dominate step time, so on a full 149 M
+training run the kernel is essentially a free swap. Wherever MaxSim
+stops being negligible — inference, reranking, long docs, big effective
+batch, KD, compressed indices, small encoders — the fused path moves.
 
 Full tables, shapes and reproduction commands:
-[**docs/benchmarks.md**](docs/benchmarks.md).
+[`docs/benchmarks.md`](docs/benchmarks.md).
 
 ---
 
@@ -135,16 +130,16 @@ Most users only need `patch_pylate()`, `MaxSimScorer` or `retrieve`.
 | `retrieve(Q, D, top_k, chunk=)`         | Top-k retrieval, chunked for huge corpora.                                |
 | `maxsim` / `maxsim_inference`           | Core MaxSim, dense layout (autograd / forward-only).                      |
 | `maxsim_varlen`                         | Packed (`cu_seqlens`) layout. Autograd-aware.                             |
-| `maxsim_topk(Q, D, k=, chunk=)`         | MaxSim + top-k in one call.                                               |
+| `maxsim_inference_scatter`              | Pair-list reranking on packed batches (vLLM-style scheduling).            |
 | `maxsim_from_hidden(_train)`            | Fused D-side `Linear → Normalize → MaxSim`, no `[Nd, Ld, d_out]` scratch. |
-| `maxsim_residual(_inference / _varlen)` | Fused PLAID / ColBERTv2 decompress + normalize + MaxSim.                  |
+| `maxsim_residual(_varlen)`              | Fused PLAID / ColBERTv2 decompress + normalize + MaxSim.                  |
 | `plaid_approx_score`                    | IVF prune step for ColBERTv2.                                             |
 | `maxsim_inference_fp8`                  | FP8 tensor-core MaxSim (Hopper / Blackwell). Auto-fallback to bf16.       |
 
 Submodules:
 
 - `late_interaction_kernels.fp8` — FP8 quantize / dequantize helpers
-  (per-tensor, per-token).
+  (per-tensor and per-token).
 - `late_interaction_kernels.experimental` — research kernels
   (`soft_maxsim`, `smooth_maxsim`, `maxsim_matryoshka`, `maxsim_xtr`).
 - `late_interaction_kernels.reference` — pure-PyTorch reference
@@ -152,25 +147,25 @@ Submodules:
 
 Config:
 
-| Knob                                                   | Effect                                                              |
-| ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")` | Per-call `grad_D` strategy. `"auto"` picks per shape.     |
-| `set_backward_method(...)` / `get_backward_method()`   | Process-wide default (back-compat; prefer per-call kwarg).          |
-| `LIK_DISABLE=1`                                        | Patched entry points delegate to vanilla PyLate.                    |
-| `LIK_SUPPRESS_NORM_WARN=1`                             | Silence the "looks unnormalized" one-shot warning.                  |
+| Knob                                                              | Effect                                                              |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.               |
+| `set_backward_method(...)` / `get_backward_method()`              | Process-wide default (back-compat; prefer per-call kwarg).          |
+| `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                    |
+| `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                  |
 
-Detailed walk-through of each kernel, the autograd graph, the backward
-variants and the numerics: [**docs/design.md**](docs/design.md).
+Walk-through of every kernel, the autograd graph, the backward variants
+and the numerics: [`docs/design.md`](docs/design.md).
 
 ---
 
 ## Hardware
 
-Primary target: **H100 / H200** (autotuned, FP8 WGMMA, warp-spec on
-Triton ≥ 3.2).
-Also tuned for **A100**, **Ada** (L4 / L40 / 4090) and **Ampere**
-(A10 / A40 / 3090). Older / unknown CUDA falls back to conservative
-default configs. CPU / macOS / Windows get the pure-PyTorch reference.
+Primary target: **H100 / H200** (autotuned, FP8 WGMMA, warp-specialized
+on Triton ≥ 3.2). Also tuned for **A100**, **Ada** (L4 / L40 / 4090) and
+**Ampere** (A10 / A40 / 3090). Older / unknown CUDA falls back to a
+conservative shortlist. CPU / macOS / Windows get the pure-PyTorch
+reference.
 
 Autotune runs once per unique `(Lq, Ld, d, masks)` signature and caches
 the winner — zero overhead after warmup.
@@ -190,7 +185,7 @@ ruff check . && ruff format --check .
 python benchmarks/bench_forward.py      # see benchmarks/ for the full set
 ```
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow,
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 [`CHANGELOG.md`](CHANGELOG.md) for the kernel-by-kernel release history.
 
 ---

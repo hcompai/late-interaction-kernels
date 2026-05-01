@@ -1,4 +1,4 @@
-"""`torch.autograd.Function` wrapper — the user-facing API for training."""
+"""User-facing autograd wrapper for the fused MaxSim kernel."""
 
 from __future__ import annotations
 
@@ -21,25 +21,19 @@ _WARNED_UNNORMALIZED = False
 
 
 def set_backward_method(method: str) -> None:
-    """Set the **process-wide default** ``grad_D`` path.
+    """Set the process-wide default ``grad_D`` path.
 
-    Prefer the per-call ``backward=`` kwarg on :func:`maxsim` (or on
-    :class:`~late_interaction_kernels.MaxSimScorer`). This global is kept
-    for backward compatibility and for pinning a single method across an
-    entire benchmark run.
+    Prefer the per-call ``backward=`` kwarg on :func:`maxsim` and
+    :class:`~late_interaction_kernels.MaxSimScorer`. This global is kept
+    for back-compat and for pinning a single method across a benchmark run.
 
-    Valid values:
+    Values:
 
-    * ``"auto"`` (default) — pick ``"unified"`` for almost every shape,
-      ``"csr"`` for very high ``grad_D`` contention
-      (``Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64``). ``"atomic"`` is never picked
-      by auto since 0.6.0.
-    * ``"unified"`` — single-pass fused ``grad_Q + grad_D`` kernel (0.6.0).
-      What ``auto`` picks for all typical training shapes.
-    * ``"csr"`` — scatter-free bucketed reduction. Deterministic across
-      runs, wins at very high contention.
-    * ``"atomic"`` — legacy two-pass, fp32 ``tl.atomic_add``. Kept for
-      benchmarking / fallback on GPUs with degraded atomic_add.
+    * ``"auto"`` — ``"unified"`` for almost every shape; ``"csr"`` for
+      very high ``grad_D`` contention (``Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64``).
+    * ``"unified"`` — single-pass fused ``grad_Q + grad_D`` kernel.
+    * ``"csr"`` — scatter-free bucketed reduction; bitwise-deterministic.
+    * ``"atomic"`` — legacy two-pass with fp32 ``tl.atomic_add``.
     """
     global _BACKWARD_METHOD
     if method not in _VALID_METHODS:
@@ -52,13 +46,11 @@ def get_backward_method() -> str:
 
 
 def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
-    """Warn once if Q is clearly not L2-normalized and the user didn't ask for `normalize=True`.
+    """Warn once when ``normalize=False`` is paired with non-normalized Q.
 
-    ColBERT / ColPali / LateOn scores are always computed on L2-normalized
-    token embeddings. Calling ``maxsim`` on raw encoder outputs silently
-    produces different score scales than PyLate — a common footgun that
-    eats hours of debugging. We emit a one-time warning if the token
-    norms look far from 1. Disable with ``LIK_SUPPRESS_NORM_WARN=1``.
+    ColBERT / ColPali / LateOn always score L2-normalized tokens. Calling
+    ``maxsim`` on raw encoder outputs silently produces different score
+    scales than PyLate. Silence with ``LIK_SUPPRESS_NORM_WARN=1``.
     """
     global _WARNED_UNNORMALIZED
     if _WARNED_UNNORMALIZED or os.environ.get("LIK_SUPPRESS_NORM_WARN", "0") == "1":
@@ -75,22 +67,20 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
     if not (0.9 <= med <= 1.1):
         _WARNED_UNNORMALIZED = True
         warnings.warn(
-            "late-interaction-kernels: `maxsim(...)` was called with `normalize=False` but the "
-            f"median Q token L2 norm is {med:.3f} (expected ≈1.0 for late-interaction scoring). "
-            "ColBERT / ColPali / LateOn-style models score on L2-normalized token embeddings — "
-            "pass `normalize=True` to fuse L2-norm into the kernel, or pre-normalize with "
-            "`F.normalize(Q, dim=-1)`. Silence this warning with `LIK_SUPPRESS_NORM_WARN=1`.",
+            f"late-interaction-kernels: `maxsim(..., normalize=False)` but Q's median L2 norm "
+            f"is {med:.3f} (ColBERT-style models expect ≈1.0). Pass `normalize=True` to fuse "
+            "the L2-norm into the kernel, or pre-normalize with `F.normalize(Q, dim=-1)`. "
+            "Silence with `LIK_SUPPRESS_NORM_WARN=1`.",
             UserWarning,
             stacklevel=3,
         )
 
 
 class _MaxSimFn(torch.autograd.Function):
-    """Autograd function for fused MaxSim, 3-D shapes, with saved argmax."""
+    """Fused MaxSim with saved argmax, 3-D inputs."""
 
     @staticmethod
     def forward(ctx, Q, D, q_mask, d_mask, normalize, backward_method):
-        # All shape-normalization happens here; we expect Q=[Nq,Lq,d], D=[Nd,Ld,d]
         scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax=True, normalize=normalize)
         ctx.save_for_backward(Q, D, argmax, q_mask, d_mask)
         ctx.backward_method = backward_method
@@ -102,10 +92,8 @@ class _MaxSimFn(torch.autograd.Function):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
 
-        # Resolve "auto" once, using problem shape. Unified is the default
-        # for almost every training shape (see
-        # benchmarks/bench_backward_unified.py); CSR only wins at very
-        # high grad_D contention (B >= 256 with typical Lq / Ld).
+        # `auto` -> `unified` for typical training shapes; `csr` only when
+        # `grad_D` contention is very high (large square batches, short Lq).
         method = ctx.backward_method
         if method == "auto":
             Nq, Lq, _ = Q.shape
@@ -159,27 +147,18 @@ def maxsim(
     Args:
         Q: ``[Nq, Lq, d]`` or ``[Lq, d]``.
         D: ``[Nd, Ld, d]`` or ``[Ld, d]``.
-        q_mask, d_mask: bool tensors matching the first two dims of Q / D.
-            ``True`` = valid token, ``False`` = padding / masked.
-        normalize: if ``True``, L2-normalize Q and D per-token inside the
-            kernel (saves one HBM round-trip vs ``F.normalize(Q) → maxsim``).
-            The gradient correctly accounts for the normalization so the op
-            is a true drop-in for ``maxsim(F.normalize(Q), F.normalize(D))``.
-            **Recommended for ColBERT / ColPali / LateOn**, which always
-            score on L2-normalized embeddings.
-        backward: per-call ``grad_D`` path override —
-            ``"auto" | "unified" | "csr" | "atomic" | None``.
-            ``None`` (default) defers to the process-wide
-            :func:`set_backward_method` setting.
+        q_mask, d_mask: bool tensors (``True`` = valid token).
+        normalize: L2-normalize Q and D per-token inside the kernel. Set to
+            ``True`` for ColBERT / ColPali / LateOn-style scoring.
+        backward: per-call override of the ``grad_D`` strategy
+            (``"auto" | "unified" | "csr" | "atomic"``). ``None`` defers
+            to :func:`set_backward_method`.
 
     Returns:
-        scores: ``[Nq, Nd]`` fp32. Squeezed to match 2-D inputs.
+        scores: ``[Nq, Nd]`` fp32, squeezed to match 2-D inputs.
 
-    Notes:
-        * Gradients flow into Q and D. Masks are non-differentiable.
-        * FP32 accumulation inside the kernel; inputs can be fp16 / bf16 / fp32.
-        * If Q doesn't look L2-normalized and ``normalize=False``, a one-time
-          warning is emitted (silence with ``LIK_SUPPRESS_NORM_WARN=1``).
+    Inputs can be fp16 / bf16 / fp32 (fp32 accumulator). Gradients flow
+    into Q and D; masks are non-differentiable.
     """
     q_was_2d = Q.dim() == 2
     d_was_2d = D.dim() == 2
@@ -234,7 +213,6 @@ def maxsim(
     return scores
 
 
-# Inference-only alias that does not save argmax (smaller memory)
 def maxsim_inference(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -243,12 +221,7 @@ def maxsim_inference(
     *,
     normalize: bool = False,
 ) -> torch.Tensor:
-    """Same as ``maxsim`` but no autograd / no saved argmax. Use for reranking.
-
-    Supports ``normalize=True`` to fuse L2-norm with the MaxSim reduction —
-    this is the fast path for typical ColBERT reranking (the unnormalized
-    embeddings are dequantized or encoder-output fp16).
-    """
+    """Inference-only MaxSim — like :func:`maxsim` but no saved argmax."""
     if Q.shape[-1] != D.shape[-1]:
         raise ValueError(
             f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "

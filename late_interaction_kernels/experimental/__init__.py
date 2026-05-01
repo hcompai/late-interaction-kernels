@@ -1,7 +1,7 @@
-"""Research MaxSim variants — imported explicitly, not at the top level.
+"""Research MaxSim variants. Import explicitly, not at the top level.
 
     from late_interaction_kernels.experimental import (
-        maxsim_matryoshka,   # MRL: score K truncated dims in one kernel
+        maxsim_matryoshka,   # Matryoshka: score K truncated dims at once
         maxsim_xtr,          # XTR top-K aggregation
         soft_maxsim,         # log-sum-exp relaxation
         smooth_maxsim,       # top-K smoother

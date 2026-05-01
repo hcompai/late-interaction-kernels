@@ -145,13 +145,11 @@ def test_varlen_backward_matches_padded(q_lens, d_lens, d):
 def test_varlen_backward_requires_grad_gate():
     """No argmax is saved when neither input requires grad — sanity check that
     the inference path still returns correct scores."""
-    from late_interaction_kernels import maxsim_varlen, maxsim_varlen_inference
+    from late_interaction_kernels import maxsim_varlen
     from late_interaction_kernels.reference import maxsim_reference_varlen
 
     Qp, cu_q = _build_varlen([12, 8, 20], 128)
     Dp, cu_d = _build_varlen([64, 32, 128, 16], 128)
     s_ref = maxsim_reference_varlen(Qp.float(), Dp.float(), cu_q, cu_d)
     s_fast = maxsim_varlen(Qp, Dp, cu_q, cu_d).float()
-    s_inf = maxsim_varlen_inference(Qp, Dp, cu_q, cu_d).float()
     assert (s_fast - s_ref).abs().max().item() < 5e-3
-    assert (s_inf - s_ref).abs().max().item() < 5e-3

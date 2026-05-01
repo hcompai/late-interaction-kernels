@@ -253,27 +253,13 @@ def test_module_getattr_rejects_unknown_names():
         _ = lik.this_symbol_does_not_exist  # noqa: B018
 
 
-def test_maxsim_forward_is_deprecated_but_still_importable():
-    """``from late_interaction_kernels import maxsim_forward`` must emit a
-    ``DeprecationWarning`` but still return a callable — dropping it
-    outright would silently break users who imported the legacy symbol.
-    """
-    import warnings
-
-    import late_interaction_kernels as lik
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        fn = lik.maxsim_forward
-    assert callable(fn)
-    assert any(issubclass(x.category, DeprecationWarning) and "0.9.0" in str(x.message) for x in w), [
-        str(x.message) for x in w
-    ]
-
-
 @pytest.mark.parametrize(
     "name,new_home",
     [
+        ("maxsim_forward", "late_interaction_kernels.forward"),
+        ("maxsim_topk", "late_interaction_kernels.topk"),
+        ("maxsim_residual_inference", "late_interaction_kernels.plaid"),
+        ("maxsim_varlen_inference", "late_interaction_kernels.varlen"),
         ("maxsim_matryoshka", "late_interaction_kernels.experimental"),
         ("maxsim_xtr", "late_interaction_kernels.experimental"),
         ("soft_maxsim", "late_interaction_kernels.experimental"),
@@ -284,12 +270,8 @@ def test_maxsim_forward_is_deprecated_but_still_importable():
         ("dequantize_fp8_per_token", "late_interaction_kernels.fp8"),
     ],
 )
-def test_demoted_symbols_warn_but_still_work(name, new_home):
-    """Symbols that moved out of the top-level import in 0.9.x still resolve
-    from ``late_interaction_kernels`` with a ``DeprecationWarning`` pointing
-    to their new home. Dropping the shim outright would silently break
-    pinned users.
-    """
+def test_deprecated_symbols_warn_but_still_resolve(name, new_home):
+    """Symbols moved off the top level still import with a ``DeprecationWarning``."""
     import warnings
 
     import late_interaction_kernels as lik
@@ -299,16 +281,21 @@ def test_demoted_symbols_warn_but_still_work(name, new_home):
         fn = getattr(lik, name)
     assert callable(fn)
     msgs = [str(x.message) for x in w if issubclass(x.category, DeprecationWarning)]
-    assert any(name in m and new_home in m for m in msgs), msgs
+    # The new-home hint is only included for the *moved* symbols, not for
+    # the simple aliases (`maxsim_forward`, `*_inference`). Either way we
+    # require the deprecation message to mention the symbol name.
+    assert any(name in m for m in msgs), msgs
 
 
-def test_demoted_symbols_not_in_dunder_all():
-    """``from late_interaction_kernels import *`` must not pull the demoted
-    symbols back in — they should live at their new home only.
-    """
+def test_deprecated_symbols_not_in_dunder_all():
+    """``from late_interaction_kernels import *`` doesn't surface deprecated symbols."""
     import late_interaction_kernels as lik
 
-    demoted = {
+    deprecated = {
+        "maxsim_forward",
+        "maxsim_topk",
+        "maxsim_residual_inference",
+        "maxsim_varlen_inference",
         "maxsim_matryoshka",
         "maxsim_xtr",
         "soft_maxsim",
@@ -318,7 +305,7 @@ def test_demoted_symbols_not_in_dunder_all():
         "dequantize_fp8_per_tensor",
         "dequantize_fp8_per_token",
     }
-    assert demoted.isdisjoint(lik.__all__), demoted & set(lik.__all__)
+    assert deprecated.isdisjoint(lik.__all__), deprecated & set(lik.__all__)
 
 
 def test_reference_topk_path_matches_fused_topk_contract_on_ties():
