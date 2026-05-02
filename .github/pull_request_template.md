@@ -1,26 +1,16 @@
-<!--
-Thanks for the PR! Please fill in the sections that apply. Delete the rest.
--->
+## What & why
 
-## What
-
-<!-- One or two sentences. -->
-
-## Why
-
-<!-- Motivation. Link to any related issue. -->
+<!-- One or two sentences. Link any related issue. -->
 
 ## How
 
-<!-- Brief notes on the approach, any alternatives considered. -->
+<!-- Brief notes on the approach. -->
 
 ## Test plan
 
-<!-- How did you verify correctness? What shapes, what GPU, what numbers? -->
+<!-- How did you verify correctness? Shapes, GPU, numbers. -->
 
-- [ ] `ruff check . && ruff format --check .` passes
-- [ ] `pytest -q` passes (state: CPU / `<GPU name>`)
+- [ ] `ruff check . && ruff format --check .` and `pytest -q` pass
 - [ ] Parity vs `reference.maxsim_reference` holds for new numerical paths
 - [ ] Benchmarks included for performance-motivated changes
-- [ ] `CHANGELOG.md` updated under **Unreleased**
-- [ ] Public API changes documented in the README
+- [ ] `CHANGELOG.md` and README updated for public API changes
