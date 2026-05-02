@@ -1,12 +1,12 @@
 name: Bug report
-description: A kernel crashes, returns wrong numbers, or misbehaves unexpectedly.
+description: A kernel crashes, returns wrong numbers, or is slower than expected.
 labels: ["bug"]
 body:
   - type: textarea
     id: summary
     attributes:
       label: Summary
-      description: One sentence.
+      description: One sentence — what went wrong?
     validations:
       required: true
 
@@ -19,6 +19,7 @@ body:
         python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
         python -c "import triton; print('triton', triton.__version__)"
         python -c "import late_interaction_kernels as lik; print('lik', lik.__version__)"
+        python -c "import pylate; print('pylate', pylate.__version__)"  # if PyLate-related
         nvidia-smi | head -5
       render: shell
     validations:
@@ -28,22 +29,26 @@ body:
     id: repro
     attributes:
       label: Minimal reproducer
-      description: Ideally < 20 lines of runnable Python.
+      description: |
+        < 30 lines of runnable Python. For PyLate issues, include `patch_pylate()`
+        and one loss / scoring call. For perf issues, adapt one of `benchmarks/bench_*.py`.
       render: python
-    validations:
-      required: true
-
-  - type: textarea
-    id: observed
-    attributes:
-      label: Observed vs expected
-      description: Include tracebacks, numerical diffs, or perf numbers.
     validations:
       required: true
 
   - type: textarea
     id: shape
     attributes:
-      label: Shape
+      label: Shape / dtype
       description: "(Nq, Nd, Lq, Ld, d), dtype, mask usage, backward method."
       placeholder: "Nq=32, Nd=32, Lq=32, Ld=300, d=128, fp16, d_mask=True, auto"
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed vs expected
+      description: |
+        Tracebacks, numerical diffs, or perf numbers. For PyLate issues,
+        include the parity delta vs `LIK_DISABLE=1` (kill-switch path).
+    validations:
+      required: true
