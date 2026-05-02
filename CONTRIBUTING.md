@@ -41,16 +41,6 @@ ruff check . && ruff format --check .
 pytest -q
 ```
 
-## PR checklist
-
-- [ ] `ruff check .` and `ruff format --check .` pass
-- [ ] `pytest -q` passes (state: CPU / `<GPU name>`)
-- [ ] New behavior has tests; bug fixes have a regression test
-- [ ] Numerical changes include a parity test vs `reference.maxsim_reference`
-- [ ] Benchmarks included if the change is performance-motivated
-- [ ] `CHANGELOG.md` updated under the in-flight `Unreleased` block
-- [ ] Public API changes mentioned in the README
-
 ## Style
 
 - Python 3.9+; type hints on public APIs.
