@@ -182,7 +182,7 @@ if _HAS_TRITON:
                 # Tensor-core fp8 dot: inputs fp8, accumulator fp32.
                 S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
 
-                # Apply per-tensor scale at tile level (cheap broadcast).
+                # Apply per-tensor / per-token scales at tile level.
                 if SCALE_Q_PER_TOKEN and SCALE_D_PER_TOKEN:
                     d_scale_vec = tl.load(
                         d_scale_ptr + d_idx * stride_ds_n + d_off * stride_ds_l,
