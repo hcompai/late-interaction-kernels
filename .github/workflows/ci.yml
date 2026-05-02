@@ -1,13 +1,22 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
+  pull_request:
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci.yml"
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -16,13 +25,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install "ruff>=0.4"
-      - run: ruff check .
-      - run: ruff format --check .
+          enable-cache: true
+          prune-cache: false
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run ruff linter
+        run: uv run ruff check
+      - name: Run ruff formatter check
+        run: uv run ruff format --check
+
+  typecheck:
+    name: Type Check (ty)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          prune-cache: false
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run ty type checker
+        run: uv run ty check --output-format github
 
   cpu-smoke:
     name: CPU smoke (py${{ matrix.python-version }})
@@ -33,20 +61,19 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-      - name: Install (CPU torch only)
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]"
+          enable-cache: true
+          prune-cache: false
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
       - name: Import check
         run: |
-          python -c "import late_interaction_kernels as lik; print(lik.__version__)"
-          python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
-      - name: Run CPU-safe tests (reference only; CUDA tests auto-skip)
-        run: pytest -q
+          uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
+          uv run --python ${{ matrix.python-version }} python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
+      - name: Run CPU-safe tests (CUDA tests auto-skip)
+        run: uv run --python ${{ matrix.python-version }} pytest -q
 
   # GPU tests live on SkyPilot — run manually or via a scheduled dispatch.
   # See scripts/sky_test.yaml.
