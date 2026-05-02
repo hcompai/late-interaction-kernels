@@ -13,7 +13,8 @@ FP8 helpers live in ``late_interaction_kernels.fp8``.
 Research kernels live in ``late_interaction_kernels.experimental``.
 """
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 try:
     __version__ = _pkg_version("late-interaction-kernels")
