@@ -2,11 +2,11 @@
 
     score = sum_s topk_t(⟨Q[s], D[t]⟩) / k
 
-For ``k <= 8`` the kernel keeps a register-resident max-heap; larger ``k``
-falls back to materialising scores and ``torch.topk``. Backward goes
-through PyTorch autograd against the saved top-k indices (correct;
-typically fast enough since the matmul has the same shape as the main
-MaxSim backward).
+``top_k=1`` dispatches to the fused MaxSim forward (zero overhead); for
+``top_k > 1`` we currently fall back to materialising scores and calling
+``torch.topk``. A fully-fused in-kernel heap for small ``k`` is on the
+roadmap. Backward goes through PyTorch autograd against the saved top-k
+indices.
 """
 
 from __future__ import annotations
