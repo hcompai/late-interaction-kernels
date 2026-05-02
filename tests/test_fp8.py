@@ -1,4 +1,4 @@
-"""Parity + fallback tests for :func:`maxsim_inference_fp8` (0.7.0)."""
+"""Parity + fallback tests for :func:`maxsim_inference_fp8`."""
 
 from __future__ import annotations
 

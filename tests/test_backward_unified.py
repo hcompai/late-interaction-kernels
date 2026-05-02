@@ -1,10 +1,8 @@
 """Numerical parity for the unified-backward reference implementation.
 
-We cannot test the Triton unified kernel here because it is not yet
-implemented (lands in 0.6.1). But we can pin the reference-vs-torch
-autograd parity of ``maxsim_backward_unified_reference`` so that, when
-the Triton kernel lands, its output must match this reference to fp32
-tolerance.
+Pins the reference-vs-torch autograd parity of
+``maxsim_backward_unified_reference`` so that the Triton kernel's
+output must match this reference to fp32 tolerance.
 """
 
 from __future__ import annotations

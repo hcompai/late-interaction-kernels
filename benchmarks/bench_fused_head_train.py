@@ -1,4 +1,4 @@
-"""Training-aware fused head benchmark (0.8.0).
+"""Training-aware fused head benchmark.
 
 Compares ``maxsim_from_hidden_train`` against the canonical unfused
 autograd path ``F.linear + F.normalize + maxsim`` on realistic LateOn

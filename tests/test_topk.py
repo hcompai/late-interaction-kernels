@@ -1,8 +1,7 @@
 """Parity tests for ``maxsim_topk``.
 
 ``maxsim_topk`` is the kernel under :func:`late_interaction_kernels.retrieve`;
-since 0.9.0 it lives at ``late_interaction_kernels.topk`` (no longer in the
-top-level namespace).
+it lives at ``late_interaction_kernels.topk`` (not in the top-level namespace).
 """
 
 from __future__ import annotations

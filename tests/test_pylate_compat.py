@@ -23,7 +23,7 @@ _params = inspect.signature(
 if "documents_mask" not in _params or "queries_mask" not in _params:
     pytest.skip(
         f"Installed PyLate predates the (queries_mask, documents_mask) signature "
-        f"required by late-interaction-kernels >= 0.5.0. Got params: "
+        f"required by late-interaction-kernels. Got params: "
         f"{list(_params)}. Upgrade with `pip install -U 'pylate>=1.3.3'`.",
         allow_module_level=True,
     )
