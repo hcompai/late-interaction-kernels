@@ -155,7 +155,7 @@ def _maxsim_residual_kernel(
     codes_ptr,  # [Nd, Ld]  int64 centroid codes (padded)
     residuals_ptr,  # [Nd, Ld, packed_dim] uint8 packed residuals
     doc_len_ptr,  # [Nd] int64 real doc lengths
-    centroids_ptr,  # [n_centroids, d] fp32 centroid table
+    centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32 centroid table
     bucket_weights_ptr,  # [n_buckets] fp32 residual bucket values
     out_ptr,  # [Nq, Nd] fp32
     argmax_ptr,  # [Nq, Nd, Lq] int32 (only written if SAVE_ARGMAX)
@@ -319,7 +319,7 @@ def _maxsim_residual_bwd_dQ_kernel(
     grad_s_ptr,  # [Nq, Nd] fp32
     codes_ptr,  # [Nd, Ld]  int64 centroid codes
     residuals_ptr,  # [Nd, Ld, packed_dim] uint8
-    centroids_ptr,  # [n_centroids, d] fp32
+    centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32
     bucket_weights_ptr,  # [n_buckets] fp32
     grad_Qhat_ptr,  # [Nq, Lq, d] fp32 output
     Nq: tl.constexpr,
@@ -702,7 +702,7 @@ def _maxsim_residual_varlen_kernel(
     codes_flat_ptr,  # [sum_Ld] int64 centroid codes, concatenated over docs
     residuals_flat_ptr,  # [sum_Ld, packed_dim] uint8 packed residuals
     cu_seqlens_d_ptr,  # [Nd + 1] int32 cumulative doc-token offsets
-    centroids_ptr,  # [n_centroids, d] fp32
+    centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32
     bucket_weights_ptr,  # [n_buckets] fp32
     out_ptr,  # [Nq, Nd] fp32
     argmax_ptr,  # [Nq, Nd, Lq] int32 (only if SAVE_ARGMAX)
