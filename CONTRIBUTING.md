@@ -1,13 +1,9 @@
 # Contributing
 
-## Bugs and performance regressions
+## Reporting issues
 
-Open an issue with:
-
-- GPU, CUDA, Triton and PyTorch versions
-  (`python -c "import torch; print(torch.__version__, torch.version.cuda)"`)
-- Shape that triggers it: `(Nq, Nd, Lq, Ld, d)`, dtype, mask usage
-- Minimal reproducer (< 20 lines) and expected vs observed.
+Use the **Bug report** or **Feature request** templates under
+[Issues → New issue](https://github.com/hcompai/late-interaction-kernels/issues/new/choose).
 
 ## Autotune for a new GPU
 
@@ -45,51 +41,20 @@ ruff check . && ruff format --check .
 pytest -q
 ```
 
-## PR checklist
-
-- [ ] `ruff check .` and `ruff format --check .` pass
-- [ ] `pytest -q` passes (state: CPU / `<GPU name>`)
-- [ ] New behavior has tests; bug fixes have a regression test
-- [ ] Numerical changes include a parity test vs `reference.maxsim_reference`
-- [ ] Benchmarks included if the change is performance-motivated
-- [ ] `CHANGELOG.md` updated under the in-flight `Unreleased` block
-- [ ] Public API changes mentioned in the README
-
 ## Style
 
 - Python 3.9+; type hints on public APIs.
 - Comments explain *why*, not *what*. Don't narrate trivial code.
 - Match the existing docstring tone — short, concrete, no marketing.
 
-## Publishing a release to PyPI
+## Publishing a release
 
-Releases are published by the
-[`Publish Python Package`](.github/workflows/publish.yml) workflow, which
-runs on `release: published` and uploads to PyPI via OIDC trusted
-publishing (no token kept in repo secrets). The package version is
-derived from the git tag by `hatch-vcs`, so there is no version literal
-to bump.
+1. Ensure `main` is green and `CHANGELOG.md` has the `Unreleased` block filled in.
+2. On GitHub: **Releases → Draft a new release**, tag `vX.Y.Z` off `main`.
+3. Paste the matching `CHANGELOG.md` section as the release body, then **Publish**.
 
-To cut a release:
-
-1. Make sure `main` is green and `CHANGELOG.md` has the
-   `Unreleased` block filled in for the version you're about to ship.
-2. On GitHub: **Releases → Draft a new release**.
-3. Under **Choose a tag**, type `vX.Y.Z` and pick *Create new tag on
-   publish*. Target `main`.
-4. Title the release `vX.Y.Z` and paste the matching `CHANGELOG.md`
-   section into the body.
-5. Click **Publish release**. The workflow builds the sdist + wheel and
-   uploads them to PyPI; watch it under **Actions → Publish Python
-   Package**.
-
-One-time PyPI setup (already done for this project, kept here for
-reference):
-[pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/)
-→ *Add a new pending publisher* with project `late-interaction-kernels`,
-owner `hcompai`, repo `late-interaction-kernels`, workflow
-`publish.yml`, environment `pypi`. Then in this repo:
-**Settings → Environments → New environment** named `pypi`.
+The [`publish.yml`](.github/workflows/publish.yml) workflow builds and uploads
+to PyPI automatically via OIDC trusted publishing. No token needed.
 
 ## License
 
