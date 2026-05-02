@@ -13,7 +13,13 @@ FP8 helpers live in ``late_interaction_kernels.fp8``.
 Research kernels live in ``late_interaction_kernels.experimental``.
 """
 
-__version__ = "0.10.0"
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
+try:
+    __version__ = _pkg_version("late-interaction-kernels")
+except PackageNotFoundError:  # pragma: no cover — running from a source tree without install
+    __version__ = "0.0.0+unknown"
 
 # The kernels need Triton (Linux + CUDA). On macOS / Windows we still want
 # `import late_interaction_kernels` to succeed so users can develop against

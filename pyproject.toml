@@ -1,21 +1,27 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+include = ["late_interaction_kernels"]
 
 [project]
 name = "late-interaction-kernels"
-version = "0.10.0"
+dynamic = ["version"]
 description = "Fused Triton kernels for late-interaction (MaxSim) scoring — ColBERT, ColPali, ModernColBERT."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [
-  { name = "Aurélien Lac" },
-  { name = "Tony Wu" },
+  { name = "Aurélien Lac", email = "aurelien.lac@hcompany.ai" },
+  { name = "Tony Wu", email = "tony.wu@hcompany.ai" },
 ]
 maintainers = [
-  { name = "Aurélien Lac" },
-  { name = "Tony Wu" },
+  { name = "Aurélien Lac", email = "aurelien.lac@hcompany.ai" },
+  { name = "Tony Wu", email = "tony.wu@hcompany.ai" },
 ]
 keywords = [
   "late-interaction", "maxsim", "colbert", "colpali", "moderncolbert",
@@ -69,12 +75,6 @@ Repository = "https://github.com/hcompai/late-interaction-kernels"
 Issues = "https://github.com/hcompai/late-interaction-kernels/issues"
 Changelog = "https://github.com/hcompai/late-interaction-kernels/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/hcompai/late-interaction-kernels#readme"
-
-[tool.setuptools.packages.find]
-include = ["late_interaction_kernels*"]
-
-[tool.setuptools.package-data]
-late_interaction_kernels = ["py.typed"]
 
 [tool.ruff]
 line-length = 110
