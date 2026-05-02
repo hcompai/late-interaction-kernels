@@ -28,23 +28,12 @@ keywords = [
   "triton", "retrieval", "ir", "rerank", "flash-attention", "gpu-kernels",
 ]
 classifiers = [
-  "Development Status :: 4 - Beta",
-  "Environment :: GPU :: NVIDIA CUDA",
-  "Framework :: Pytest",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
   "Intended Audience :: Science/Research",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
-  "Operating System :: POSIX :: Linux",
-  "Operating System :: MacOS",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
-  "Topic :: Scientific/Engineering :: Information Analysis",
-  "Typing :: Typed",
 ]
 dependencies = [
   "torch>=2.1",
