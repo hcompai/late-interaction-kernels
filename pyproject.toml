@@ -16,12 +16,12 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [
-  { name = "Aurélien Lac" },
-  { name = "Tony Wu" },
+  { name = "Aurélien Lac", email = "aurelien.lac@hcompany.ai" },
+  { name = "Tony Wu", email = "tony.wu@hcompany.ai" },
 ]
 maintainers = [
-  { name = "Aurélien Lac" },
-  { name = "Tony Wu" },
+  { name = "Aurélien Lac", email = "aurelien.lac@hcompany.ai" },
+  { name = "Tony Wu", email = "tony.wu@hcompany.ai" },
 ]
 keywords = [
   "late-interaction", "maxsim", "colbert", "colpali", "moderncolbert",
