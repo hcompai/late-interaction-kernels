@@ -1,10 +1,10 @@
-## What & why
+## Description
 
 <!-- One or two sentences. Link any related issue. -->
 
-## How
+## Approach
 
-<!-- Brief notes on the approach. -->
+<!-- Brief notes on the implementation. -->
 
 ## Test plan
 
