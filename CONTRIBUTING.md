@@ -1,13 +1,9 @@
 # Contributing
 
-## Bugs and performance regressions
+## Reporting issues
 
-Open an issue with:
-
-- GPU, CUDA, Triton and PyTorch versions
-  (`python -c "import torch; print(torch.__version__, torch.version.cuda)"`)
-- Shape that triggers it: `(Nq, Nd, Lq, Ld, d)`, dtype, mask usage
-- Minimal reproducer (< 20 lines) and expected vs observed.
+Use the **Bug report** or **Feature request** templates under
+[Issues → New issue](https://github.com/hcompai/late-interaction-kernels/issues/new/choose).
 
 ## Autotune for a new GPU
 
