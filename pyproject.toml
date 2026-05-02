@@ -60,6 +60,7 @@ dev = [
   "pytest-xdist",
   "numpy",
   "ruff>=0.4",
+  "ty",
   "pandas",
   "tabulate",
 ]
@@ -85,6 +86,51 @@ select = ["E", "F", "I", "B", "UP"]
 # E741: `l` is the canonical logsumexp accumulator (FlashAttention / Liger).
 # B023: benchmark closures intentionally capture loop vars.
 ignore = ["E501", "B008", "E741", "B023"]
+
+# CI installs torch from the CPU-only PyTorch index so we don't pull the
+# multi-GB CUDA wheel on Linux runners. GPU users should override this
+# (e.g. `UV_INDEX=https://download.pytorch.org/whl/cu121 uv sync`).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.ty.src]
+# Only type-check the shipped package and the test suite. Benchmarks and
+# scripts are exploratory and not part of the public surface.
+include = ["late_interaction_kernels", "tests"]
+
+[tool.ty.rules]
+# ty is still alpha (0.0.x) and trips on a few patterns that are pervasive
+# in this codebase. The rules below are silenced because the diagnostics
+# they emit are dominated by alpha-ty narrowing limitations and torch's
+# loose `Tensor | None` typing — revisit on each ty bump.
+
+# Triton ships only with CUDA torch on Linux; on the CPU dev wheel and any
+# non-Linux platform it cannot be resolved. Pylate is an optional extra
+# not installed for `--extra dev`. Both are intentionally unresolvable in
+# the default environment, so we silence at the project level rather than
+# sprinkling per-line ignores across ~30 import sites.
+unresolved-import = "ignore"
+# torch.autograd.Function.backward has a deliberately broad runtime
+# signature; every Function override fires this rule.
+invalid-method-override = "ignore"
+# `x.grad`, `tensor_or_none.stride()`, accumulator-pattern variables that
+# start as None and are unconditionally bound in a loop — ty doesn't
+# narrow these. autograd code and tests rely on this pattern heavily.
+unresolved-attribute = "ignore"
+not-subscriptable = "ignore"
+invalid-argument-type = "ignore"
+unsupported-operator = "ignore"
+invalid-return-type = "ignore"
+no-matching-overload = "ignore"
+# Pre-existing `# type: ignore` comments in pylate_compat.py become "unused"
+# once we silence `unresolved-import` above. They are still load-bearing
+# for any other type checker someone might run, so leave them in place.
+unused-type-ignore-comment = "ignore"
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"
