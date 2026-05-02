@@ -2,8 +2,8 @@
 
 Hoists ``Q[i, s, :]`` out of the doc-batch loop, roughly halving HBM
 read traffic versus the two-pass backward. Row-owned ``grad_Q``
-accumulation (no atomic) + ``tl.atomic_add`` for ``grad_D``. Shipped
-as the default ``"auto"`` / ``"unified"`` backward since 0.6.0.
+accumulation (no atomic) + ``tl.atomic_add`` for ``grad_D``. Default
+``"auto"`` / ``"unified"`` backward.
 
 See :doc:`../docs/design.md` for the full HBM-traffic derivation and
 numerical contract.

@@ -2,10 +2,10 @@
 
 Measures end-to-end step time (forward + backward). The forward is
 identical for all flash paths, so the delta isolates the ``grad_D``
-path. Since 0.6.0 ``"auto"`` picks between ``"unified"`` (default for
-almost every shape) and ``"csr"`` (high-contention shapes);
-``"atomic"`` is still benched as a legacy reference but is never
-selected by ``"auto"`` anymore.
+path. ``"auto"`` picks between ``"unified"`` (default for almost
+every shape) and ``"csr"`` (high-contention shapes); ``"atomic"`` is
+still benched as a legacy reference but is never selected by
+``"auto"``.
 
 Shapes match ``bench_backward.py`` plus a stressful retrieval shape
 and a "hot bucket" synthetic where every query's argmax collapses to
@@ -116,10 +116,10 @@ def main():
 
         set_backward_method("auto")
         t_auto = _bench(step, iters=args.iters)
-        # The real selector lives in `_MaxSimFn.backward` (autograd.py).
-        # Since 0.6.0 `auto` picks between `unified` (default) and `csr`
-        # for very high-contention batches. `atomic` is never picked by
-        # auto anymore; this bench still reports it for comparison.
+        # The real selector lives in `_MaxSimFn.backward` (autograd.py):
+        # `auto` picks between `unified` (default) and `csr` for very
+        # high-contention batches. `atomic` is never picked by `auto`;
+        # this bench still reports it for comparison.
         high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
         pick = "csr" if high_contention else "unified"
 

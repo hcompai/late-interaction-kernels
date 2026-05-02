@@ -74,7 +74,7 @@ from . import reference  # noqa: E402,F401
 from .retrieve import MaxSimScorer, retrieve  # noqa: E402
 
 # Symbols moved out of the top level. Still importable, with a
-# `DeprecationWarning`. Scheduled for removal one release after 0.9.x.
+# `DeprecationWarning`. Scheduled for removal in a future release.
 _DEPRECATED_EXPERIMENTAL = {
     "maxsim_matryoshka": "late_interaction_kernels.experimental",
     "maxsim_xtr": "late_interaction_kernels.experimental",

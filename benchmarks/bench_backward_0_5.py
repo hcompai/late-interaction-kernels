@@ -1,4 +1,4 @@
-"""Benchmark: fused backward paths shipped in 0.5.0.
+"""Benchmark: fused backward paths.
 
 Covers:
     * ``maxsim_residual`` forward + backward (grad_Q) vs "dense unpack + maxsim"
@@ -245,7 +245,7 @@ def main(out_dir: str):
     with open(f"{out_dir}/backward_0_5_{gpu}.json", "w") as f:
         json.dump({"gpu": gpu, "rows": rows}, f, indent=2)
     with open(f"{out_dir}/backward_0_5_{gpu}.md", "w") as f:
-        f.write(f"# 0.5.0 backward kernels — {gpu}\n\n")
+        f.write(f"# Backward kernels — {gpu}\n\n")
         f.write("## Residual backward (train on 2/4/8-bit compressed docs)\n\n")
         f.write(
             "| regime | nbits | Nq×Nd×Ld | fused (ms) | unpack+maxsim (ms) | speedup | dense scratch (GB) |\n"

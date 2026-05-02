@@ -1,4 +1,4 @@
-"""Parity + gradient tests for :func:`smooth_maxsim` (0.7.0)."""
+"""Parity + gradient tests for :func:`smooth_maxsim`."""
 
 from __future__ import annotations
 

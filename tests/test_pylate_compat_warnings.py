@@ -1,8 +1,8 @@
 """CPU-safe unit tests for `patch_pylate()`'s loss-module warning path.
 
 The end-to-end PyLate test in ``test_pylate_compat.py`` needs CUDA and a
-live PyLate install. This module tests just the **warning contract**
-added in 0.9.0: when PyLate ships a loss submodule that doesn't expose
+live PyLate install. This module tests just the **warning contract**:
+when PyLate ships a loss submodule that doesn't expose
 ``colbert_scores`` / ``colbert_kd_scores`` (e.g. a future rename), the
 user must see a ``RuntimeWarning`` rather than silently running an
 unpatched loss.
@@ -76,9 +76,8 @@ def _uninstall(modules: list[str]) -> None:
 def test_patch_pylate_warns_when_loss_submodule_symbol_missing():
     """Missing ``colbert_scores`` attr on a loss submodule ⇒ RuntimeWarning.
 
-    This guards the 0.9.0 addition: previously the patch silently left
-    the loss module un-patched. Now the user sees a warning that lists
-    every symbol the patch couldn't reach.
+    The patch must not silently leave a loss module un-patched: the user
+    sees a warning that lists every symbol the patch couldn't reach.
     """
     installed = _install_fake_pylate(include_attr=False)
     try:

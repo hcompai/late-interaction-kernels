@@ -1,4 +1,4 @@
-"""Parity + gradient tests for :func:`maxsim_from_hidden_train` (0.7.0).
+"""Parity + gradient tests for :func:`maxsim_from_hidden_train`.
 
 The training-aware fused head is the autograd-aware sibling of
 :func:`maxsim_from_hidden`. It must:
