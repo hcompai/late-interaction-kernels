@@ -63,7 +63,7 @@ def _rel(out: torch.Tensor, ref: torch.Tensor) -> float:
         (4, 8, 32, 200, 128),
         (1, 4, 16, 32, 48),  # d=48
         (1, 4, 16, 32, 96),  # d=96
-        (1, 4, 16, 32, 192),  # d=192 (max)
+        (1, 4, 16, 32, 128),  # d=128 (max)
         (1, 4, 64, 128, 128),  # Lq > BLOCK_Q
         (1, 4, 200, 128, 128),  # Lq not multiple of BLOCK_Q
         (1, 4, 256, 128, 128),
@@ -165,8 +165,8 @@ def test_supports_rejects_fp32():
 
 
 def test_supports_rejects_d_too_large():
-    Q = torch.randn(1, 8, 256, dtype=torch.float16, device="mps")
-    D = torch.randn(1, 16, 256, dtype=torch.float16, device="mps")
+    Q = torch.randn(1, 8, 192, dtype=torch.float16, device="mps")
+    D = torch.randn(1, 16, 192, dtype=torch.float16, device="mps")
     assert not _metal.supports(Q, D)
 
 
@@ -207,13 +207,13 @@ def test_dispatch_falls_back_to_compile_for_fp32():
 
 
 def test_dispatch_falls_back_to_compile_for_unsupported_d():
-    """d > 192 routes to compile (Metal threadgroup-memory cap)."""
+    """d > 128 routes to compile (Metal threadgroup-memory + Q-cache cap)."""
     from late_interaction_kernels import MaxSimScorer
     from late_interaction_kernels import _mps as _mps_mod
 
     _mps_mod._compiled_cache.clear()
-    Q = torch.randn(1, 32, 200, dtype=torch.float16, device="mps")
-    D = torch.randn(50, 200, 200, dtype=torch.float16, device="mps")
+    Q = torch.randn(1, 32, 192, dtype=torch.float16, device="mps")
+    D = torch.randn(50, 200, 192, dtype=torch.float16, device="mps")
     out = MaxSimScorer(normalize=True).score(Q, D)
     assert out.shape == (1, 50)
     assert len(_mps_mod._compiled_cache) == 1

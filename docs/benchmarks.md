@@ -357,20 +357,20 @@ implementations land on Apple Silicon and the dispatch picks per call:
   carries every training-time call.
 
 Apple M4, fp16, 30-iter median (`benchmarks/bench_mps.py`). `metal`
-needs `d ≤ 192` and `d % 8 == 0`; outside that the dispatch transparently
+needs `d ≤ 128` and `d % 8 == 0`; outside that the dispatch transparently
 falls back to `compile`.
 
 
 | shape                                          | metal    | compile  | eager    | metal vs compile | metal peak | compile peak |
 | ---------------------------------------------- | -------- | -------- | -------- | ---------------- | ---------- | ------------ |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.32 ms  | 10.74 ms | 17.53 ms | **1.29×**        | 8 MB       | 0 MB         |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 13.29 ms | 17.58 ms | 28.45 ms | **1.32×**        | 8 MB       | 0 MB         |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 78.98 ms | 93.38 ms | 166.7 ms | **1.18×**        | 8 MB       | 2.5 GB       |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.04 ms  | 3.29 ms  | 7.04 ms  | 1.08×            | 8 MB       | 0 MB         |
-| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 13.30 ms | 17.93 ms | 28.41 ms | **1.35×**        | 8 MB       | 0 MB         |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 53.0 ms  | 64.5 ms  | 105.7 ms | **1.22×**        | 8 MB       | 750 MB       |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 5.60 ms  | 6.72 ms  | 12.54 ms | **1.20×**        | 8 MB       | 0 MB         |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 6.42 ms  | 1.66 ms  | 2.43 ms  | 0.26× (compile)  | 8 MB       | 0 MB         |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.42 ms  | 10.87 ms | 18.68 ms | **1.29×**        | 8 MB       | 0 MB         |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.43 ms | 18.28 ms | 31.13 ms | **1.11×**        | 8 MB       | 0 MB         |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 55.5 ms  | 93.9 ms  | 170.5 ms | **1.69×**        | 8 MB       | 2.5 GB       |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.11 ms  | 3.37 ms  | 6.51 ms  | 1.09×            | 8 MB       | 0 MB         |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 9.84 ms  | 17.27 ms | 28.89 ms | **1.76×**        | 8 MB       | 0 MB         |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 33.3 ms  | 67.2 ms  | 107.2 ms | **2.02×**        | 8 MB       | 750 MB       |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.82 ms  | 5.40 ms  | 13.06 ms | **1.12×**        | 8 MB       | 0 MB         |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 1.64 ms  | 2.33 ms  | 0.29× (compile)  | 8 MB       | 0 MB         |
 
 
 On the small `train-batch` shape the Metal kernel's launch overhead
@@ -386,6 +386,11 @@ regardless of the corpus size. On `rerank-10k` and `edge-d48` that's a
 materialise large intermediates.
 
 The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
-analogue of CUDA tensor cores) with vectorised `half4` / `bfloat4`
-device-memory loads and a fused L2-normalize + row-max reduction.
-Tolerances stay inside 5e-3 relative for fp16 and 3e-2 for bf16.
+analogue of CUDA tensor cores) on top of a *persistent* threadgroup
+design: each launch serves 8 consecutive `j` values, loading `Q` once
+into a register-resident `simdgroup_matrix` cache that's reused across
+every `(j, d-chunk)` pair (collapsing 8·Ld_chunks redundant LDS reads
+into a single load pass). The cooperative D load stages each row
+through per-thread registers so the L2-normalize fold pays one LDS
+write instead of three. Tolerances stay inside 5e-3 relative for fp16
+and 3e-2 for bf16.

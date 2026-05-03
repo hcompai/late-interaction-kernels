@@ -3,38 +3,28 @@
 Direct Metal-side analogue of :mod:`late_interaction_kernels.forward`:
 the same FlashAttention-style outer-product tiling, but the inner GEMM
 runs on Apple's ``simdgroup_matrix<T, 8, 8>`` MMA instead of CUDA tensor
-cores. The ``[Nq · Nd · Lq · Ld]`` similarity tensor never reaches HBM —
-each ``(q_batch, d_batch)`` threadgroup streams ``D`` in 32-row tiles
-through threadgroup memory while accumulating a per-row running max.
+cores. The ``[Nq · Nd · Lq · Ld]`` similarity tensor never reaches HBM.
 
-Layout per threadgroup (one ``(i, j)`` pair, 32 threads = 1 simdgroup):
+Each threadgroup serves ``J_PER_TG`` consecutive ``j`` values, loading
+Q exactly once and hoisting it into a register-resident
+``simdgroup_matrix`` cache that survives every ``(j, d-chunk)`` pair —
+this is the single largest win versus the naive one-(i,j)-per-thread-
+group layout. Two persistence levels are dispatched by ``Nd``:
 
-* ``Q_tile [32, d]`` and ``D_tile [32, d]`` in threadgroup memory; one
-  thread owns one query / doc row, fuses the L2-normalize during the
-  cooperative load.
-* ``S_tile [32, 32]`` is computed by a 4×4 grid of 8×8
-  ``simdgroup_multiply_accumulate`` calls reducing along ``d`` in steps
-  of 8. Accumulators are fp32; inputs are fp16 / bf16 (the two dtypes
-  Apple's MMA accepts on M2+ / M3+ silicon).
-* The ``S_tile`` is stored back to threadgroup memory; each thread reads
-  its own row, applies ``d_mask``, computes a row max, and folds it
-  into a per-thread running max.
-* After the doc-tile loop, ``q_mask`` is applied and the per-thread row
-  maxes are summed across the simdgroup with ``simd_sum`` to produce
-  ``scores[i, j]``.
+* ``J_PER_TG = 1`` for tiny corpora where the launch grid needs to be
+  wide to keep the GPU saturated;
+* ``J_PER_TG = 8`` for the typical inference regime, amortising the Q
+  load and the register-cache build 8× per threadgroup.
 
-The kernel is forward-only (training-time backward stays on the
-``torch.compile`` reference path; autograd flows through the dispatch
-in :mod:`._mps`). Constraints:
+D streams in 32-row tiles through threadgroup memory with the optional
+L2-normalize folded into the cooperative load.
 
-* ``d`` must be a multiple of 8 and ≤ ``D_MAX = 192``;
-* fp16 / bf16 inputs only — fp32 falls back to ``torch.compile`` since
-  the threadgroup-memory budget can't fit two ``32 × 192`` fp32 tiles
-  alongside ``S_tile``;
-* Apple Silicon GPU (M2 family for fp16, M3+ for bf16).
+Constraints (everything outside falls back to ``torch.compile``):
 
-Outside those bounds the dispatch in :mod:`._mps` transparently picks
-the compiled-reference path.
+* ``d`` is a multiple of 8 and ≤ ``D_MAX = 128`` (covers ColBERT,
+  ColPali, LateOn, LateOn-Code, edge-d48 / d64);
+* fp16 / bf16 inputs only — Apple's MMA accepts those; fp32 inputs
+  go through the compile path.
 """
 
 from __future__ import annotations
@@ -45,17 +35,26 @@ from typing import Any
 
 import torch
 
-# 32×32 output tile so each of the 32 threads in the simdgroup owns one
-# query and one doc row. ``D_MAX`` caps the static threadgroup-memory
-# allocation: 32 · 192 · 2 (half) · 2 buffers + 32 · 32 · 4 (S_tile)
-# ≈ 28 KiB, comfortably inside Apple's 32 KiB / threadgroup ceiling.
+# Tile sizes. One simdgroup per threadgroup so each of the 32 lanes
+# owns exactly one query / doc row during the cooperative load.
 _BLOCK_Q = 32
 _BLOCK_D = 32
 _BLOCK_K = 8  # Apple ``simdgroup_matrix`` is 8 × 8
 _M_TILES = _BLOCK_Q // _BLOCK_K
 _N_TILES = _BLOCK_D // _BLOCK_K
-_D_MAX = 192
+
+# ``D_MAX`` caps the threadgroup-memory footprint AND the depth of the
+# register-resident Q cache. 128 covers every standard late-interaction
+# model dim (48 / 64 / 96 / 128) and keeps ``K_TILES_MAX = 16`` so the
+# Q cache is ``4 × 16 = 64`` simdgroup matrices ≈ 8 KiB of register
+# state per simdgroup — comfortably inside the M-series register file.
+_D_MAX = 128
+_K_TILES_MAX = _D_MAX // _BLOCK_K
 _THREADS_PER_GROUP = 32
+
+# Persistence levels dispatched by ``Nd``.
+_J_PER_TG_BIG = 8
+_J_THRESHOLD = 256  # Nd above which the persistent variant wins
 
 _FLAG_HAS_Q_MASK = 1 << 0
 _FLAG_HAS_D_MASK = 1 << 1
@@ -69,13 +68,14 @@ _KERNEL_SOURCE = f"""
 #include <metal_simdgroup_matrix>
 using namespace metal;
 
-#define BLOCK_Q  {_BLOCK_Q}
-#define BLOCK_D  {_BLOCK_D}
-#define BLOCK_K  {_BLOCK_K}
-#define M_TILES  {_M_TILES}
-#define N_TILES  {_N_TILES}
-#define D_MAX    {_D_MAX}
-#define THREADS  {_THREADS_PER_GROUP}
+#define BLOCK_Q      {_BLOCK_Q}
+#define BLOCK_D      {_BLOCK_D}
+#define BLOCK_K      {_BLOCK_K}
+#define M_TILES      {_M_TILES}
+#define N_TILES      {_N_TILES}
+#define D_MAX        {_D_MAX}
+#define K_TILES_MAX  {_K_TILES_MAX}
+#define THREADS      {_THREADS_PER_GROUP}
 
 struct MaxSimParams {{
     uint Nq;
@@ -86,11 +86,47 @@ struct MaxSimParams {{
     uint flags;        // bit 0: has_q_mask, bit 1: has_d_mask, bit 2: normalize
 }};
 
-// One threadgroup = one simdgroup = 32 threads. Each thread owns one
-// query position s = q_start + tid and one doc position t = d_start + tid
-// during the cooperative loads. The simdgroup_matrix MMA then operates
-// across the full 32 threads to compute a 32×32 score tile per d_start.
 template <typename T>
+inline void cooperative_load_row(
+    device const vec<T, 4>* src,
+    threadgroup vec<T, 4>* dst,
+    uint src_row_off,
+    uint dst_row_off,
+    uint d4,
+    bool valid,
+    bool normalize)
+{{
+    // Stage the row through per-thread registers so the optional
+    // L2-normalize doesn't bounce values through LDS twice. Without
+    // this, ``normalize=True`` paid 3 LDS ops / element (write, read,
+    // write); the register-staged version pays 1.
+    constexpr uint D4_MAX = D_MAX >> 2;
+    vec<T, 4> regs[D4_MAX];
+
+    if (valid) {{
+        float sum2 = 0.0f;
+        for (uint k = 0; k < d4; ++k) {{
+            regs[k] = src[src_row_off + k];
+            float4 vf = float4(regs[k]);
+            sum2 += dot(vf, vf);
+        }}
+        if (normalize) {{
+            const float inv = rsqrt(max(sum2, 1e-24f));
+            for (uint k = 0; k < d4; ++k) {{
+                regs[k] = vec<T, 4>(float4(regs[k]) * inv);
+            }}
+        }}
+        for (uint k = 0; k < d4; ++k) {{
+            dst[dst_row_off + k] = regs[k];
+        }}
+    }} else {{
+        for (uint k = 0; k < d4; ++k) {{
+            dst[dst_row_off + k] = vec<T, 4>(0);
+        }}
+    }}
+}}
+
+template <typename T, int J_PER_TG>
 inline void maxsim_inference_impl(
     device const T*        Q,
     device const T*        D,
@@ -105,20 +141,33 @@ inline void maxsim_inference_impl(
     threadgroup uchar*     q_active_tile, // [BLOCK_Q]
     uint tid,
     uint i,
-    uint j)
+    uint j_block)
 {{
     const bool has_q_mask = (p.flags & {_FLAG_HAS_Q_MASK}u) != 0u;
     const bool has_d_mask = (p.flags & {_FLAG_HAS_D_MASK}u) != 0u;
     const bool normalize  = (p.flags & {_FLAG_NORMALIZE}u) != 0u;
 
+    const uint Nd = p.Nd;
     const uint Lq = p.Lq;
     const uint Ld = p.Ld;
     const uint d  = p.d;
+    const uint d4 = d >> 2;
+    const uint K_TILES = d / BLOCK_K;
+    const uint j_start = j_block * J_PER_TG;
 
-    float score_acc = 0.0f;
+    device   const vec<T, 4>* Q4  = reinterpret_cast<device const vec<T, 4>*>(Q);
+    device   const vec<T, 4>* D4  = reinterpret_cast<device const vec<T, 4>*>(D);
+    threadgroup vec<T, 4>*    QT4 = reinterpret_cast<threadgroup vec<T, 4>*>(Q_tile);
+    threadgroup vec<T, 4>*    DT4 = reinterpret_cast<threadgroup vec<T, 4>*>(D_tile);
+
+    // Per-(j_idx) score accumulators. Only thread 0's copies matter
+    // because we land each ``j`` total via ``simd_sum``.
+    float score_acc[J_PER_TG];
+    for (int j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
+        score_acc[j_idx] = 0.0f;
+    }}
 
     for (uint q_start = 0; q_start < Lq; q_start += BLOCK_Q) {{
-        // Cooperative Q load: one row per thread, fold L2-normalize in registers.
         const uint s = q_start + tid;
         const bool s_valid = s < Lq;
 
@@ -128,155 +177,126 @@ inline void maxsim_inference_impl(
         }}
         q_active_tile[tid] = q_active ? (uchar)1 : (uchar)0;
 
-        // Vectorise the load + L2-norm in 4-wide chunks; both buffers are
-        // contiguous and ``d`` is a multiple of 8 so the cast is well-defined.
-        {{
-            const uint d4 = d >> 2;
-            device const vec<T, 4>* Q4 = reinterpret_cast<device const vec<T, 4>*>(Q);
-            threadgroup vec<T, 4>* QT4 = reinterpret_cast<threadgroup vec<T, 4>*>(Q_tile);
-            const uint q_row_off = (i * Lq + s) * d4;
-            const uint t_row_off = tid * (D_MAX >> 2);
-            if (s_valid) {{
-                float sum2 = 0.0f;
-                for (uint k = 0; k < d4; ++k) {{
-                    vec<T, 4> v = Q4[q_row_off + k];
-                    QT4[t_row_off + k] = v;
-                    float4 vf = float4(v);
-                    sum2 += dot(vf, vf);
-                }}
-                if (normalize) {{
-                    float inv = rsqrt(max(sum2, 1e-24f));
-                    for (uint k = 0; k < d4; ++k) {{
-                        QT4[t_row_off + k] = vec<T, 4>(float4(QT4[t_row_off + k]) * inv);
-                    }}
-                }}
-            }} else {{
-                for (uint k = 0; k < d4; ++k) {{
-                    QT4[t_row_off + k] = vec<T, 4>(0);
-                }}
-            }}
-        }}
-
-        // Each thread tracks the running max for its own query row.
-        float running_max = -INFINITY;
+        cooperative_load_row<T>(
+            Q4, QT4,
+            (i * Lq + s) * d4,
+            tid * (D_MAX >> 2),
+            d4, s_valid, normalize);
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (uint d_start = 0; d_start < Ld; d_start += BLOCK_D) {{
-            // Cooperative D load: one row per thread, fold L2-normalize.
-            const uint t = d_start + tid;
-            const bool t_valid = t < Ld;
-
-            bool d_active = t_valid;
-            if (has_d_mask && t_valid) {{
-                d_active = d_mask[j * Ld + t] != 0;
-            }}
-            d_active_tile[tid] = d_active ? (uchar)1 : (uchar)0;
-
-            {{
-                const uint d4 = d >> 2;
-                device const vec<T, 4>* D4 = reinterpret_cast<device const vec<T, 4>*>(D);
-                threadgroup vec<T, 4>* DT4 = reinterpret_cast<threadgroup vec<T, 4>*>(D_tile);
-                const uint d_row_off = (j * Ld + t) * d4;
-                const uint t_row_off = tid * (D_MAX >> 2);
-                if (t_valid) {{
-                    float sum2 = 0.0f;
-                    for (uint k = 0; k < d4; ++k) {{
-                        vec<T, 4> v = D4[d_row_off + k];
-                        DT4[t_row_off + k] = v;
-                        float4 vf = float4(v);
-                        sum2 += dot(vf, vf);
-                    }}
-                    if (normalize) {{
-                        float inv = rsqrt(max(sum2, 1e-24f));
-                        for (uint k = 0; k < d4; ++k) {{
-                            DT4[t_row_off + k] = vec<T, 4>(float4(DT4[t_row_off + k]) * inv);
-                        }}
-                    }}
-                }} else {{
-                    for (uint k = 0; k < d4; ++k) {{
-                        DT4[t_row_off + k] = vec<T, 4>(0);
-                    }}
-                }}
-            }}
-
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            // 32×32 score tile via 4×4 grid of 8×8 simdgroup_matrix MMAs,
-            // reducing along d in BLOCK_K=8 steps.
-            simdgroup_float8x8 acc[M_TILES][N_TILES];
+        // Hoist Q into a register-resident simdgroup_matrix cache.
+        // Reused for every (j, d-chunk) below.
+        simdgroup_matrix<T, 8, 8> Q_cache[M_TILES][K_TILES_MAX];
+        for (uint k = 0; k < K_TILES; ++k) {{
             for (int m = 0; m < M_TILES; ++m) {{
-                for (int n = 0; n < N_TILES; ++n) {{
-                    acc[m][n] = simdgroup_float8x8(0);
-                }}
+                simdgroup_load(
+                    Q_cache[m][k],
+                    &Q_tile[m * BLOCK_K * D_MAX + k * BLOCK_K],
+                    D_MAX);
             }}
+        }}
 
-            for (uint k_start = 0; k_start < d; k_start += BLOCK_K) {{
-                simdgroup_matrix<T, 8, 8> A[M_TILES];
-                simdgroup_matrix<T, 8, 8> B[N_TILES];
+        for (uint j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
+            const uint j = j_start + j_idx;
+            if (j >= Nd) break;
 
-                // Q sub-tiles: rows [m*8, m*8+8), cols [k_start, k_start+8).
-                for (int m = 0; m < M_TILES; ++m) {{
-                    simdgroup_load(A[m], &Q_tile[m * BLOCK_K * D_MAX + k_start], D_MAX);
+            float running_max = -INFINITY;
+
+            for (uint d_start = 0; d_start < Ld; d_start += BLOCK_D) {{
+                const uint t = d_start + tid;
+                const bool t_valid = t < Ld;
+
+                bool d_active = t_valid;
+                if (has_d_mask && t_valid) {{
+                    d_active = d_mask[j * Ld + t] != 0;
                 }}
-                // D sub-tiles, transposed in-place: we want B[k, t] = D_tile[t, k].
-                for (int n = 0; n < N_TILES; ++n) {{
-                    simdgroup_load(
-                        B[n],
-                        &D_tile[n * BLOCK_K * D_MAX + k_start],
-                        D_MAX,
-                        ulong2(0, 0),
-                        /* transpose */ true);
-                }}
+                d_active_tile[tid] = d_active ? (uchar)1 : (uchar)0;
+
+                cooperative_load_row<T>(
+                    D4, DT4,
+                    (j * Ld + t) * d4,
+                    tid * (D_MAX >> 2),
+                    d4, t_valid, normalize);
+
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+
+                simdgroup_float8x8 acc[M_TILES][N_TILES];
                 for (int m = 0; m < M_TILES; ++m) {{
                     for (int n = 0; n < N_TILES; ++n) {{
-                        simdgroup_multiply_accumulate(acc[m][n], A[m], B[n], acc[m][n]);
+                        acc[m][n] = simdgroup_float8x8(0);
                     }}
                 }}
-            }}
 
-            // Land the accumulators in threadgroup memory so the per-row
-            // max reduction below can read them as plain floats.
-            for (int m = 0; m < M_TILES; ++m) {{
-                for (int n = 0; n < N_TILES; ++n) {{
-                    simdgroup_store(
-                        acc[m][n],
-                        &S_tile[(m * BLOCK_K) * BLOCK_D + n * BLOCK_K],
-                        BLOCK_D);
-                }}
-            }}
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            // Each thread maxes its own row across the BLOCK_D doc tile,
-            // honouring d_active for masked / past-end positions.
-            if (s_valid) {{
-                float local_max = -INFINITY;
-                const uint row_base = tid * BLOCK_D;
-                for (uint n = 0; n < BLOCK_D; ++n) {{
-                    if (d_active_tile[n] != 0) {{
-                        local_max = fmax(local_max, S_tile[row_base + n]);
+                // Inner GEMM: only B (D sub-tile) is loaded fresh per
+                // K-step; A comes from the register-resident Q_cache.
+                for (uint k = 0; k < K_TILES; ++k) {{
+                    simdgroup_matrix<T, 8, 8> B[N_TILES];
+                    for (int n = 0; n < N_TILES; ++n) {{
+                        simdgroup_load(
+                            B[n],
+                            &D_tile[n * BLOCK_K * D_MAX + k * BLOCK_K],
+                            D_MAX,
+                            ulong2(0, 0),
+                            /* transpose */ true);
+                    }}
+                    for (int m = 0; m < M_TILES; ++m) {{
+                        for (int n = 0; n < N_TILES; ++n) {{
+                            simdgroup_multiply_accumulate(
+                                acc[m][n], Q_cache[m][k], B[n], acc[m][n]);
+                        }}
                     }}
                 }}
-                running_max = fmax(running_max, local_max);
-            }}
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-        }}
 
-        // Apply q_mask and clamp -inf rows (whole-doc-masked) to 0, then
-        // sum across the 32 threads via the simdgroup intrinsic.
-        float m = 0.0f;
-        if (q_active_tile[tid] != 0 && isfinite(running_max)) {{
-            m = running_max;
+                for (int m = 0; m < M_TILES; ++m) {{
+                    for (int n = 0; n < N_TILES; ++n) {{
+                        simdgroup_store(
+                            acc[m][n],
+                            &S_tile[(m * BLOCK_K) * BLOCK_D + n * BLOCK_K],
+                            BLOCK_D);
+                    }}
+                }}
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+
+                if (s_valid) {{
+                    float local_max = -INFINITY;
+                    const uint row_base = tid * BLOCK_D;
+                    for (uint n = 0; n < BLOCK_D; ++n) {{
+                        if (d_active_tile[n] != 0) {{
+                            local_max = fmax(local_max, S_tile[row_base + n]);
+                        }}
+                    }}
+                    running_max = fmax(running_max, local_max);
+                }}
+                // No trailing barrier: the next iteration's first writes
+                // (cooperative D load + d_active fill) already pair with
+                // the post-load barrier, which orders them after this
+                // iteration's reads on the lockstepped simdgroup.
+            }}
+
+            // q-mask + clamp -inf rows to 0, sum across the simdgroup.
+            float m = 0.0f;
+            if (q_active_tile[tid] != 0 && isfinite(running_max)) {{
+                m = running_max;
+            }}
+            float partial = simd_sum(m);
+            if (tid == 0) {{
+                score_acc[j_idx] += partial;
+            }}
         }}
-        score_acc += simd_sum(m);
     }}
 
     if (tid == 0) {{
-        scores[i * p.Nd + j] = score_acc;
+        for (uint j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
+            const uint j = j_start + j_idx;
+            if (j < Nd) {{
+                scores[i * Nd + j] = score_acc[j_idx];
+            }}
+        }}
     }}
 }}
 
-#define MAXSIM_KERNEL(NAME, T)                                                   \\
+#define MAXSIM_KERNEL(NAME, T, J)                                                \\
 kernel void NAME(                                                                \\
     device const T*        Q       [[buffer(0)]],                                \\
     device const T*        D       [[buffer(1)]],                                \\
@@ -292,14 +312,16 @@ kernel void NAME(                                                               
     threadgroup float S_tile[BLOCK_Q * BLOCK_D];                                 \\
     threadgroup uchar d_active_tile[BLOCK_D];                                    \\
     threadgroup uchar q_active_tile[BLOCK_Q];                                    \\
-    maxsim_inference_impl<T>(Q, D, q_mask, d_mask, scores, p,                    \\
-                             Q_tile, D_tile, S_tile,                             \\
-                             d_active_tile, q_active_tile,                       \\
-                             tid3.z, tg.x, tg.y);                                \\
+    maxsim_inference_impl<T, J>(Q, D, q_mask, d_mask, scores, p,                 \\
+                                Q_tile, D_tile, S_tile,                          \\
+                                d_active_tile, q_active_tile,                    \\
+                                tid3.z, tg.x, tg.y);                             \\
 }}
 
-MAXSIM_KERNEL(maxsim_inference_half,   half)
-MAXSIM_KERNEL(maxsim_inference_bfloat, bfloat)
+MAXSIM_KERNEL(maxsim_half_small,   half,   1)
+MAXSIM_KERNEL(maxsim_half_big,     half,   {_J_PER_TG_BIG})
+MAXSIM_KERNEL(maxsim_bfloat_small, bfloat, 1)
+MAXSIM_KERNEL(maxsim_bfloat_big,   bfloat, {_J_PER_TG_BIG})
 """
 
 
@@ -323,16 +345,23 @@ def _get_lib() -> Any:
                 _lib_compile_error = exc
                 raise
     if _lib is None:
-        # Compile failed in another thread; ``_lib_compile_error`` was set.
         assert _lib_compile_error is not None
         raise _lib_compile_error
     return _lib
 
 
 _DTYPE_TO_KERNEL = {
-    torch.float16: "maxsim_inference_half",
-    torch.bfloat16: "maxsim_inference_bfloat",
+    (torch.float16, 1): "maxsim_half_small",
+    (torch.float16, _J_PER_TG_BIG): "maxsim_half_big",
+    (torch.bfloat16, 1): "maxsim_bfloat_small",
+    (torch.bfloat16, _J_PER_TG_BIG): "maxsim_bfloat_big",
 }
+
+
+def _pick_j_per_tg(Nd: int) -> int:
+    """Persist 8 j-values when Nd is large enough that the smaller
+    launch grid still saturates the GPU."""
+    return _J_PER_TG_BIG if Nd >= _J_THRESHOLD else 1
 
 
 def is_available() -> bool:
@@ -352,10 +381,11 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
     """Whether the Metal kernel handles this dtype + shape combination.
 
     Falls back when ``d`` is not a multiple of 8 or exceeds ``D_MAX``,
-    and when the dtype is not fp16 / bf16. The dispatch in
-    :mod:`._mps` consults this before launching.
+    and when the dtype is not fp16 / bf16.
     """
-    if Q.dtype != D.dtype or Q.dtype not in _DTYPE_TO_KERNEL:
+    if Q.dtype != D.dtype:
+        return False
+    if Q.dtype not in (torch.float16, torch.bfloat16):
         return False
     if Q.shape[-1] != D.shape[-1]:
         return False
@@ -429,15 +459,16 @@ def maxsim_inference_metal(
         )
     if Q.dtype != D.dtype:
         raise ValueError(f"Q and D must share dtype; got {Q.dtype} vs {D.dtype}.")
-
-    kernel_name = _DTYPE_TO_KERNEL.get(Q.dtype)
-    if kernel_name is None:
+    if Q.dtype not in (torch.float16, torch.bfloat16):
         raise RuntimeError(f"Unsupported dtype {Q.dtype}; the Metal path handles fp16 and bf16.")
 
     Nq, Lq, d = Q.shape
     Nd, Ld, _ = D.shape
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
+
+    j_per_tg = _pick_j_per_tg(Nd)
+    kernel_name = _DTYPE_TO_KERNEL[(Q.dtype, j_per_tg)]
 
     Q = Q.contiguous()
     D = D.contiguous()
@@ -459,6 +490,8 @@ def maxsim_inference_metal(
     out = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
 
+    j_blocks = (Nd + j_per_tg - 1) // j_per_tg
+
     fn = getattr(_get_lib(), kernel_name)
     fn(
         Q,
@@ -467,7 +500,7 @@ def maxsim_inference_metal(
         d_mask_i8,
         out,
         params,
-        threads=(Nq, Nd, _THREADS_PER_GROUP),
+        threads=(Nq, j_blocks, _THREADS_PER_GROUP),
         group_size=(1, 1, _THREADS_PER_GROUP),
     )
 

@@ -9,7 +9,7 @@ Three implementations land on Apple Silicon:
   forced via ``LIK_FORCE_MPS_BACKEND=compile``),
 * ``eager``   — unfused PyTorch reference (no compile).
 
-The Metal path requires fp16 / bf16 inputs with ``d`` ≤ 192 and
+The Metal path requires fp16 / bf16 inputs with ``d`` ≤ 128 and
 divisible by 8; outside that, this script runs only ``compile`` /
 ``eager``. The default high-level dispatch picks ``metal`` when the
 shape is large enough for the kernel's launch overhead to amortise.
