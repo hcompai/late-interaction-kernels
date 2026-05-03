@@ -1,8 +1,14 @@
 """High-level entry points: :class:`MaxSimScorer` and :func:`retrieve`.
 
 Both default to ``normalize=True`` (ColBERT / ColPali / LateOn convention)
-and fall back to a pure-PyTorch reference when Triton is unavailable, so
-they import and run on macOS, Windows and CPU-only environments.
+and dispatch by tensor device:
+
+* CUDA + Triton → fused Triton kernels (:mod:`late_interaction_kernels.forward`),
+* MPS (Apple Silicon) → ``torch.compile``-fused reference,
+* CPU / anything else → eager PyTorch reference.
+
+Every backend is autograd-aware, so training and retrieval code is
+unit-testable on macOS / Windows before renting a CUDA box.
 """
 
 from __future__ import annotations
@@ -33,13 +39,20 @@ def _score(
     backward: str,
     inference: bool,
 ) -> torch.Tensor:
-    """Run on Triton if available, on the autograd-aware PyTorch reference otherwise."""
+    """Dispatch by device: Triton on CUDA, ``torch.compile`` on MPS, eager elsewhere."""
     if _HAS_TRITON and Q.is_cuda and D.is_cuda:
         from .autograd import maxsim, maxsim_inference
 
         if inference:
             return maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
+
+    if Q.device.type == "mps" and D.device.type == "mps":
+        from ._mps import maxsim_inference_mps, maxsim_mps
+
+        if inference:
+            return maxsim_inference_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
+        return maxsim_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
 
     from .reference import maxsim_reference
 
@@ -222,8 +235,6 @@ def retrieve(
             sorted=sorted,
         )
 
-    from .reference import maxsim_reference
-
     q_was_2d = Q.dim() == 2
     if q_was_2d:
         Q = Q.unsqueeze(0)
@@ -237,9 +248,19 @@ def retrieve(
     Nd = D.shape[0]
     k = min(top_k, Nd)
 
-    if chunk is None or chunk >= Nd:
+    # Pick the per-device scoring kernel. MPS goes through ``torch.compile``
+    # to fuse einsum+max+sum; CPU stays in eager (no compile dependency).
+    if Q.device.type == "mps":
+        from ._mps import maxsim_inference_mps as _score_kernel
+    else:
+        from .reference import maxsim_reference as _score_kernel
+
+    def _score_chunk(Q_, D_, qm_, dm_):
         with torch.no_grad():
-            scores = maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
+            return _score_kernel(Q_, D_, q_mask=qm_, d_mask=dm_, normalize=normalize)
+
+    if chunk is None or chunk >= Nd:
+        scores = _score_chunk(Q, D, q_mask, d_mask)
         topk_s, topk_i = torch.topk(scores, k, dim=-1, largest=largest, sorted=sorted)
     else:
         topk_s = None
@@ -248,10 +269,7 @@ def retrieve(
             end = min(start + chunk, Nd)
             D_chunk = D[start:end]
             d_mask_chunk = d_mask[start:end] if d_mask is not None else None
-            with torch.no_grad():
-                s_chunk = maxsim_reference(
-                    Q, D_chunk, q_mask=q_mask, d_mask=d_mask_chunk, normalize=normalize
-                )
+            s_chunk = _score_chunk(Q, D_chunk, q_mask, d_mask_chunk)
             k_here = min(k, end - start)
             ch_s, ch_i = torch.topk(s_chunk, k_here, dim=-1, largest=largest, sorted=True)
             ch_i = ch_i + start

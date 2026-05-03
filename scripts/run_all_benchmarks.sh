@@ -24,6 +24,14 @@ run python benchmarks/bench_backward_0_5.py     --outdir "${OUTDIR}"
 run python benchmarks/bench_lateon.py           --outdir "${OUTDIR}"
 run python benchmarks/bench_cached_maxsim.py    --outdir "${OUTDIR}"
 
+# Head-to-head vs flash-maxsim — same Triton-MaxSim math, direct
+# apples-to-apples speedup numbers. Skip if the package isn't installed.
+if python -c "import flash_maxsim" >/dev/null 2>&1; then
+  run python benchmarks/bench_flash_maxsim.py   --outdir "${OUTDIR}"
+else
+  echo "INFO: flash_maxsim not installed, skipping bench_flash_maxsim.py"
+fi
+
 # bench_fastplaid installs lightonai/fast-plaid; skip if the package isn't
 # available (we don't want to hard-depend on Rust toolchain at bench time).
 if python -c "import fast_plaid" >/dev/null 2>&1; then

@@ -1,0 +1,517 @@
+{
+  "gpu": "NVIDIA_H100_80GB_HBM3",
+  "dtype": "bf16",
+  "fm_version": "0.2.0",
+  "shapes": [
+    {
+      "name": "rerank-short",
+      "shape": [
+        1,
+        1000,
+        32,
+        300,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.09636799991130829,
+          "ms_stdev": 0.0036492460647622564,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.10878400132060051,
+          "ms_stdev": 0.004474266381033266,
+          "peak_mb": 0.0078125
+        },
+        "naive-einsum": {
+          "ms": 0.2844800055027008,
+          "ms_stdev": 0.00234322900774002,
+          "peak_mb": 183.12109375
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.10520000010728836,
+          "ms_stdev": 0.0036168987583968166,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.10894400253891945,
+          "ms_stdev": 0.0023962836421571013,
+          "peak_mb": 0.0078125
+        },
+        "naive-einsum": {
+          "ms": 0.2813439965248108,
+          "ms_stdev": 0.0015360540977673966,
+          "peak_mb": 183.12109375
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 1.3732960224151611,
+          "ms_stdev": 0.014033746569607677,
+          "peak_mb": 220.634765625
+        }
+      }
+    },
+    {
+      "name": "rerank-long",
+      "shape": [
+        1,
+        1000,
+        32,
+        1024,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.1531200036406517,
+          "ms_stdev": 0.0019448339265939916,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.16843199729919434,
+          "ms_stdev": 0.004776777943620407,
+          "peak_mb": 0.0078125
+        },
+        "naive-einsum": {
+          "ms": 0.8092159926891327,
+          "ms_stdev": 0.002112746991337397,
+          "peak_mb": 626.015625
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.16166400164365768,
+          "ms_stdev": 0.012759981777856737,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.1674880012869835,
+          "ms_stdev": 0.003984362991585785,
+          "peak_mb": 0.0078125
+        },
+        "naive-einsum": {
+          "ms": 0.8110399842262268,
+          "ms_stdev": 0.003959439799666799,
+          "peak_mb": 626.015625
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 1.6892159581184387,
+          "ms_stdev": 0.014032544986485209,
+          "peak_mb": 750.150390625
+        }
+      }
+    },
+    {
+      "name": "rerank-very-long",
+      "shape": [
+        1,
+        500,
+        32,
+        4096,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.23680000007152557,
+          "ms_stdev": 0.002707976833672878,
+          "peak_mb": 0.001953125
+        },
+        "flash-maxsim": {
+          "ms": 0.2518239915370941,
+          "ms_stdev": 0.00189876170930389,
+          "peak_mb": 0.00390625
+        },
+        "naive-einsum": {
+          "ms": 1.5644800066947937,
+          "ms_stdev": 0.003377585175832467,
+          "peak_mb": 1250.015625
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.24804800003767014,
+          "ms_stdev": 0.002821984657959259,
+          "peak_mb": 0.001953125
+        },
+        "flash-maxsim": {
+          "ms": 0.2512959986925125,
+          "ms_stdev": 0.0027159633517299248,
+          "peak_mb": 0.00390625
+        },
+        "naive-einsum": {
+          "ms": 1.564079999923706,
+          "ms_stdev": 0.002014017414776306,
+          "peak_mb": 1250.015625
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 1.6381440162658691,
+          "ms_stdev": 0.004452434244024059,
+          "peak_mb": 1500.08740234375
+        }
+      }
+    },
+    {
+      "name": "rerank-colpali",
+      "shape": [
+        1,
+        500,
+        1024,
+        1024,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.4086879938840866,
+          "ms_stdev": 0.004868621834165781,
+          "peak_mb": 0.001953125
+        },
+        "flash-maxsim": {
+          "ms": 0.49486400187015533,
+          "ms_stdev": 0.0056544297964379805,
+          "peak_mb": 0.01806640625
+        },
+        "naive-einsum": {
+          "ms": 2.021664023399353,
+          "ms_stdev": 0.0028862905309718105,
+          "peak_mb": 2250.5
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.5995360016822815,
+          "ms_stdev": 0.006888786265882627,
+          "peak_mb": 0.001953125
+        },
+        "flash-maxsim": {
+          "ms": 0.4864479899406433,
+          "ms_stdev": 0.0027188324876609962,
+          "peak_mb": 0.01806640625
+        },
+        "naive-einsum": {
+          "ms": 2.0200319290161133,
+          "ms_stdev": 0.005923835344876989,
+          "peak_mb": 2250.5
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 1.436576008796692,
+          "ms_stdev": 0.023618643987943343,
+          "peak_mb": 377.7060546875
+        }
+      }
+    },
+    {
+      "name": "rerank-10k",
+      "shape": [
+        1,
+        10000,
+        32,
+        300,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.30956800282001495,
+          "ms_stdev": 0.003324280733759683,
+          "peak_mb": 0.03857421875
+        },
+        "flash-maxsim": {
+          "ms": 0.32388800382614136,
+          "ms_stdev": 0.0040890773922003755,
+          "peak_mb": 0.0771484375
+        },
+        "naive-einsum": {
+          "ms": 2.36246395111084,
+          "ms_stdev": 0.006254445318615017,
+          "peak_mb": 1831.0703125
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.37039999663829803,
+          "ms_stdev": 0.0033413318295506885,
+          "peak_mb": 0.03857421875
+        },
+        "flash-maxsim": {
+          "ms": 0.32393600046634674,
+          "ms_stdev": 0.005033819791192316,
+          "peak_mb": 0.0771484375
+        },
+        "naive-einsum": {
+          "ms": 2.373024106025696,
+          "ms_stdev": 0.00547701378420223,
+          "peak_mb": 1831.0703125
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 11.898784160614014,
+          "ms_stdev": 0.015756824683335634,
+          "peak_mb": 2198.54931640625
+        }
+      }
+    },
+    {
+      "name": "train-in-batch-32",
+      "shape": [
+        32,
+        32,
+        32,
+        200,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.08702399954199791,
+          "ms_stdev": 0.004849607390523715,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.10009600222110748,
+          "ms_stdev": 0.005204085861144081,
+          "peak_mb": 0.00439453125
+        },
+        "naive-einsum": {
+          "ms": 0.16900800168514252,
+          "ms_stdev": 0.004984993501018389,
+          "peak_mb": 28.625
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.08974399790167809,
+          "ms_stdev": 0.0030906642118649534,
+          "peak_mb": 0.00390625
+        },
+        "flash-maxsim": {
+          "ms": 0.10046399757266045,
+          "ms_stdev": 0.013295165616832846,
+          "peak_mb": 0.00439453125
+        },
+        "naive-einsum": {
+          "ms": 0.16895999759435654,
+          "ms_stdev": 0.007122418757243202,
+          "peak_mb": 28.625
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 0.30561599135398865,
+          "ms_stdev": 0.017689062337322592,
+          "peak_mb": 5.5673828125
+        }
+      }
+    },
+    {
+      "name": "train-in-batch-128",
+      "shape": [
+        128,
+        128,
+        32,
+        200,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.23280000686645508,
+          "ms_stdev": 0.006855540253152132,
+          "peak_mb": 0.0625
+        },
+        "flash-maxsim": {
+          "ms": 0.29364798963069916,
+          "ms_stdev": 0.005305089652647136,
+          "peak_mb": 0.06298828125
+        },
+        "naive-einsum": {
+          "ms": 0.6291840076446533,
+          "ms_stdev": 0.00776402460058313,
+          "peak_mb": 414.5
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.34545600414276123,
+          "ms_stdev": 0.004789555287901718,
+          "peak_mb": 0.0625
+        },
+        "flash-maxsim": {
+          "ms": 0.29580800235271454,
+          "ms_stdev": 0.009141254276929677,
+          "peak_mb": 0.06298828125
+        },
+        "naive-einsum": {
+          "ms": 0.6296640038490295,
+          "ms_stdev": 0.0036152394349615374,
+          "peak_mb": 414.5
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 0.5876000225543976,
+          "ms_stdev": 0.005319833725480463,
+          "peak_mb": 23.8134765625
+        }
+      }
+    },
+    {
+      "name": "train-long-doc",
+      "shape": [
+        16,
+        16,
+        32,
+        2048,
+        128
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.08772799745202065,
+          "ms_stdev": 0.005593184702604789,
+          "peak_mb": 0.0009765625
+        },
+        "flash-maxsim": {
+          "ms": 0.08844799920916557,
+          "ms_stdev": 0.0049043029390029675,
+          "peak_mb": 0.00146484375
+        },
+        "naive-einsum": {
+          "ms": 0.16812800616025925,
+          "ms_stdev": 0.0051835637729364436,
+          "peak_mb": 80.25
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.11295999959111214,
+          "ms_stdev": 0.0024673305318297376,
+          "peak_mb": 0.0009765625
+        },
+        "flash-maxsim": {
+          "ms": 0.08750400319695473,
+          "ms_stdev": 0.0054362176117933566,
+          "peak_mb": 0.00146484375
+        },
+        "naive-einsum": {
+          "ms": 0.1684959977865219,
+          "ms_stdev": 0.005766572722957391,
+          "peak_mb": 80.25
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 0.30873601138591766,
+          "ms_stdev": 0.014380667937009359,
+          "peak_mb": 24.408203125
+        }
+      }
+    },
+    {
+      "name": "edge-d48",
+      "shape": [
+        1,
+        4000,
+        32,
+        2048,
+        48
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.31969600915908813,
+          "ms_stdev": 0.003084386019608114,
+          "peak_mb": 0.015625
+        },
+        "flash-maxsim": {
+          "ms": 0.3412480056285858,
+          "ms_stdev": 0.004136961277009086,
+          "peak_mb": 0.03125
+        },
+        "naive-einsum": {
+          "ms": 2.8311198949813843,
+          "ms_stdev": 0.003364303152225911,
+          "peak_mb": 2500.005859375
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.36641599237918854,
+          "ms_stdev": 0.0024260141668623622,
+          "peak_mb": 0.015625
+        },
+        "flash-maxsim": {
+          "ms": 0.34331199526786804,
+          "ms_stdev": 0.005354808854717789,
+          "peak_mb": 0.03125
+        },
+        "naive-einsum": {
+          "ms": 2.8273600339889526,
+          "ms_stdev": 0.006758088237085219,
+          "peak_mb": 2500.005859375
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 5.913504123687744,
+          "ms_stdev": 0.01044347263303444,
+          "peak_mb": 2250.513671875
+        }
+      }
+    },
+    {
+      "name": "edge-d64",
+      "shape": [
+        1,
+        10000,
+        32,
+        300,
+        64
+      ],
+      "forward_plain": {
+        "late-interaction-kernels": {
+          "ms": 0.19033600389957428,
+          "ms_stdev": 0.0020815855469789725,
+          "peak_mb": 0.03857421875
+        },
+        "flash-maxsim": {
+          "ms": 0.2179040014743805,
+          "ms_stdev": 0.0047161512367349025,
+          "peak_mb": 0.0771484375
+        },
+        "naive-einsum": {
+          "ms": 1.4009439945220947,
+          "ms_stdev": 0.002351295613663002,
+          "peak_mb": 1098.640625
+        }
+      },
+      "forward_normalize": {
+        "late-interaction-kernels": {
+          "ms": 0.20772799849510193,
+          "ms_stdev": 0.0028721666728497145,
+          "peak_mb": 0.03857421875
+        },
+        "flash-maxsim": {
+          "ms": 0.22092800587415695,
+          "ms_stdev": 0.0019383628919404977,
+          "peak_mb": 0.0771484375
+        },
+        "naive-einsum": {
+          "ms": 1.4037920236587524,
+          "ms_stdev": 0.0017397252299166538,
+          "peak_mb": 1098.640625
+        }
+      },
+      "training_fwd_bwd": {
+        "late-interaction-kernels-fwd+bwd": {
+          "ms": 11.913631916046143,
+          "ms_stdev": 0.03279867020953211,
+          "peak_mb": 1100.47314453125
+        }
+      }
+    }
+  ]
+}

@@ -37,11 +37,16 @@ pipelines.
 pip install late-interaction-kernels
 ```
 
-Linux + CUDA for the fused kernels. macOS / Windows / CPU still works —
-`MaxSimScorer`, `retrieve` and `late_interaction_kernels.reference` fall
-back to a pure-PyTorch implementation, so training and retrieval code
-runs locally before renting a GPU. The PyLate drop-in targets PyLate
-≥ 1.3.
+| Platform                          | Path                                                       |
+| --------------------------------- | ---------------------------------------------------------- |
+| Linux + CUDA (sm_75+)             | Fused Triton kernels — full speedups in [Speedups](#speedups-on-h100). |
+| macOS (Apple Silicon, MPS)        | `torch.compile`-fused reference, autograd-aware. Real GPU. |
+| CPU / Windows / anything else     | Eager pure-PyTorch reference, autograd-aware.              |
+
+`MaxSimScorer`, `retrieve` and `late_interaction_kernels.reference`
+import and run on every platform, so training and retrieval code is
+unit-testable on a laptop before renting a GPU. The PyLate drop-in
+targets PyLate ≥ 1.3.
 
 ---
 
@@ -153,6 +158,7 @@ Config:
 | `set_backward_method(...)` / `get_backward_method()`              | Process-wide default (back-compat; prefer per-call kwarg).          |
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                    |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                  |
+| `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).              |
 
 Walk-through of every kernel, the autograd graph, the backward variants
 and the numerics: [`docs/design.md`](docs/design.md).
@@ -164,11 +170,17 @@ and the numerics: [`docs/design.md`](docs/design.md).
 Primary target: **H100 / H200** (autotuned, FP8 WGMMA, warp-specialized
 on Triton ≥ 3.2). Also tuned for **A100**, **Ada** (L4 / L40 / 4090) and
 **Ampere** (A10 / A40 / 3090). Older / unknown CUDA falls back to a
-conservative shortlist. CPU / macOS / Windows get the pure-PyTorch
-reference.
+conservative shortlist.
 
-Autotune runs once per unique `(Lq, Ld, d, masks)` signature and caches
-the winner — zero overhead after warmup.
+**Apple Silicon (MPS)** dispatches to a `torch.compile`-fused reference
+that lowers to MPSGraph's `simdgroup_matrix` GEMM. ≈1.4–2.2× over eager
+on M-series, autograd-aware, with bounded peak memory (no `[Nq · Nd ·
+Lq · Ld]` scratch). See [`docs/benchmarks.md`](docs/benchmarks.md#apple-silicon-mps).
+
+Autotune runs once per unique `(Lq, Ld, d, masks)` signature on CUDA
+and caches the winner; the MPS compile cache keys on `(dtype,
+normalize, has_q_mask, has_d_mask)` and amortises after the first
+call.
 
 ---
 

@@ -1,0 +1,111 @@
+{
+  "chip": "M4",
+  "dtype": "fp16",
+  "shapes": [
+    {
+      "name": "rerank-short",
+      "shape": [
+        1,
+        1000,
+        32,
+        300,
+        128
+      ],
+      "compile_ms": 10.361103995819576,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 18.822542013367638,
+      "eager_peak_mb": 8.0,
+      "speedup_compile_vs_eager": 1.8166540960270279
+    },
+    {
+      "name": "rerank-mid",
+      "shape": [
+        1,
+        500,
+        32,
+        1024,
+        128
+      ],
+      "compile_ms": 17.537271487526596,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 29.95752049901057,
+      "eager_peak_mb": 8.0,
+      "speedup_compile_vs_eager": 1.708220148175153
+    },
+    {
+      "name": "rerank-10k",
+      "shape": [
+        1,
+        10000,
+        32,
+        300,
+        128
+      ],
+      "compile_ms": 101.58977050741669,
+      "compile_peak_mb": 2490.0,
+      "eager_ms": 178.21583300246857,
+      "eager_peak_mb": 3964.0,
+      "speedup_compile_vs_eager": 1.7542694713485716
+    },
+    {
+      "name": "colpali",
+      "shape": [
+        1,
+        100,
+        32,
+        1024,
+        128
+      ],
+      "compile_ms": 3.5888540151063353,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 6.506916499347426,
+      "eager_peak_mb": 8.0,
+      "speedup_compile_vs_eager": 1.8130903268726661
+    },
+    {
+      "name": "train-batch",
+      "shape": [
+        32,
+        32,
+        32,
+        200,
+        128
+      ],
+      "compile_ms": 1.787854009307921,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 2.4521879968233407,
+      "eager_peak_mb": 8.0,
+      "speedup_compile_vs_eager": 1.3715817869114402
+    },
+    {
+      "name": "edge-d48",
+      "shape": [
+        1,
+        4000,
+        32,
+        1024,
+        48
+      ],
+      "compile_ms": 66.51270850852598,
+      "compile_peak_mb": 750.0,
+      "eager_ms": 112.11977098719217,
+      "eager_peak_mb": 1508.0,
+      "speedup_compile_vs_eager": 1.6856894494504013
+    },
+    {
+      "name": "edge-d64",
+      "shape": [
+        1,
+        1000,
+        32,
+        300,
+        64
+      ],
+      "compile_ms": 5.279145509121008,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 11.448938006651588,
+      "eager_peak_mb": 8.0,
+      "speedup_compile_vs_eager": 2.1687104450655434
+    }
+  ]
+}
