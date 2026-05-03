@@ -11,11 +11,13 @@
         300,
         128
       ],
-      "compile_ms": 10.361103995819576,
+      "metal_ms": 8.317374988109805,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 10.737061995314434,
       "compile_peak_mb": 0.0,
-      "eager_ms": 18.822542013367638,
-      "eager_peak_mb": 8.0,
-      "speedup_compile_vs_eager": 1.8166540960270279
+      "eager_ms": 17.528604497783817,
+      "speedup_metal_vs_compile": 1.2909195522221517,
+      "speedup_compile_vs_eager": 1.6325326709888754
     },
     {
       "name": "rerank-mid",
@@ -26,11 +28,13 @@
         1024,
         128
       ],
-      "compile_ms": 17.537271487526596,
+      "metal_ms": 13.290103990584612,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 17.578333514393307,
       "compile_peak_mb": 0.0,
-      "eager_ms": 29.95752049901057,
-      "eager_peak_mb": 8.0,
-      "speedup_compile_vs_eager": 1.708220148175153
+      "eager_ms": 28.452708502300084,
+      "speedup_metal_vs_compile": 1.3226633536386696,
+      "speedup_compile_vs_eager": 1.61862377221383
     },
     {
       "name": "rerank-10k",
@@ -41,11 +45,13 @@
         300,
         128
       ],
-      "compile_ms": 101.58977050741669,
+      "metal_ms": 78.97639549628366,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 93.38091651443392,
       "compile_peak_mb": 2490.0,
-      "eager_ms": 178.21583300246857,
-      "eager_peak_mb": 3964.0,
-      "speedup_compile_vs_eager": 1.7542694713485716
+      "eager_ms": 166.7111874994589,
+      "speedup_metal_vs_compile": 1.1823902056764302,
+      "speedup_compile_vs_eager": 1.785281122976452
     },
     {
       "name": "colpali",
@@ -56,11 +62,30 @@
         1024,
         128
       ],
-      "compile_ms": 3.5888540151063353,
+      "metal_ms": 3.035979490960017,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 3.287833504145965,
       "compile_peak_mb": 0.0,
-      "eager_ms": 6.506916499347426,
-      "eager_peak_mb": 8.0,
-      "speedup_compile_vs_eager": 1.8130903268726661
+      "eager_ms": 7.038812502287328,
+      "speedup_metal_vs_compile": 1.0829564277149675,
+      "speedup_compile_vs_eager": 2.1408664682720007
+    },
+    {
+      "name": "colpali-big",
+      "shape": [
+        1,
+        500,
+        32,
+        1024,
+        128
+      ],
+      "metal_ms": 13.294895514263771,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 17.925146006746218,
+      "compile_peak_mb": 0.0,
+      "eager_ms": 28.40743750857655,
+      "speedup_metal_vs_compile": 1.3482728004529831,
+      "speedup_compile_vs_eager": 1.5847813734898042
     },
     {
       "name": "train-batch",
@@ -71,11 +96,13 @@
         200,
         128
       ],
-      "compile_ms": 1.787854009307921,
+      "metal_ms": 6.420207995688543,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 1.6559584910282865,
       "compile_peak_mb": 0.0,
-      "eager_ms": 2.4521879968233407,
-      "eager_peak_mb": 8.0,
-      "speedup_compile_vs_eager": 1.3715817869114402
+      "eager_ms": 2.43414549913723,
+      "speedup_metal_vs_compile": 0.257929103253405,
+      "speedup_compile_vs_eager": 1.4699314700972483
     },
     {
       "name": "edge-d48",
@@ -86,11 +113,13 @@
         1024,
         48
       ],
-      "compile_ms": 66.51270850852598,
+      "metal_ms": 52.96879149682354,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 64.4525204988895,
       "compile_peak_mb": 750.0,
-      "eager_ms": 112.11977098719217,
-      "eager_peak_mb": 1508.0,
-      "speedup_compile_vs_eager": 1.6856894494504013
+      "eager_ms": 105.69929151097313,
+      "speedup_metal_vs_compile": 1.2168017936137852,
+      "speedup_compile_vs_eager": 1.6399559038625076
     },
     {
       "name": "edge-d64",
@@ -101,11 +130,13 @@
         300,
         64
       ],
-      "compile_ms": 5.279145509121008,
+      "metal_ms": 5.601541502983309,
+      "metal_peak_mb": 8.0,
+      "compile_ms": 6.72041650977917,
       "compile_peak_mb": 0.0,
-      "eager_ms": 11.448938006651588,
-      "eager_peak_mb": 8.0,
-      "speedup_compile_vs_eager": 2.1687104450655434
+      "eager_ms": 12.540604511741549,
+      "speedup_metal_vs_compile": 1.1997441251126966,
+      "speedup_compile_vs_eager": 1.8660457270011717
     }
   ]
 }

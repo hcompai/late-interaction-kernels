@@ -1,13 +1,14 @@
 # MPS forward benchmark — M4 (fp16)
 
-30-iter median, ``torch.mps.synchronize`` between calls.
+30-iter median, `torch.mps.synchronize` between calls.
 
-| shape | compile ms | eager ms | speedup | compile peak MB | eager peak MB |
+| shape | metal ms | compile ms | eager ms | metal vs compile | compile vs eager |
 | --- | --- | --- | --- | --- | --- |
-| rerank-short | 10.361 | 18.823 | 1.82x | 0.0 | 8.0 |
-| rerank-mid | 17.537 | 29.958 | 1.71x | 0.0 | 8.0 |
-| rerank-10k | 101.590 | 178.216 | 1.75x | 2490.0 | 3964.0 |
-| colpali | 3.589 | 6.507 | 1.81x | 0.0 | 8.0 |
-| train-batch | 1.788 | 2.452 | 1.37x | 0.0 | 8.0 |
-| edge-d48 | 66.513 | 112.120 | 1.69x | 750.0 | 1508.0 |
-| edge-d64 | 5.279 | 11.449 | 2.17x | 0.0 | 8.0 |
+| rerank-short | 8.317 | 10.737 | 17.529 | 1.29x | 1.63x |
+| rerank-mid | 13.290 | 17.578 | 28.453 | 1.32x | 1.62x |
+| rerank-10k | 78.976 | 93.381 | 166.711 | 1.18x | 1.79x |
+| colpali | 3.036 | 3.288 | 7.039 | 1.08x | 2.14x |
+| colpali-big | 13.295 | 17.925 | 28.407 | 1.35x | 1.58x |
+| train-batch | 6.420 | 1.656 | 2.434 | 0.26x | 1.47x |
+| edge-d48 | 52.969 | 64.453 | 105.699 | 1.22x | 1.64x |
+| edge-d64 | 5.602 | 6.720 | 12.541 | 1.20x | 1.87x |

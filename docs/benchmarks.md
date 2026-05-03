@@ -346,31 +346,46 @@ you fit ~5–10× more of them than vanilla PyLate.
 
 ## Apple Silicon (MPS)
 
-`MaxSimScorer` and `retrieve` work on `mps:0` tensors and dispatch the
-dense-MaxSim formula through `torch.compile`. Inductor lowers the
-einsum + max + sum chain into one Metal compute graph that runs on
-top of MPSGraph's `simdgroup_matrix` GEMM. Apple M4, fp16, 30-iter
-median (`benchmarks/bench_mps.py`):
+`MaxSimScorer` and `retrieve` work on `mps:0` tensors. Two
+implementations land on Apple Silicon and the dispatch picks per call:
+
+* **`metal`** — fused `simdgroup_matrix` kernel
+  (`late_interaction_kernels.metal.maxsim_inference_metal`, JIT-compiled
+  via `torch.mps.compile_shader`). Forward-only; never materialises the
+  `[Nq · Nd · Lq · Ld]` similarity tensor.
+* **`compile`** — `torch.compile`-fused dense reference. Autograd-aware,
+  carries every training-time call.
+
+Apple M4, fp16, 30-iter median (`benchmarks/bench_mps.py`). `metal`
+needs `d ≤ 192` and `d % 8 == 0`; outside that the dispatch transparently
+falls back to `compile`.
 
 
-| shape                                          | compile-fused | eager reference | speedup | compile peak | eager peak |
-| ---------------------------------------------- | ------------- | --------------- | ------- | ------------ | ---------- |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 10.4 ms       | 18.8 ms         | 1.82×   | 0 MB         | 8 MB       |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 17.5 ms       | 30.0 ms         | 1.71×   | 0 MB         | 8 MB       |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 101.6 ms      | 178.2 ms        | 1.75×   | 2.5 GB       | 4.0 GB     |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.6 ms        | 6.5 ms          | 1.81×   | 0 MB         | 8 MB       |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 1.8 ms        | 2.5 ms          | 1.37×   | 0 MB         | 8 MB       |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 66.5 ms       | 112.1 ms        | 1.69×   | 750 MB       | 1.5 GB     |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 5.3 ms        | 11.4 ms         | 2.17×   | 0 MB         | 8 MB       |
+| shape                                          | metal    | compile  | eager    | metal vs compile | metal peak | compile peak |
+| ---------------------------------------------- | -------- | -------- | -------- | ---------------- | ---------- | ------------ |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.32 ms  | 10.74 ms | 17.53 ms | **1.29×**        | 8 MB       | 0 MB         |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 13.29 ms | 17.58 ms | 28.45 ms | **1.32×**        | 8 MB       | 0 MB         |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 78.98 ms | 93.38 ms | 166.7 ms | **1.18×**        | 8 MB       | 2.5 GB       |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.04 ms  | 3.29 ms  | 7.04 ms  | 1.08×            | 8 MB       | 0 MB         |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 13.30 ms | 17.93 ms | 28.41 ms | **1.35×**        | 8 MB       | 0 MB         |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 53.0 ms  | 64.5 ms  | 105.7 ms | **1.22×**        | 8 MB       | 750 MB       |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 5.60 ms  | 6.72 ms  | 12.54 ms | **1.20×**        | 8 MB       | 0 MB         |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 6.42 ms  | 1.66 ms  | 2.43 ms  | 0.26× (compile)  | 8 MB       | 0 MB         |
 
 
-The compile cache is keyed by `(dtype, normalize, has_q_mask, has_d_mask)`; first call per signature recompiles, subsequent calls
-hit the cache. Set `LIK_DISABLE_COMPILE=1` to bypass.
+On the small `train-batch` shape the Metal kernel's launch overhead
+dominates; the dispatch heuristic
+(`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) routes it to `compile` automatically.
+Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}` or
+`LIK_DISABLE_COMPILE=1` if you need explicit control.
 
-We also prototyped a hand-written Metal kernel via
-`torch.mps.compile_shader` (PyTorch ≥ 2.10). On every shape we
-measured, the naive scalar version was 2–10× *slower* than the
-`torch.compile` path because MPSGraph's GEMM already uses
-`simdgroup_matrix`. A real `simdgroup_matrix`-based MaxSim kernel —
-with row-max reduction fused on top of the MMA tile — is left as a
-follow-up; today the compile path is the default and only MPS path.
+Memory is the second story: because `metal` streams `D` in 32-row tiles
+through threadgroup memory, peak working-set is one output tensor
+regardless of the corpus size. On `rerank-10k` and `edge-d48` that's a
+**~300×** memory reduction over the compile / eager paths, which both
+materialise large intermediates.
+
+The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
+analogue of CUDA tensor cores) with vectorised `half4` / `bfloat4`
+device-memory loads and a fused L2-normalize + row-max reduction.
+Tolerances stay inside 5e-3 relative for fp16 and 3e-2 for bf16.

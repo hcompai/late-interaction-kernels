@@ -40,7 +40,7 @@ pip install late-interaction-kernels
 | Platform                          | Path                                                       |
 | --------------------------------- | ---------------------------------------------------------- |
 | Linux + CUDA (sm_75+)             | Fused Triton kernels — full speedups in [Speedups](#speedups-on-h100). |
-| macOS (Apple Silicon, MPS)        | `torch.compile`-fused reference, autograd-aware. Real GPU. |
+| macOS (Apple Silicon, MPS)        | Fused Metal `simdgroup_matrix` kernel for inference, `torch.compile` for training. |
 | CPU / Windows / anything else     | Eager pure-PyTorch reference, autograd-aware.              |
 
 `MaxSimScorer`, `retrieve` and `late_interaction_kernels.reference`
@@ -159,6 +159,7 @@ Config:
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                    |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                  |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).              |
+| `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`                 | Pin the MPS dispatch (default: heuristic on shape).                 |
 
 Walk-through of every kernel, the autograd graph, the backward variants
 and the numerics: [`docs/design.md`](docs/design.md).
@@ -172,10 +173,18 @@ on Triton ≥ 3.2). Also tuned for **A100**, **Ada** (L4 / L40 / 4090) and
 **Ampere** (A10 / A40 / 3090). Older / unknown CUDA falls back to a
 conservative shortlist.
 
-**Apple Silicon (MPS)** dispatches to a `torch.compile`-fused reference
-that lowers to MPSGraph's `simdgroup_matrix` GEMM. ≈1.4–2.2× over eager
-on M-series, autograd-aware, with bounded peak memory (no `[Nq · Nd ·
-Lq · Ld]` scratch). See [`docs/benchmarks.md`](docs/benchmarks.md#apple-silicon-mps).
+**Apple Silicon (MPS)** ships two paths and picks per call:
+
+* a fused **Metal `simdgroup_matrix`** kernel (forward-only) — beats
+  the compile path 1.08–1.35× on realistic inference shapes and uses
+  ~300× less peak memory on big corpora because it never materialises
+  `[Nq · Nd · Lq · Ld]`;
+* a **`torch.compile`-fused** reference (autograd-aware) — carries
+  every training-time call and small-batch inference where the Metal
+  kernel's launch overhead doesn't amortise.
+
+See [`docs/benchmarks.md`](docs/benchmarks.md#apple-silicon-mps) for
+shapes and numbers.
 
 Autotune runs once per unique `(Lq, Ld, d, masks)` signature on CUDA
 and caches the winner; the MPS compile cache keys on `(dtype,

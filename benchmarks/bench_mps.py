@@ -1,20 +1,24 @@
-"""MPS forward benchmark: ``torch.compile`` MaxSim vs eager reference.
+"""MPS forward benchmark: Metal MMA kernel vs ``torch.compile`` vs eager.
 
-Measures the high-level :class:`MaxSimScorer` / :func:`retrieve` path on
-Apple-Silicon GPUs, which dispatches the dense-MaxSim formula through
-``torch.compile`` (``_mps.maxsim_mps``). The eager baseline is the
-unfused PyTorch reference — same math, no compile.
+Three implementations land on Apple Silicon:
 
-We don't bench against ``flash-maxsim`` here (CUDA-only) or a hand-written
-Metal kernel: at the time of writing, Apple's MPSGraph already lowers
-``einsum`` to ``simdgroup_matrix`` GEMM, and a naive scalar Metal
-compute shader can't beat it. See ``docs/design.md`` for the rationale.
+* ``metal``   — fused ``simdgroup_matrix`` kernel
+  (:func:`late_interaction_kernels.metal.maxsim_inference_metal`),
+* ``compile`` — ``torch.compile``-fused reference
+  (:func:`late_interaction_kernels._mps.maxsim_inference_mps`,
+  forced via ``LIK_FORCE_MPS_BACKEND=compile``),
+* ``eager``   — unfused PyTorch reference (no compile).
+
+The Metal path requires fp16 / bf16 inputs with ``d`` ≤ 192 and
+divisible by 8; outside that, this script runs only ``compile`` /
+``eager``. The default high-level dispatch picks ``metal`` when the
+shape is large enough for the kernel's launch overhead to amortise.
 
 Usage::
 
     python benchmarks/bench_mps.py
     python benchmarks/bench_mps.py --quick
-    python benchmarks/bench_mps.py --dtype fp16
+    python benchmarks/bench_mps.py --dtype bf16
 
 Writes ``benchmarks/results/mps_<chip>_<dtype>.{md,json}``.
 """
@@ -31,8 +35,8 @@ import time
 
 import torch
 
-from late_interaction_kernels._mps import maxsim_inference_mps  # noqa: E402
-from late_interaction_kernels.reference import maxsim_reference  # noqa: E402
+from late_interaction_kernels import metal as _metal
+from late_interaction_kernels.reference import maxsim_reference
 
 SHAPES = [
     # name, Nq, Nd, Lq, Ld, d
@@ -40,6 +44,7 @@ SHAPES = [
     ("rerank-mid", 1, 500, 32, 1024, 128),
     ("rerank-10k", 1, 10000, 32, 300, 128),
     ("colpali", 1, 100, 32, 1024, 128),
+    ("colpali-big", 1, 500, 32, 1024, 128),
     ("train-batch", 32, 32, 32, 200, 128),
     ("edge-d48", 1, 4000, 32, 1024, 48),
     ("edge-d64", 1, 1000, 32, 300, 64),
@@ -50,7 +55,7 @@ def _sync() -> None:
     torch.mps.synchronize()
 
 
-def _time_op(fn, warmup: int = 5, iters: int = 30) -> tuple[float, float]:
+def _time_op(fn, warmup: int = 10, iters: int = 30) -> tuple[float, float]:
     """Median + stdev over ``iters`` runs (after ``warmup`` warmup iterations)."""
     for _ in range(warmup):
         fn()
@@ -67,7 +72,6 @@ def _time_op(fn, warmup: int = 5, iters: int = 30) -> tuple[float, float]:
 
 
 def _peak_mb(fn) -> float:
-    """Peak driver-side allocator usage (MB) around one call."""
     torch.mps.empty_cache()
     before = torch.mps.driver_allocated_memory()
     out = fn()
@@ -77,30 +81,45 @@ def _peak_mb(fn) -> float:
     return max(0.0, (after - before) / (1024.0 * 1024.0))
 
 
+def _compile_call(Q, D):
+    """Force the compile path even on shapes the heuristic prefers Metal for."""
+    os.environ["LIK_FORCE_MPS_BACKEND"] = "compile"
+    try:
+        from late_interaction_kernels._mps import maxsim_inference_mps
+
+        return maxsim_inference_mps(Q, D, normalize=True)
+    finally:
+        os.environ.pop("LIK_FORCE_MPS_BACKEND", None)
+
+
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
     Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
     D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
 
-    rows = []
+    rows: list[tuple[str, float, float, float]] = []
 
-    # ``torch.compile``-fused (the default high-level path on MPS).
-    t, sd = _time_op(lambda: maxsim_inference_mps(Q, D, normalize=True))
-    m = _peak_mb(lambda: maxsim_inference_mps(Q, D, normalize=True))
-    rows.append(("compile-fused", t, sd, m))
+    if _metal.is_available() and _metal.supports(Q, D):
+        t, sd = _time_op(lambda: _metal.maxsim_inference_metal(Q, D, normalize=True))
+        m = _peak_mb(lambda: _metal.maxsim_inference_metal(Q, D, normalize=True))
+        rows.append(("metal", t, sd, m))
+    else:
+        rows.append(("metal", float("nan"), float("nan"), float("nan")))
 
-    # Eager reference for context — same math, no compile.
+    t, sd = _time_op(lambda: _compile_call(Q, D))
+    m = _peak_mb(lambda: _compile_call(Q, D))
+    rows.append(("compile", t, sd, m))
+
     try:
         t, sd = _time_op(lambda: maxsim_reference(Q, D, normalize=True))
         m = _peak_mb(lambda: maxsim_reference(Q, D, normalize=True))
-        rows.append(("eager reference", t, sd, m))
-    except (RuntimeError, torch.cuda.OutOfMemoryError):
-        rows.append(("eager reference", float("nan"), float("nan"), float("nan")))
+        rows.append(("eager", t, sd, m))
+    except RuntimeError:
+        rows.append(("eager", float("nan"), float("nan"), float("nan")))
 
     return rows
 
 
 def _chip() -> str:
-    """Best-effort Apple-Silicon chip label, e.g. ``'M3_Pro'``."""
     if platform.system() != "Darwin":
         return "unknown"
     try:
@@ -129,6 +148,8 @@ def main():
 
     print(f"Device: mps ({chip})")
     print(f"dtype: {args.dtype}")
+    metal_ok = _metal.is_available() and dtype in (torch.float16, torch.bfloat16)
+    print(f"metal kernel: {'enabled' if metal_ok else 'disabled (dtype/build)'}")
     print()
 
     shapes = SHAPES
@@ -144,38 +165,47 @@ def main():
     for name, Nq, Nd, Lq, Ld, d in shapes:
         print(f"== {name:18s}  Nq={Nq} Nd={Nd} Lq={Lq} Ld={Ld} d={d}")
         rows = bench_one(name, Nq, Nd, Lq, Ld, d, dtype)
+        timings = {impl: (t, sd, m) for impl, t, sd, m in rows}
         for impl, t, sd, m in rows:
-            print(f"      {impl:18s}  {t:7.3f} ± {sd:.3f} ms   {m:7.1f} MB")
-
-        compile_t = rows[0][1] if rows[0][1] == rows[0][1] else float("nan")
-        eager_t = rows[1][1] if rows[1][1] == rows[1][1] else float("nan")
-        speedup = eager_t / compile_t if compile_t > 0 else float("nan")
-        print(f"      → compile vs eager: {speedup:.2f}x")
+            t_str = f"{t:7.3f} ± {sd:.3f} ms" if t == t else "        n/a       "
+            m_str = f"{m:7.1f} MB" if m == m else "    n/a"
+            print(f"      {impl:8s}  {t_str}   {m_str}")
+        metal_t, _, metal_mb = timings["metal"]
+        comp_t, _, comp_mb = timings["compile"]
+        eager_t, _, _ = timings["eager"]
+        if metal_t == metal_t and comp_t > 0:
+            print(f"      → metal vs compile: {comp_t / metal_t:.2f}x")
+        if eager_t == eager_t and comp_t > 0:
+            print(f"      → compile vs eager: {eager_t / comp_t:.2f}x")
         report["shapes"].append(
             {
                 "name": name,
                 "shape": [Nq, Nd, Lq, Ld, d],
-                "compile_ms": rows[0][1],
-                "compile_peak_mb": rows[0][3],
-                "eager_ms": rows[1][1],
-                "eager_peak_mb": rows[1][3],
-                "speedup_compile_vs_eager": speedup,
+                "metal_ms": metal_t,
+                "metal_peak_mb": metal_mb,
+                "compile_ms": comp_t,
+                "compile_peak_mb": comp_mb,
+                "eager_ms": eager_t,
+                "speedup_metal_vs_compile": (comp_t / metal_t) if metal_t == metal_t else None,
+                "speedup_compile_vs_eager": (eager_t / comp_t) if eager_t == eager_t else None,
             }
         )
         print()
 
     md = [f"# MPS forward benchmark — {chip} ({args.dtype})\n"]
-    md.append("30-iter median, ``torch.mps.synchronize`` between calls.\n")
-    md.append("| shape | compile ms | eager ms | speedup | compile peak MB | eager peak MB |")
+    md.append("30-iter median, `torch.mps.synchronize` between calls.\n")
+    md.append("| shape | metal ms | compile ms | eager ms | metal vs compile | compile vs eager |")
     md.append("| --- | --- | --- | --- | --- | --- |")
     for e in report["shapes"]:
+        m_speed = (
+            f"{e['speedup_metal_vs_compile']:.2f}x" if e["speedup_metal_vs_compile"] is not None else "n/a"
+        )
+        c_speed = (
+            f"{e['speedup_compile_vs_eager']:.2f}x" if e["speedup_compile_vs_eager"] is not None else "n/a"
+        )
+        m_str = f"{e['metal_ms']:.3f}" if e["metal_ms"] == e["metal_ms"] else "n/a"
         md.append(
-            f"| {e['name']} "
-            f"| {e['compile_ms']:.3f} "
-            f"| {e['eager_ms']:.3f} "
-            f"| {e['speedup_compile_vs_eager']:.2f}x "
-            f"| {e['compile_peak_mb']:.1f} "
-            f"| {e['eager_peak_mb']:.1f} |"
+            f"| {e['name']} | {m_str} | {e['compile_ms']:.3f} | {e['eager_ms']:.3f} | {m_speed} | {c_speed} |"
         )
 
     out_md = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.md")
