@@ -45,7 +45,6 @@ if _HAS_TRITON:
         maxsim_residual_varlen,
         plaid_approx_score,
     )
-    from .pylate_compat import patch_pylate, unpatch_pylate
     from .scatter import maxsim_inference_scatter
     from .varlen import maxsim_varlen
 else:  # pragma: no cover
@@ -65,12 +64,15 @@ else:  # pragma: no cover
     maxsim_residual = maxsim_residual_varlen = _needs_triton
     maxsim_inference_scatter = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
-    patch_pylate = unpatch_pylate = _needs_triton
 
-# `MaxSimScorer` and `retrieve` are always importable: they fall back to the
-# pure-PyTorch reference on platforms without Triton, so training and
-# retrieval code can be unit-tested locally.
+# Cross-platform high-level entry points:
+# * `MaxSimScorer` / `retrieve` fall back to the pure-PyTorch reference on
+#   machines without Triton, so training and retrieval code is unit-testable
+#   on a laptop;
+# * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
+#   `torch.compile`-fused path, anything else → PyLate's own implementation.
 from . import reference  # noqa: E402,F401
+from .pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
 from .retrieve import MaxSimScorer, retrieve  # noqa: E402
 
 # Symbols moved out of the top level. Still importable, with a
