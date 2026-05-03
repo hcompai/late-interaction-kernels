@@ -16,7 +16,7 @@ Two MaxSim implementations cover the gap:
   realistic doc batches.
 
 For inference we route to the Metal kernel when its assumptions hold
-(fp16 / bf16 inputs, ``d`` ≤ 192 and divisible by 8) and the workload
+(fp16 / bf16 inputs, ``d`` ≤ 128 and divisible by 8) and the workload
 is large enough that the kernel's launch overhead amortises. The
 heuristic is shape-only — measured on M-series silicon — and falls
 back to the compile path for everything else, including all training

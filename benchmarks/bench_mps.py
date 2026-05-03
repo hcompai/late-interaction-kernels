@@ -83,13 +83,9 @@ def _peak_mb(fn) -> float:
 
 def _compile_call(Q, D):
     """Force the compile path even on shapes the heuristic prefers Metal for."""
-    os.environ["LIK_FORCE_MPS_BACKEND"] = "compile"
-    try:
-        from late_interaction_kernels._mps import maxsim_inference_mps
+    from late_interaction_kernels import _mps
 
-        return maxsim_inference_mps(Q, D, normalize=True)
-    finally:
-        os.environ.pop("LIK_FORCE_MPS_BACKEND", None)
+    return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
 
 
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
