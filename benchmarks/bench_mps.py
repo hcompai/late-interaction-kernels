@@ -169,10 +169,15 @@ def main():
         metal_t, _, metal_mb = timings["metal"]
         comp_t, _, comp_mb = timings["compile"]
         eager_t, _, _ = timings["eager"]
-        if metal_t == metal_t and comp_t > 0:
-            print(f"      → metal vs compile: {comp_t / metal_t:.2f}x")
-        if eager_t == eager_t and comp_t > 0:
-            print(f"      → compile vs eager: {eager_t / comp_t:.2f}x")
+        metal_vs_compile = (comp_t / metal_t) if (metal_t == metal_t and comp_t > 0) else None
+        compile_vs_eager = (eager_t / comp_t) if (eager_t == eager_t and comp_t > 0) else None
+        metal_vs_eager = (eager_t / metal_t) if (metal_t == metal_t and eager_t == eager_t) else None
+        if metal_vs_compile is not None:
+            print(f"      → metal vs compile: {metal_vs_compile:.2f}x")
+        if compile_vs_eager is not None:
+            print(f"      → compile vs eager: {compile_vs_eager:.2f}x")
+        if metal_vs_eager is not None:
+            print(f"      → metal vs eager:   {metal_vs_eager:.2f}x")
         report["shapes"].append(
             {
                 "name": name,
@@ -182,26 +187,29 @@ def main():
                 "compile_ms": comp_t,
                 "compile_peak_mb": comp_mb,
                 "eager_ms": eager_t,
-                "speedup_metal_vs_compile": (comp_t / metal_t) if metal_t == metal_t else None,
-                "speedup_compile_vs_eager": (eager_t / comp_t) if eager_t == eager_t else None,
+                "speedup_metal_vs_compile": metal_vs_compile,
+                "speedup_compile_vs_eager": compile_vs_eager,
+                "speedup_metal_vs_eager": metal_vs_eager,
             }
         )
         print()
 
+    def _ratio(v: float | None) -> str:
+        return f"{v:.2f}x" if v is not None else "n/a"
+
     md = [f"# MPS forward benchmark — {chip} ({args.dtype})\n"]
     md.append("30-iter median, `torch.mps.synchronize` between calls.\n")
-    md.append("| shape | metal ms | compile ms | eager ms | metal vs compile | compile vs eager |")
-    md.append("| --- | --- | --- | --- | --- | --- |")
+    md.append(
+        "| shape | metal ms | compile ms | eager ms | metal vs eager | metal vs compile | compile vs eager |"
+    )
+    md.append("| --- | --- | --- | --- | --- | --- | --- |")
     for e in report["shapes"]:
-        m_speed = (
-            f"{e['speedup_metal_vs_compile']:.2f}x" if e["speedup_metal_vs_compile"] is not None else "n/a"
-        )
-        c_speed = (
-            f"{e['speedup_compile_vs_eager']:.2f}x" if e["speedup_compile_vs_eager"] is not None else "n/a"
-        )
         m_str = f"{e['metal_ms']:.3f}" if e["metal_ms"] == e["metal_ms"] else "n/a"
         md.append(
-            f"| {e['name']} | {m_str} | {e['compile_ms']:.3f} | {e['eager_ms']:.3f} | {m_speed} | {c_speed} |"
+            f"| {e['name']} | {m_str} | {e['compile_ms']:.3f} | {e['eager_ms']:.3f} "
+            f"| {_ratio(e['speedup_metal_vs_eager'])} "
+            f"| {_ratio(e['speedup_metal_vs_compile'])} "
+            f"| {_ratio(e['speedup_compile_vs_eager'])} |"
         )
 
     out_md = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.md")

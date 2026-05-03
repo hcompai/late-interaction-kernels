@@ -175,15 +175,15 @@ conservative shortlist.
 
 **Apple Silicon (MPS)** ships two paths and picks per call:
 
-* a fused **Metal `simdgroup_matrix`** kernel (forward-only) — beats
-  the compile path 1.1–2.0× on realistic inference shapes and uses
-  ~300× less peak memory on big corpora because it never materialises
-  `[Nq · Nd · Lq · Ld]`. Persistent threadgroups serve 8 consecutive
-  `j`s per launch and keep `Q` register-resident across every
+* a fused **Metal `simdgroup_matrix`** kernel (forward-only) — **1.9–3.2×
+  faster than plain PyTorch** (1.1–2.0× over `torch.compile`) on realistic
+  inference shapes, with ~300× less peak memory on big corpora because it
+  never materialises `[Nq · Nd · Lq · Ld]`. Persistent threadgroups serve 8
+  consecutive `j`s per launch and keep `Q` register-resident across every
   `(j, d-chunk)`;
 * a **`torch.compile`-fused** reference (autograd-aware) — carries
   every training-time call and small-batch inference where the Metal
-  kernel's launch overhead doesn't amortise.
+  kernel's launch overhead doesn't amortise (still 1.4× over eager).
 
 See [`docs/benchmarks.md`](docs/benchmarks.md#apple-silicon-mps) for
 shapes and numbers.

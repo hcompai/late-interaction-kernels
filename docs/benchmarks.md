@@ -361,29 +361,31 @@ needs `d ≤ 128` and `d % 8 == 0`; outside that the dispatch transparently
 falls back to `compile`.
 
 
-| shape                                          | metal    | compile  | eager    | metal vs compile | metal peak | compile peak |
-| ---------------------------------------------- | -------- | -------- | -------- | ---------------- | ---------- | ------------ |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.42 ms  | 10.87 ms | 18.68 ms | **1.29×**        | 8 MB       | 0 MB         |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.43 ms | 18.28 ms | 31.13 ms | **1.11×**        | 8 MB       | 0 MB         |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 55.5 ms  | 93.9 ms  | 170.5 ms | **1.69×**        | 8 MB       | 2.5 GB       |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.11 ms  | 3.37 ms  | 6.51 ms  | 1.09×            | 8 MB       | 0 MB         |
-| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 9.84 ms  | 17.27 ms | 28.89 ms | **1.76×**        | 8 MB       | 0 MB         |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 33.3 ms  | 67.2 ms  | 107.2 ms | **2.02×**        | 8 MB       | 750 MB       |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.82 ms  | 5.40 ms  | 13.06 ms | **1.12×**        | 8 MB       | 0 MB         |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 1.64 ms  | 2.33 ms  | 0.29× (compile)  | 8 MB       | 0 MB         |
+| shape                                          | metal    | compile  | eager    | metal vs eager | metal vs compile | compile vs eager |
+| ---------------------------------------------- | -------- | -------- | -------- | -------------- | ---------------- | ---------------- |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.42 ms  | 10.87 ms | 18.68 ms | **2.22×**      | 1.29×            | 1.72×            |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.43 ms | 18.28 ms | 31.13 ms | **1.89×**      | 1.11×            | 1.70×            |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 55.5 ms  | 93.9 ms  | 170.5 ms | **3.07×**      | 1.69×            | 1.82×            |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.11 ms  | 3.37 ms  | 6.51 ms  | **2.10×**      | 1.09×            | 1.93×            |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 9.84 ms  | 17.27 ms | 28.89 ms | **2.94×**      | 1.76×            | 1.67×            |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 33.3 ms  | 67.2 ms  | 107.2 ms | **3.22×**      | 2.02×            | 1.59×            |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.82 ms  | 5.40 ms  | 13.06 ms | **2.71×**      | 1.12×            | 2.42×            |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 1.64 ms  | 2.33 ms  | 0.41× → 1.42×  | 0.29× (compile)  | 1.42×            |
 
 
-On the small `train-batch` shape the Metal kernel's launch overhead
-dominates; the dispatch heuristic
-(`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) routes it to `compile` automatically.
+For someone moving from plain PyTorch to this library, the headline is
+`metal vs eager`: **1.9–3.2×** on every realistic inference shape. On
+`train-batch` the Metal kernel's launch overhead dominates, so the
+dispatch heuristic (`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) routes it to `compile`
+automatically — the user still gets 1.42× over eager via that path.
 Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}` or
 `LIK_DISABLE_COMPILE=1` if you need explicit control.
 
 Memory is the second story: because `metal` streams `D` in 32-row tiles
 through threadgroup memory, peak working-set is one output tensor
-regardless of the corpus size. On `rerank-10k` and `edge-d48` that's a
-**~300×** memory reduction over the compile / eager paths, which both
-materialise large intermediates.
+(8 MB) regardless of the corpus size. On `rerank-10k` and `edge-d48`
+the compile / eager paths materialise 2.5 GB / 750 MB intermediates —
+**~300×** memory reduction.
 
 The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
 analogue of CUDA tensor cores) on top of a *persistent* threadgroup
