@@ -7,8 +7,6 @@ backward produces ``grad_Q`` (row-owned) and ``grad_D`` (atomic scatter
 into the packed grad tensor) directly on the packed layout.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

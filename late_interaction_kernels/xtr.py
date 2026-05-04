@@ -9,8 +9,6 @@ roadmap. Backward goes through PyTorch autograd against the saved top-k
 indices.
 """
 
-from __future__ import annotations
-
 import torch
 
 from .forward import maxsim_forward

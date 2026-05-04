@@ -9,8 +9,6 @@ See :doc:`../docs/design.md` for the full HBM-traffic derivation and
 numerical contract.
 """
 
-from __future__ import annotations
-
 import torch
 
 try:

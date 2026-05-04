@@ -15,8 +15,6 @@ and backward tests pass:
 * Error-path contract — wrong shapes / dtypes must raise cleanly.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

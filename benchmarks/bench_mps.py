@@ -28,8 +28,6 @@ Usage::
 Writes ``benchmarks/results/mps_<chip>_<dtype>.{md,json}``.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

@@ -1,7 +1,5 @@
 """Parity tests for `maxsim_xtr` (top-k aggregated MaxSim)."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

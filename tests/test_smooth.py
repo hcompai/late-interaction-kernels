@@ -1,7 +1,5 @@
 """Parity + gradient tests for :func:`smooth_maxsim`."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

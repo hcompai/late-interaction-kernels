@@ -1,7 +1,5 @@
 """Small helpers shared across kernels."""
 
-from __future__ import annotations
-
 import functools
 
 import torch

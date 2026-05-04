@@ -13,8 +13,6 @@ a single doc-token — the worst case for atomics, a stress case for
 CSR.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

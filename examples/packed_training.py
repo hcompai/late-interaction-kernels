@@ -14,8 +14,6 @@ Requires CUDA + Triton (the kernels are GPU-only). The docs/packed_training.md
 cookbook walks through the pieces in more detail.
 """
 
-from __future__ import annotations
-
 import argparse
 import time
 

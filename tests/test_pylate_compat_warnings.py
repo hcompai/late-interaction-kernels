@@ -11,8 +11,6 @@ We simulate that by injecting a minimal fake PyLate into ``sys.modules``
 before importing ``pylate_compat``. No GPU, no real PyLate required.
 """
 
-from __future__ import annotations
-
 import importlib
 import sys
 import types

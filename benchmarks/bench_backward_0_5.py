@@ -10,8 +10,6 @@ Both benchmarks are kernel-level microbenchmarks and do *not* reflect any
 full-system behavior — they just measure the step this library replaces.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

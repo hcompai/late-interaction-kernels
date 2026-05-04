@@ -31,8 +31,6 @@ The naive path will OOM at the largest shapes on an 80 GB H100 — that
 is itself the story.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

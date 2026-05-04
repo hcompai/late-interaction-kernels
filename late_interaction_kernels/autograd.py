@@ -1,7 +1,5 @@
 """User-facing autograd wrapper for the fused MaxSim kernel."""
 
-from __future__ import annotations
-
 import os
 import warnings
 

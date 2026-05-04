@@ -17,8 +17,6 @@ Dispatch:
   to PyLate's original implementation.
 """
 
-from __future__ import annotations
-
 import os
 
 import torch

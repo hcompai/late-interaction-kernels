@@ -25,13 +25,15 @@ Before opening a PR for review or merging an existing one, every agent MUST:
 
 ## Style
 
-- Python 3.9+; type hints on public APIs.
+- Python 3.10+; type hints on public APIs. Use the native PEP 604 / PEP
+  585 syntax (`X | Y`, `list[X]`, `dict[K, V]`) directly — no
+  `from __future__ import annotations` and no `typing.List` /
+  `typing.Optional`.
 - Comments explain *why*, never narrate *what* the code does.
 - No emoji in code, comments, or commit messages unless the user explicitly
   asks for them.
 - Match existing docstring tone — short, concrete, no marketing.
-- Don't add a `from __future__ import annotations` or other style sweeps in
-  unrelated PRs; keep diffs tight.
+- Keep diffs tight: no drive-by style sweeps in unrelated PRs.
 
 ## Commits
 

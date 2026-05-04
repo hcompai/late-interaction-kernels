@@ -11,8 +11,6 @@ is the ``pair_q_idx`` / ``pair_d_idx`` index pair. Forward only — for
 gradient flow on packed batches use ``maxsim_varlen``.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

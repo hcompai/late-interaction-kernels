@@ -9,8 +9,6 @@ Forward saves a ``[Nq * Nd, Lq]`` int32 argmax buffer. Backward scatters:
 by ``tl.argmax`` (lowest index), bitwise-reproducible.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

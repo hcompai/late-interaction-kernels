@@ -10,8 +10,6 @@ Auto-skips on machines without an MPS-capable PyTorch build, just like
 ``tests/test_mps.py``.
 """
 
-from __future__ import annotations
-
 import inspect
 
 import pytest

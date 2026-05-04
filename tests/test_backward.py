@@ -15,8 +15,6 @@ Plus a unit test for the CSR builder (``_build_csr``) on a hand-computed 2×2 / 
 / Ld=4 example.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

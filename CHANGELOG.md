@@ -46,6 +46,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same contract `retrieve()` already enforced.
 - `docs/benchmarks.md` Apple Silicon section rewritten with the Metal
   numbers, the dispatch heuristic, and the headline `metal vs eager` ratio.
+- **Minimum Python is now 3.10** (was 3.9). `pyproject.toml` bumps
+  `requires-python = ">=3.10"`, the Python classifiers, and
+  `tool.ruff.target-version = "py310"`. `uv.lock` regenerated; the CI matrix
+  was already 3.10 / 3.11 / 3.12.
+
+### Removed
+
+- All `from __future__ import annotations` lines across the package, tests,
+  benchmarks, and examples (67 files). Annotations now use the native PEP 604
+  / PEP 585 syntax (`X | Y`, `list[X]`, `dict[K, V]`) that Python 3.10
+  supports at runtime — no compatibility shim needed.
 
 ### Fixed
 

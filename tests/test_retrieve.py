@@ -6,8 +6,6 @@ the same answer as the lower-level kernels and composes cleanly with
 autograd / ``torch.compile`` / ``nn.Module`` hierarchies.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

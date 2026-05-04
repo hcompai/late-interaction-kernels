@@ -22,8 +22,6 @@ Usage::
 Writes a Markdown + JSON report to ``benchmarks/results/flash_maxsim_<gpu>_<dtype>.{md,json}``.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

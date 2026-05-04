@@ -11,8 +11,6 @@ heuristic the ``"auto"`` selector uses to pick between ``unified``,
 ``csr``, and ``atomic``.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

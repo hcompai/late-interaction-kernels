@@ -11,8 +11,6 @@ recompiles are scoped to the current case (matters when assertions
 about cache size fire).
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

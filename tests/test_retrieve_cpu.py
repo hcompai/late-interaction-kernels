@@ -6,8 +6,6 @@ for macOS / CI and for catching wiring regressions before GPU time is
 spent. The GPU parity tests live in ``tests/test_retrieve.py``.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 
