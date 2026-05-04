@@ -66,6 +66,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   get the same one-liner upgrade as CUDA users.
 - `benchmarks/results/` is now `.gitignore`d; benchmark outputs are no
   longer tracked in version control.
+- **MPS `torch.compile` path no longer trips the inductor symbolic-shape
+  bug.** On torch 2.8 / nightly, MPS inductor fails to lower
+  `S.max(dim=-1)` when the reduction axis is symbolic
+  (`cannot determine truth value of Relational: s12 <= 1024` from
+  `codegen_iteration_ranges_entry`). Switched the compile call from
+  `dynamic=True` to `dynamic=False` so PyTorch's dynamo cache transparently
+  recompiles per `(Nq, Nd, Lq, Ld)` tuple instead — fine for typical
+  inference where shapes are stable, and shape-varying workloads can fall
+  back to the Metal kernel. Unblocks the 28 MPS tests that were skipped on
+  this bug; **167 / 167 pass on macOS** with no skips on the dispatch /
+  metal / `pylate_compat_mps` suites.
 
 ## [0.0.1] - 2026-05-02
 
