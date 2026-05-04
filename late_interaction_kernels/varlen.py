@@ -44,7 +44,7 @@ def _varlen_fwd_kernel(
     stride_am_d,
     stride_am_l,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,  # unused, kept for autotune key compat
+    Ld,  # unused; runtime arg kept for call-site compat (constexpr would recompile per Ld).
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,

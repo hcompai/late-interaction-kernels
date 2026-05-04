@@ -23,7 +23,7 @@ def _matryoshka_fwd_kernel(
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,
+    Ld,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     K: tl.constexpr,

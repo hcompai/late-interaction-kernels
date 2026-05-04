@@ -35,7 +35,7 @@ def _fused_head_configs():
 
 @triton.autotune(
     configs=_fused_head_configs(),
-    key=["Lq", "Ld", "d_out_pad", "d_model_pad", "has_bias", "has_d_mask", "normalize", "save_argmax"],
+    key=["Lq", "d_out_pad", "d_model_pad", "has_bias", "has_d_mask", "normalize", "save_argmax"],
 )
 @triton.jit
 def _fused_head_fwd_kernel(
@@ -49,7 +49,7 @@ def _fused_head_fwd_kernel(
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,
+    Ld,
     d_out: tl.constexpr,
     d_out_pad: tl.constexpr,
     d_model: tl.constexpr,

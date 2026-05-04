@@ -73,7 +73,7 @@ def _bwd_dD_csr_kernel(
     grad_D_ptr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,
+    Ld,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_q_n,

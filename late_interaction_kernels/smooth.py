@@ -82,7 +82,7 @@ if _HAS_TRITON:
 
     @triton.autotune(
         configs=forward_configs(),
-        key=["Lq", "Ld", "d_pad", "K", "has_q_mask", "has_d_mask", "normalize"],
+        key=["Lq", "d_pad", "K", "has_q_mask", "has_d_mask", "normalize"],
         prune_configs_by={"early_config_prune": prune_forward},
     )
     @triton.jit
@@ -96,7 +96,7 @@ if _HAS_TRITON:
         Nq: tl.constexpr,
         Nd: tl.constexpr,
         Lq: tl.constexpr,
-        Ld: tl.constexpr,
+        Ld,
         d: tl.constexpr,
         d_pad: tl.constexpr,
         K: tl.constexpr,
@@ -273,7 +273,7 @@ if _HAS_TRITON:
         Nq: tl.constexpr,
         Nd: tl.constexpr,
         Lq: tl.constexpr,
-        Ld: tl.constexpr,
+        Ld,
         d: tl.constexpr,
         d_pad: tl.constexpr,
         K: tl.constexpr,
