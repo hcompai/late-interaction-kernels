@@ -39,7 +39,7 @@ torchrun --standalone --nproc_per_node=8 \
   --batch-size 32 --mini-batch-size 32 --Ld 2048 --grad-checkpoint --ddp
 
 # Head-to-head vs flash-maxsim (same Triton-MaxSim math)
-pip install flash-maxsim
+pip install "flash-maxsim==0.2.0"   # pinned: matches the published numbers
 python benchmarks/bench_flash_maxsim.py
 
 # PLAID rerank vs fast-plaid

@@ -39,7 +39,19 @@ def _score(
     backward: str,
     inference: bool,
 ) -> torch.Tensor:
-    """Dispatch by device: Triton on CUDA, ``torch.compile`` on MPS, eager elsewhere."""
+    """Dispatch by device: Triton on CUDA, ``torch.compile`` on MPS, eager elsewhere.
+
+    ``Q`` and ``D`` must live on the same device. Mixed-device pairs
+    (e.g. ``Q`` on ``mps:0`` and ``D`` on ``cpu``) would otherwise drop
+    through to the eager reference and surface a confusing internal
+    ``RuntimeError`` from ``torch.matmul``; we raise an explicit
+    ``ValueError`` up-front instead — same contract as :func:`retrieve`.
+    """
+    if Q.device != D.device:
+        raise ValueError(
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
+        )
+
     if _HAS_TRITON and Q.is_cuda and D.is_cuda:
         from .autograd import maxsim, maxsim_inference
 
@@ -47,7 +59,7 @@ def _score(
             return maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 
-    if Q.device.type == "mps" and D.device.type == "mps":
+    if Q.device.type == "mps":
         from ._mps import maxsim_inference_mps, maxsim_mps
 
         if inference:

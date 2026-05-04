@@ -25,7 +25,8 @@ run python benchmarks/bench_lateon.py           --outdir "${OUTDIR}"
 run python benchmarks/bench_cached_maxsim.py    --outdir "${OUTDIR}"
 
 # Head-to-head vs flash-maxsim — same Triton-MaxSim math, direct
-# apples-to-apples speedup numbers. Skip if the package isn't installed.
+# apples-to-apples speedup numbers. Skip if the package isn't installed
+# (install pinned with: ``pip install "flash-maxsim==0.2.0"``).
 if python -c "import flash_maxsim" >/dev/null 2>&1; then
   run python benchmarks/bench_flash_maxsim.py   --outdir "${OUTDIR}"
 else

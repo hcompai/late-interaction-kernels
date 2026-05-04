@@ -28,6 +28,10 @@ import torch
 # stays importable on machines without Triton (e.g. macOS), where only
 # the MPS / CPU paths are reachable anyway.
 
+# Bookkeeping for monkey-patching: ``patch_pylate()`` stashes the original
+# ``pylate.scores.colbert_*`` callables here before swapping in our fused
+# replacements; ``unpatch_pylate()`` reads them back to restore PyLate.
+# The dict doubles as the "patched?" flag — non-empty == patched.
 _ORIGINAL = {}
 
 

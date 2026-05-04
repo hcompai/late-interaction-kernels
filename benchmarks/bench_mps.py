@@ -10,9 +10,14 @@ Three implementations land on Apple Silicon:
 * ``eager``   — unfused PyTorch reference (no compile).
 
 The Metal path requires fp16 / bf16 inputs with ``d`` ≤ 128 and
-divisible by 8; outside that, this script runs only ``compile`` /
-``eager``. The default high-level dispatch picks ``metal`` when the
-shape is large enough for the kernel's launch overhead to amortise.
+divisible by 8 — the upper bound comes from the register-resident Q
+cache (``simdgroup_matrix<T, 8, 8>[M_TILES][K_TILES_MAX]``, sized for
+``d / 8 ≤ 16`` and ``Lq / 8 ≤ 4``); going past 128 spills to
+threadgroup memory on the M-series register file and the kernel
+slows down by 2-4×. Outside the supported envelope, this script runs
+only ``compile`` / ``eager``. The default high-level dispatch picks
+``metal`` when the shape is large enough for the kernel's launch
+overhead to amortise.
 
 Usage::
 
@@ -32,14 +37,15 @@ import platform
 import statistics
 import sys
 import time
+from typing import Final
 
 import torch
 
 from late_interaction_kernels import metal as _metal
 from late_interaction_kernels.reference import maxsim_reference
 
-SHAPES = [
-    # name, Nq, Nd, Lq, Ld, d
+# (name, Nq, Nd, Lq, Ld, d)
+SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
     ("rerank-short", 1, 1000, 32, 300, 128),
     ("rerank-mid", 1, 500, 32, 1024, 128),
     ("rerank-10k", 1, 10000, 32, 300, 128),
@@ -48,7 +54,7 @@ SHAPES = [
     ("train-batch", 32, 32, 32, 200, 128),
     ("edge-d48", 1, 4000, 32, 1024, 48),
     ("edge-d64", 1, 1000, 32, 300, 64),
-]
+)
 
 
 def _sync() -> None:
