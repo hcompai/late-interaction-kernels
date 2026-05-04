@@ -42,8 +42,8 @@ def _scatter_fwd_kernel(
     stride_q_k,
     stride_d_t,
     stride_d_k,
-    Lq: tl.constexpr,  # autotune-key dummies
-    Ld: tl.constexpr,
+    Lq,  # kernel uses max_lq/max_ld; these args are kept only for call-site compat.
+    Ld,
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,

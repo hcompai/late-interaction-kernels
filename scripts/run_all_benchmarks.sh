@@ -23,6 +23,7 @@ run python benchmarks/bench_normalize.py        --outdir "${OUTDIR}"
 run python benchmarks/bench_backward_0_5.py     --outdir "${OUTDIR}"
 run python benchmarks/bench_lateon.py           --outdir "${OUTDIR}"
 run python benchmarks/bench_cached_maxsim.py    --outdir "${OUTDIR}"
+run python benchmarks/bench_compile_cache.py    --outdir "${OUTDIR}"
 
 # Head-to-head vs flash-maxsim — same Triton-MaxSim math, direct
 # apples-to-apples speedup numbers. Skip if the package isn't installed

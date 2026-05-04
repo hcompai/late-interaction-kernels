@@ -16,7 +16,10 @@ from ._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
 
 @triton.autotune(
     configs=forward_configs(),
-    key=["Lq", "Ld", "d_pad", "has_q_mask", "has_d_mask", "normalize"],
+    # ``Ld`` stays out of the key: it only drives a runtime ``range(0, Ld,
+    # BLOCK_D)`` loop, so keying on it would force one recompile + one
+    # autotune sweep per distinct doc length.
+    key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "normalize"],
     prune_configs_by={"early_config_prune": prune_forward},
 )
 @triton.jit
@@ -30,7 +33,7 @@ def _maxsim_fwd_kernel(
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,
+    Ld,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_q_n,

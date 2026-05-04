@@ -17,7 +17,7 @@ from ._utils import next_pow2, pick_compute_dtype
 
 @triton.autotune(
     configs=forward_configs(),
-    key=["Lq", "Ld", "d_pad", "has_q_mask", "has_d_mask"],
+    key=["Lq", "d_pad", "has_q_mask", "has_d_mask"],
     prune_configs_by={"early_config_prune": prune_forward},
 )
 @triton.jit
@@ -30,7 +30,7 @@ def _soft_maxsim_kernel(
     Nq: tl.constexpr,
     Nd: tl.constexpr,
     Lq: tl.constexpr,
-    Ld: tl.constexpr,
+    Ld,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     beta,

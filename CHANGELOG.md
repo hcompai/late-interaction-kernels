@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Triton kernels no longer recompile or re-autotune per distinct `Ld`.
+  `Ld` was declared `tl.constexpr` and (for the autotuned forwards) keyed
+  the autotuner — but inside the kernels it only drives a runtime
+  `range(0, Ld, BLOCK_D)` loop, so variable-length training was paying
+  one Triton recompile + one autotune sweep per distinct doc length.
+  `Ld` is now a runtime arg and is out of the autotune key across
+  `forward`, `soft`, `smooth`, `fp8`, `fused_head`, `matryoshka`, and the
+  three backward kernels. Measured 9.3× faster cold start on H100 (4
+  distinct `Ld` values, fp16); steady-state per-call performance
+  unchanged. Pinned by `tests/test_compile_cache.py`.
+
 ### Added
 
 - **Apple Silicon (MPS) — fused `simdgroup_matrix` Metal kernel** for forward
