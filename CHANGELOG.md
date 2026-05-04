@@ -77,6 +77,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back to the Metal kernel. Unblocks the 28 MPS tests that were skipped on
   this bug; **167 / 167 pass on macOS** with no skips on the dispatch /
   metal / `pylate_compat_mps` suites.
+- **`README.md` header restored.** The Python-3.10 bump (#24) accidentally
+  stripped `<div align="center">`, the badge `![]()` image syntax, and
+  reformatted a handful of markdown tables — leaving the landing page
+  un-centered with plain-text "badges" instead of the shields.io images.
+  Restored from the pre-#24 revision and re-applied the
+  `python-3.10–3.12` shield change. No other content changes.
 
 ## [0.0.1] - 2026-05-02
 
