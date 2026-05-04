@@ -36,18 +36,10 @@ if "documents_mask" not in _params or "queries_mask" not in _params:
 
 
 @pytest.fixture(autouse=True)
-def _eager_dispatch(monkeypatch):
-    """Force the eager fallback inside :func:`maxsim_mps`.
-
-    The parity assertions here are about *routing* — does ``patch_pylate``
-    push MPS tensors into our dispatch instead of falling back to PyLate's
-    own implementation. Numerical parity for the ``torch.compile`` path is
-    covered in ``tests/test_mps.py``; replicating it here would just retrip
-    a known PyTorch-nightly MPS-inductor symbolic-shape bug.
-    """
+def _clear_compile_cache():
+    """Reset the per-process ``torch.compile`` cache between tests."""
     from late_interaction_kernels import _mps as _mps_mod
 
-    monkeypatch.setenv("LIK_DISABLE_COMPILE", "1")
     _mps_mod._compiled_cache.clear()
     yield
     _mps_mod._compiled_cache.clear()

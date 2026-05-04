@@ -86,12 +86,19 @@ def _get_compiled(key: tuple) -> Callable:
     with _compile_lock:
         fn = _compiled_cache.get(key)
         if fn is None:
-            # ``dynamic=True`` lets a single compile handle every (Nq, Nd, Lq, Ld)
-            # shape — important on Mac where shape variance per call is normal.
+            # ``dynamic=False`` (was ``dynamic=True``): MPS inductor on torch 2.8
+            # cannot lower the ``S.max(dim=-1)`` reduction when ``Ld`` is symbolic
+            # (`cannot determine truth value of Relational: s12 <= 1024` from
+            # ``codegen_iteration_ranges_entry``). With static shapes, PyTorch's
+            # dynamo cache transparently recompiles per (Nq, Nd, Lq, Ld) tuple
+            # up to ``torch._dynamo.config.cache_size_limit`` (default 8) then
+            # gracefully falls back to eager — fine for typical inference where
+            # shapes are stable, and for shape-varying workloads users should
+            # reach for the Metal kernel anyway.
             fn = torch.compile(
                 maxsim_reference,
                 mode="reduce-overhead",
-                dynamic=True,
+                dynamic=False,
                 fullgraph=False,
             )
             _compiled_cache[key] = fn
