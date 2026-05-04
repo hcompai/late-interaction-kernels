@@ -14,8 +14,6 @@ Usage
     python benchmarks/bench_fused_head_train.py
 """
 
-from __future__ import annotations
-
 import statistics
 import time
 

@@ -5,8 +5,6 @@ explicit-normalize path writes + re-reads the entire D tensor; the fused path
 does it in SRAM so only the raw D is read from HBM once.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

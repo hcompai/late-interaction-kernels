@@ -24,8 +24,6 @@ Usage
     python benchmarks/bench_decompress_maxsim.py --short  # quick smoke
 """
 
-from __future__ import annotations
-
 import argparse
 import gc
 import json

@@ -4,8 +4,6 @@ Wraps :func:`maxsim_forward` + :func:`torch.topk`, optionally chunked
 over docs so peak HBM stays at ``O(Nq · (chunk + k))``.
 """
 
-from __future__ import annotations
-
 import torch
 
 from .forward import maxsim_forward

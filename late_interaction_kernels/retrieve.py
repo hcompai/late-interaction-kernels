@@ -11,8 +11,6 @@ Every backend is autograd-aware, so training and retrieval code is
 unit-testable on macOS / Windows before renting a CUDA box.
 """
 
-from __future__ import annotations
-
 from typing import Literal
 
 import torch

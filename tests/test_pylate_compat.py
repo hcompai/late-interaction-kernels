@@ -5,8 +5,6 @@ Targets PyLate >= 1.3, which uses the
 signature. Older PyLate (1.2.x, single ``mask=`` kwarg) is not supported.
 """
 
-from __future__ import annotations
-
 import inspect
 
 import pytest

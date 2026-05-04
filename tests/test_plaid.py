@@ -1,7 +1,5 @@
 """Parity tests for the PLAID-style kernels (approximate + residual rerank)."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

@@ -18,8 +18,6 @@ For symmetry with PyLate's `colbert_scores` we return a [Nq, Nd] matrix.
 If either tensor is 2-D we reshape to 3-D with a leading 1 and squeeze back.
 """
 
-from __future__ import annotations
-
 import torch
 
 NEG_INF = float("-inf")

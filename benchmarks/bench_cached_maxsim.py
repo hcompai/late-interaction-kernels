@@ -33,8 +33,6 @@ Usage
 
 # ruff: noqa: F821  -- closures capture Q / D_ / d_mask from enclosing run_shape scope
 
-from __future__ import annotations
-
 import argparse
 import gc
 import json

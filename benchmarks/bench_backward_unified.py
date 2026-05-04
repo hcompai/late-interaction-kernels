@@ -10,8 +10,6 @@ Usage::
     python benchmarks/bench_backward_unified.py --quick
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

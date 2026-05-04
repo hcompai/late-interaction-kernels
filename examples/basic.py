@@ -7,8 +7,6 @@ Run with::
     python examples/basic.py pylate      # PyLate monkey-patch demo (needs pylate installed)
 """
 
-from __future__ import annotations
-
 import sys
 
 import torch

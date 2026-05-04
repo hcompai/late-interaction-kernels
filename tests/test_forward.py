@@ -6,8 +6,6 @@ across the realistic shape grid for ColBERT (text), ColPali (visual), and
 ModernColBERT (long document) workloads.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

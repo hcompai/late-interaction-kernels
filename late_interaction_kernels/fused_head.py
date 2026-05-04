@@ -14,8 +14,6 @@ pass.
   ``F.linear → F.normalize → maxsim`` path to bf16 tolerance.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

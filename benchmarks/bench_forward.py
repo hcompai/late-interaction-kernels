@@ -5,8 +5,6 @@
 Writes a Markdown table + JSON to `results/forward_<gpu>.{md,json}`.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

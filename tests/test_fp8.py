@@ -1,7 +1,5 @@
 """Parity + fallback tests for :func:`maxsim_inference_fp8`."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

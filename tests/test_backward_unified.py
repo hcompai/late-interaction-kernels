@@ -5,8 +5,6 @@ Pins the reference-vs-torch autograd parity of
 output must match this reference to fp32 tolerance.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

@@ -9,8 +9,6 @@ Skips on machines without an MPS-capable PyTorch build or without
 ``torch.mps.compile_shader`` (PyTorch < 2.10).
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

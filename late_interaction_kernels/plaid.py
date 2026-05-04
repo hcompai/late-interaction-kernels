@@ -12,8 +12,6 @@ Three kernels for the ColBERTv2-style retrieval pipeline:
   fast-plaid and ColBERTv2 (forward only).
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

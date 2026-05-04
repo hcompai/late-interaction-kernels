@@ -6,8 +6,6 @@ We also validate the pure-PyTorch reference on CPU so the parity oracle
 itself is exercised in CI smoke runs.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

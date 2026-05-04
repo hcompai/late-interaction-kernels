@@ -19,8 +19,6 @@ Per-family SRAM budgets (KiB of shared memory the kernel can actually use):
 - Unknown / older:             48 (safe floor)
 """
 
-from __future__ import annotations
-
 import inspect
 
 import triton

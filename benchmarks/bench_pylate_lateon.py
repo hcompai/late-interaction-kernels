@@ -48,8 +48,6 @@ Usage
 """
 # ruff: noqa: F821  -- closures over `loss_fn` / `optim` confuse ruff's scope analysis
 
-from __future__ import annotations
-
 import argparse
 import gc
 import json

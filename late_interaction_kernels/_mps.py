@@ -24,11 +24,9 @@ calls. ``LIK_DISABLE_COMPILE=1`` and ``LIK_FORCE_MPS_BACKEND={metal,
 compile,reference}`` give explicit overrides.
 """
 
-from __future__ import annotations
-
 import os
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 

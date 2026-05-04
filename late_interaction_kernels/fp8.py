@@ -14,8 +14,6 @@ embeddings); scores returned in fp32. Falls back to bf16 with a one-shot
 warning when the Triton FP8 ``tl.dot`` path isn't available.
 """
 
-from __future__ import annotations
-
 import warnings
 
 import torch

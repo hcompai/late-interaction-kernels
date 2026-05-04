@@ -4,8 +4,6 @@ The kernel-native `normalize=True` path must match `maxsim(F.normalize(Q), F.nor
 within tensor-core ULP drift for realistic ColBERT / ColPali / ModernColBERT shapes.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

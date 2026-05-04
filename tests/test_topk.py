@@ -4,8 +4,6 @@
 it lives at ``late_interaction_kernels.topk`` (not in the top-level namespace).
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

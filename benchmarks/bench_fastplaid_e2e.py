@@ -41,8 +41,6 @@ Usage
     python benchmarks/bench_fastplaid_e2e.py --skip-fastplaid  # only our kernel
 """
 
-from __future__ import annotations
-
 import argparse
 import gc
 import glob

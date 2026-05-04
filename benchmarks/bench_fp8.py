@@ -17,8 +17,6 @@ Usage
     python benchmarks/bench_fp8.py
 """
 
-from __future__ import annotations
-
 import statistics
 import time
 

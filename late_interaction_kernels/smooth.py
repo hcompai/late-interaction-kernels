@@ -6,8 +6,6 @@ top of the hard backward, no ``[Nq, Nd, Lq, Ld]`` scratch).
 ``top_k=1, aggregation="sum"`` is bit-identical to hard MaxSim.
 """
 
-from __future__ import annotations
-
 import torch
 
 try:

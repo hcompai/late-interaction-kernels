@@ -1,20 +1,20 @@
-<div align="center">
+
 
 # ⚡ late-interaction-kernels
 
 **Fused Triton kernels for MaxSim scoring.**
 ColBERT · ColPali · ModernColBERT · LateOn · LateOn-Code · ColBERTv2 · PyLate-native.
 
-[![CI](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml/badge.svg)](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9–3.12-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-%E2%89%A5%202.1-ee4c2c.svg)](https://pytorch.org/)
-[![Triton](https://img.shields.io/badge/Triton-%E2%89%A5%203.0-9146ff.svg)](https://github.com/triton-lang/triton)
-[![PyLate](https://img.shields.io/badge/PyLate-%E2%89%A5%201.3-00b4d8.svg)](https://github.com/lightonai/pylate)
+[CI](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml)
+[License](LICENSE)
+[Python](https://www.python.org/)
+[PyTorch](https://pytorch.org/)
+[Triton](https://github.com/triton-lang/triton)
+[PyLate](https://github.com/lightonai/pylate)
 
 [Install](#install) · [Quickstart](#quickstart) · [Speedups](#speedups-on-h100) · [API](#api) · [Benchmarks](docs/benchmarks.md) · [Design](docs/design.md) · [Models](docs/supported_models.md)
 
-</div>
+
 
 ---
 
@@ -37,11 +37,13 @@ pipelines.
 pip install late-interaction-kernels
 ```
 
-| Platform                          | Path                                                       |
-| --------------------------------- | ---------------------------------------------------------- |
-| Linux + CUDA (sm_75+)             | Fused Triton kernels — full speedups in [Speedups](#speedups-on-h100). |
-| macOS (Apple Silicon, MPS)        | Fused Metal `simdgroup_matrix` kernel for inference, `torch.compile` for training. |
-| CPU / Windows / anything else     | Eager pure-PyTorch reference, autograd-aware.              |
+
+| Platform                      | Path                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| Linux + CUDA (sm_75+)         | Fused Triton kernels — full speedups in [Speedups](#speedups-on-h100).             |
+| macOS (Apple Silicon, MPS)    | Fused Metal `simdgroup_matrix` kernel for inference, `torch.compile` for training. |
+| CPU / Windows / anything else | Eager pure-PyTorch reference, autograd-aware.                                      |
+
 
 `MaxSimScorer`, `retrieve` and `late_interaction_kernels.reference`
 import and run on every platform, so training and retrieval code is
@@ -103,16 +105,18 @@ scores = maxsim_residual_varlen(
 1×H100 80 GB SXM, bf16 / fp16 compute, fp32 accumulator, 50-iter median.
 Every baseline is the same operation in plain PyTorch.
 
-| Workload                                            | Speedup           |
-| --------------------------------------------------- | ----------------- |
-| Reranking / inference vs naive einsum               | **7–23×**         |
-| Long-context (`Ld ≥ 8k`) reranking                  | runs; naive OOMs  |
-| PyLate cached-contrastive MaxSim + backward         | up to **13.8×**   |
-| PLAID rerank vs `fast_plaid.engine.search()`        | **19–30×**        |
-| Fused D-side head (training)                        | **1.5–4.6×**      |
-| FP8 MaxSim inference (Hopper)                       | up to **1.4×**    |
-| LateOn-Code-edge end-to-end training (17 M)         | **1.04–1.27×**    |
-| LateOn / ModernColBERT end-to-end training (149 M)  | 1.00–1.06× (free) |
+
+| Workload                                           | Speedup           |
+| -------------------------------------------------- | ----------------- |
+| Reranking / inference vs naive einsum              | **7–23×**         |
+| Long-context (`Ld ≥ 8k`) reranking                 | runs; naive OOMs  |
+| PyLate cached-contrastive MaxSim + backward        | up to **13.8×**   |
+| PLAID rerank vs `fast_plaid.engine.search()`       | **19–30×**        |
+| Fused D-side head (training)                       | **1.5–4.6×**      |
+| FP8 MaxSim inference (Hopper)                      | up to **1.4×**    |
+| LateOn-Code-edge end-to-end training (17 M)        | **1.04–1.27×**    |
+| LateOn / ModernColBERT end-to-end training (149 M) | 1.00–1.06× (free) |
+
 
 ModernBERT-class encoders dominate step time, so on a full 149 M
 training run the kernel is essentially a free swap. Wherever MaxSim
@@ -120,7 +124,7 @@ stops being negligible — inference, reranking, long docs, big effective
 batch, KD, compressed indices, small encoders — the fused path moves.
 
 Full tables, shapes and reproduction commands:
-[`docs/benchmarks.md`](docs/benchmarks.md).
+`[docs/benchmarks.md](docs/benchmarks.md)`.
 
 ---
 
@@ -128,41 +132,45 @@ Full tables, shapes and reproduction commands:
 
 Most users only need `patch_pylate()`, `MaxSimScorer` or `retrieve`.
 
-| Symbol                                  | What it does                                                              |
-| --------------------------------------- | ------------------------------------------------------------------------- |
-| `patch_pylate()` / `unpatch_pylate()`   | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                     |
-| `MaxSimScorer(normalize=, backward=)`   | Stateless `nn.Module`, autograd-aware.                                    |
-| `retrieve(Q, D, top_k, chunk=)`         | Top-k retrieval, chunked for huge corpora.                                |
-| `maxsim` / `maxsim_inference`           | Core MaxSim, dense layout (autograd / forward-only).                      |
-| `maxsim_varlen`                         | Packed (`cu_seqlens`) layout. Autograd-aware.                             |
-| `maxsim_inference_scatter`              | Pair-list reranking on packed batches (vLLM-style scheduling).            |
-| `maxsim_from_hidden(_train)`            | Fused D-side `Linear → Normalize → MaxSim`, no `[Nd, Ld, d_out]` scratch. |
-| `maxsim_residual(_varlen)`              | Fused PLAID / ColBERTv2 decompress + normalize + MaxSim.                  |
-| `plaid_approx_score`                    | IVF prune step for ColBERTv2.                                             |
-| `maxsim_inference_fp8`                  | FP8 tensor-core MaxSim (Hopper / Blackwell). Auto-fallback to bf16.       |
+
+| Symbol                                | What it does                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------- |
+| `patch_pylate()` / `unpatch_pylate()` | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                     |
+| `MaxSimScorer(normalize=, backward=)` | Stateless `nn.Module`, autograd-aware.                                    |
+| `retrieve(Q, D, top_k, chunk=)`       | Top-k retrieval, chunked for huge corpora.                                |
+| `maxsim` / `maxsim_inference`         | Core MaxSim, dense layout (autograd / forward-only).                      |
+| `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                             |
+| `maxsim_inference_scatter`            | Pair-list reranking on packed batches (vLLM-style scheduling).            |
+| `maxsim_from_hidden(_train)`          | Fused D-side `Linear → Normalize → MaxSim`, no `[Nd, Ld, d_out]` scratch. |
+| `maxsim_residual(_varlen)`            | Fused PLAID / ColBERTv2 decompress + normalize + MaxSim.                  |
+| `plaid_approx_score`                  | IVF prune step for ColBERTv2.                                             |
+| `maxsim_inference_fp8`                | FP8 tensor-core MaxSim (Hopper / Blackwell). Auto-fallback to bf16.       |
+
 
 Submodules:
 
 - `late_interaction_kernels.fp8` — FP8 quantize / dequantize helpers
-  (per-tensor and per-token).
+(per-tensor and per-token).
 - `late_interaction_kernels.experimental` — research kernels
-  (`soft_maxsim`, `smooth_maxsim`, `maxsim_matryoshka`, `maxsim_xtr`).
+(`soft_maxsim`, `smooth_maxsim`, `maxsim_matryoshka`, `maxsim_xtr`).
 - `late_interaction_kernels.reference` — pure-PyTorch reference
-  implementations, importable on any platform.
+implementations, importable on any platform.
 
 Config:
 
-| Knob                                                              | Effect                                                              |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.               |
-| `set_backward_method(...)` / `get_backward_method()`              | Process-wide default (back-compat; prefer per-call kwarg).          |
-| `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                    |
-| `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                  |
-| `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).              |
-| `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`                 | Pin the MPS dispatch (default: heuristic on shape).                 |
+
+| Knob                                                          | Effect                                                     |
+| ------------------------------------------------------------- | ---------------------------------------------------------- |
+| `maxsim(..., backward="auto" | "unified" | "atomic" | "csr")` | Per-call `grad_D` strategy. `"auto"` picks per shape.      |
+| `set_backward_method(...)` / `get_backward_method()`          | Process-wide default (back-compat; prefer per-call kwarg). |
+| `LIK_DISABLE=1`                                               | Patched entry points delegate to vanilla PyLate.           |
+| `LIK_SUPPRESS_NORM_WARN=1`                                    | Silence the "looks unnormalized" one-shot warning.         |
+| `LIK_DISABLE_COMPILE=1`                                       | Skip `torch.compile` on the MPS path (eager fallback).     |
+| `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`             | Pin the MPS dispatch (default: heuristic on shape).        |
+
 
 Walk-through of every kernel, the autograd graph, the backward variants
-and the numerics: [`docs/design.md`](docs/design.md).
+and the numerics: `[docs/design.md](docs/design.md)`.
 
 ---
 
@@ -175,22 +183,21 @@ conservative shortlist.
 
 **Apple Silicon (MPS)** ships two paths and picks per call:
 
-* a fused **Metal `simdgroup_matrix`** kernel (forward-only) — **1.9–3.2×
-  faster than plain PyTorch** (1.1–2.0× over `torch.compile`) on realistic
-  inference shapes, with ~300× less peak memory on big corpora because it
-  never materialises `[Nq · Nd · Lq · Ld]`. Persistent threadgroups serve 8
-  consecutive `j`s per launch and keep `Q` register-resident across every
-  `(j, d-chunk)`;
-* a **`torch.compile`-fused** reference (autograd-aware) — carries
-  every training-time call and small-batch inference where the Metal
-  kernel's launch overhead doesn't amortise (still 1.4× over eager).
+- a fused **Metal `simdgroup_matrix`** kernel (forward-only) — **1.9–3.2×
+faster than plain PyTorch** (1.1–2.0× over `torch.compile`) on realistic
+inference shapes, with ~300× less peak memory on big corpora because it
+never materialises `[Nq · Nd · Lq · Ld]`. Persistent threadgroups serve 8
+consecutive `j`s per launch and keep `Q` register-resident across every
+`(j, d-chunk)`;
+- a `**torch.compile`-fused** reference (autograd-aware) — carries
+every training-time call and small-batch inference where the Metal
+kernel's launch overhead doesn't amortise (still 1.4× over eager).
 
-See [`docs/benchmarks.md`](docs/benchmarks.md#apple-silicon-mps) for
+See `[docs/benchmarks.md](docs/benchmarks.md#apple-silicon-mps)` for
 shapes and numbers.
 
 Autotune runs once per unique `(Lq, Ld, d, masks)` signature on CUDA
-and caches the winner; the MPS compile cache keys on `(dtype,
-normalize, has_q_mask, has_d_mask)` and amortises after the first
+and caches the winner; the MPS compile cache keys on `(dtype, normalize, has_q_mask, has_d_mask)` and amortises after the first
 call.
 
 ---
@@ -208,8 +215,8 @@ ruff check . && ruff format --check .
 python benchmarks/bench_forward.py      # see benchmarks/ for the full set
 ```
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
-[`CHANGELOG.md`](CHANGELOG.md) for the kernel-by-kernel release history.
+`[CONTRIBUTING.md](CONTRIBUTING.md)` for the contribution workflow.
+`[CHANGELOG.md](CHANGELOG.md)` for the kernel-by-kernel release history.
 
 ---
 
@@ -228,7 +235,7 @@ python benchmarks/bench_forward.py      # see benchmarks/ for the full set
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](LICENSE). Copyright 2026 Aurélien Lac and Tony Wu.
+Apache 2.0 — see `[LICENSE](LICENSE)`. Copyright 2026 Aurélien Lac and Tony Wu.
 
 ## Related
 

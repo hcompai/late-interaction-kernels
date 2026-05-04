@@ -7,8 +7,6 @@ combination of all doc tokens (denser gradient than the argmax-only hard
 backward).
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

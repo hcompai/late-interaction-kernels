@@ -1,7 +1,5 @@
 """Parity tests for `maxsim_inference_scatter`."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

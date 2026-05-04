@@ -12,8 +12,6 @@ The training-aware fused head is the autograd-aware sibling of
 CPU / non-CUDA environments just import and skip.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

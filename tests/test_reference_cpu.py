@@ -7,8 +7,6 @@ packer). This lets us catch logical bugs in the references long before we
 need a GPU.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

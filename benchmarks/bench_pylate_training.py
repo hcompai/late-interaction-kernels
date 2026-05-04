@@ -9,8 +9,6 @@ Requires: `pip install pylate` plus a small ColBERT model (we use the default
 all-MiniLM-L6-v2 pipeline since it's fast to load).
 """
 
-from __future__ import annotations
-
 import argparse
 
 import torch

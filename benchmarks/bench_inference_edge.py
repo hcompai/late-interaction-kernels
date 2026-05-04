@@ -23,8 +23,6 @@ fallbacks.
 Writes a Markdown + JSON report under ``benchmarks/results/``.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

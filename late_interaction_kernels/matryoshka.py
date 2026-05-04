@@ -5,8 +5,6 @@ cutoff, reading the first ``dims[k]`` features only. Output is
 ``[K, Nq, Nd]`` fp32.
 """
 
-from __future__ import annotations
-
 import torch
 import triton
 import triton.language as tl

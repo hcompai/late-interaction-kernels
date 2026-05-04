@@ -43,7 +43,7 @@ pytest -q
 
 ## Style
 
-- Python 3.9+; type hints on public APIs.
+- Python 3.10+; type hints on public APIs.
 - Comments explain *why*, not *what*. Don't narrate trivial code.
 - Match the existing docstring tone — short, concrete, no marketing.
 

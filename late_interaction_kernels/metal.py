@@ -27,8 +27,6 @@ Constraints (everything outside falls back to ``torch.compile``):
   go through the compile path.
 """
 
-from __future__ import annotations
-
 import struct
 import threading
 from typing import Any

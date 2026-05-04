@@ -47,8 +47,6 @@ Usage
 """
 # ruff: noqa: F821  -- closures capture Q / D_ / d_mask from enclosing scope
 
-from __future__ import annotations
-
 import argparse
 import gc
 import json
