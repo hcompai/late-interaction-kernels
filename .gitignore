@@ -1,6 +1,10 @@
 # Custom
 .DS_Store
 
+# Benchmark outputs land here at runtime; they are machine-specific and
+# `docs/benchmarks.md` is the curated source of truth.
+benchmarks/results/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

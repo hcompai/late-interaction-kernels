@@ -14,7 +14,7 @@ given shape we want to know, not hide it.
 
 Usage::
 
-    pip install flash-maxsim
+    pip install "flash-maxsim==0.2.0"   # pinned to match the published numbers
     python benchmarks/bench_flash_maxsim.py
     python benchmarks/bench_flash_maxsim.py --quick  # skip biggest shapes
     python benchmarks/bench_flash_maxsim.py --shape train-batch

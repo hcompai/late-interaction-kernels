@@ -7,8 +7,14 @@
     # ... train / rerank ...
     unpatch_pylate()              # restore the original
 
-Falls back to vanilla PyLate on CPU, sub-Ampere GPUs, ``d < 8``, or when
-``LIK_DISABLE=1`` is set.
+Dispatch:
+
+* CUDA (Ampere+) — fused Triton kernel via :func:`maxsim`.
+* MPS (Apple Silicon) — :func:`maxsim_mps`, the ``torch.compile``-fused
+  reference. Autograd-aware, so PyLate's training backward graph keeps
+  flowing.
+* CPU / sub-Ampere CUDA / ``d < 8`` / ``LIK_DISABLE=1`` — fall through
+  to PyLate's original implementation.
 """
 
 from __future__ import annotations
@@ -17,9 +23,15 @@ import os
 
 import torch
 
-from .autograd import maxsim
-from .varlen import maxsim_varlen  # noqa: F401 (re-export convenience)
+# ``maxsim`` lives in the Triton-backed autograd module and ``maxsim_varlen``
+# in the Triton varlen module; both are imported lazily so this module
+# stays importable on machines without Triton (e.g. macOS), where only
+# the MPS / CPU paths are reachable anyway.
 
+# Bookkeeping for monkey-patching: ``patch_pylate()`` stashes the original
+# ``pylate.scores.colbert_*`` callables here before swapping in our fused
+# replacements; ``unpatch_pylate()`` reads them back to restore PyLate.
+# The dict doubles as the "patched?" flag — non-empty == patched.
 _ORIGINAL = {}
 
 
@@ -29,22 +41,47 @@ def _bool_mask(m):
     return m.bool() if m.dtype != torch.bool else m
 
 
-def _should_fallback(q: torch.Tensor, d: torch.Tensor) -> bool:
+def _device_path(q: torch.Tensor, d: torch.Tensor) -> str | None:
+    """Pick the dispatch path or ``None`` when we should fall back.
+
+    Returns ``"cuda"`` / ``"mps"`` for the fused paths, ``None`` to defer
+    to PyLate's original implementation.
+    """
     if os.environ.get("LIK_DISABLE", "0") == "1":
-        return True
-    if not q.is_cuda or not d.is_cuda:
-        return True
+        return None
     if q.device != d.device:
-        return True
-    try:
-        cap = torch.cuda.get_device_capability(q.device)
-    except Exception:
-        return True
-    if cap[0] < 8:  # need Ampere or newer for bf16 + modern tensor cores
-        return True
+        return None
     if q.shape[-1] < 8:
-        return True
-    return False
+        return None
+    if q.is_cuda and d.is_cuda:
+        try:
+            cap = torch.cuda.get_device_capability(q.device)
+        except Exception:
+            return None
+        if cap[0] < 8:  # need Ampere or newer for bf16 + modern tensor cores
+            return None
+        return "cuda"
+    if q.device.type == "mps" and d.device.type == "mps":
+        return "mps"
+    return None
+
+
+def _dispatch_maxsim(Q, D, q_mask, d_mask, path: str) -> torch.Tensor:
+    """Route to the fused implementation for ``path``.
+
+    PyLate's ``colbert_scores`` does not L2-normalize internally — the
+    encoder is expected to emit unit vectors — so we keep ``normalize=False``
+    on every backend.
+    """
+    if path == "cuda":
+        from .autograd import maxsim
+
+        return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
+    if path == "mps":
+        from ._mps import maxsim_mps
+
+        return maxsim_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=False)
+    raise ValueError(f"unknown dispatch path {path!r}")
 
 
 def _mask_as_bool(m):
@@ -85,10 +122,11 @@ def patched_colbert_scores(
     D = convert_to_tensor(documents_embeddings)
     q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
-    if _should_fallback(Q, D):
+    path = _device_path(Q, D)
+    if path is None:
         return _ORIGINAL["colbert_scores"](Q, D, queries_mask=queries_mask, documents_mask=documents_mask)
 
-    return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
+    return _dispatch_maxsim(Q, D, q_mask, d_mask, path)
 
 
 def patched_colbert_kd_scores(
@@ -110,7 +148,8 @@ def patched_colbert_kd_scores(
     D = convert_to_tensor(documents_embeddings)
     q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
-    if _should_fallback(Q, D):
+    path = _device_path(Q, D)
+    if path is None:
         return _ORIGINAL["colbert_kd_scores"](Q, D, queries_mask=queries_mask, documents_mask=documents_mask)
 
     if D.dim() != 4:
@@ -120,11 +159,12 @@ def patched_colbert_kd_scores(
     _, Nd, _Ld, _ = D.shape
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
     for i in range(Nq):
-        out[i] = maxsim(
+        out[i] = _dispatch_maxsim(
             Q[i].unsqueeze(0),
             D[i],
-            q_mask=q_mask[i : i + 1] if q_mask is not None else None,
-            d_mask=d_mask[i] if d_mask is not None else None,
+            q_mask[i : i + 1] if q_mask is not None else None,
+            d_mask[i] if d_mask is not None else None,
+            path,
         ).squeeze(0)
     return out
 
