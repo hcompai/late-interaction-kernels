@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- Spell out what the H100 forward table compares against (eager fp32
+  reference) and why a `torch.compile` baseline isn't included on the CUDA
+  side: Inductor still has to materialize the `[Nq · Nd · Lq · Ld]`
+  similarity tensor before `max(-1)`, which is exactly the HBM round-trip
+  the fused kernel exists to avoid.
+
 ## [0.1.0] - 2026-05-06
 
 ### Fixed
