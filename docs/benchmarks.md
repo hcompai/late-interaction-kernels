@@ -66,6 +66,26 @@ sky jobs launch scripts/sky_fastplaid_e2e.yaml    # vs `fast_plaid.engine.search
 
 ## Forward (reranking / inference)
 
+**Baseline.** All H100 ratios on this page divide the fused Triton kernel
+against an eager fp32 reference written the way a user would write it
+without this library:
+
+```python
+def naive(Q, D):
+    S = torch.einsum("ild,jtd->ijlt", Q.float(), D.float())
+    return S.max(-1).values.sum(-1)
+```
+
+We don't include a `torch.compile`-fused naive column because there's
+nothing for Inductor to win here: it has to materialize the full
+`[Nq · Nd · Lq · Ld]` similarity tensor in HBM before the `max(-1)` —
+exactly the materialization our Triton kernel exists to avoid. The fused
+kernel's 7–23× and ~300× memory advantage come from never writing `S` to
+HBM, which is a tiling decision the user (or `torch.compile`) cannot
+express in pure PyTorch ops without writing the Triton kernel themselves.
+The MPS section below *does* report a `torch.compile` column because the
+MPS dispatch ships one as a real autograd-aware fallback path.
+
 
 | shape                                       | fused    | naive einsum | speedup | scratch    |
 | ------------------------------------------- | -------- | ------------ | ------- | ---------- |
