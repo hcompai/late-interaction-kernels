@@ -4,7 +4,7 @@ Entry points
 ------------
 pack_padded
     Convert ``[B, Lq, d]`` / ``[B, C, Ld, d]`` padded tensors to the packed
-    (``cu_seqlens``) layout used by :func:`maxsim_inference_scatter` and
+    (``cu_seqlens``) layout used by :func:`score_pairs_packed` and
     :func:`maxsim_varlen`, **without any device→host syncs** in the hot path.
 
 maxsim_padded
@@ -51,7 +51,7 @@ class PackedBatch:
     """``[B * C]`` int32 — ``pair_d_idx[b * C + c] = b * C + c``."""
 
     max_seqlen_q: int
-    """Maximum query length (Python int) — pass to :func:`maxsim_inference_scatter`
+    """Maximum query length (Python int) — pass to :func:`score_pairs_packed`
     as ``max_seqlen_q`` to skip the kernel's own D2H validation."""
 
     def __iter__(self):
@@ -83,7 +83,7 @@ def pack_padded(
     Builds a :class:`PackedBatch` from padded ``[B, Lq, d]`` /
     ``[B, C, Ld, d]`` inputs using boolean-mask gather + ``cumsum`` — no
     ``.item()`` syncs except for the single unavoidable
-    ``max_seqlen_q = int(qlen.max().item())`` that :func:`maxsim_inference_scatter`
+    ``max_seqlen_q = int(qlen.max().item())`` that :func:`score_pairs_packed`
     needs to size shared memory.
 
     Args:
@@ -189,7 +189,7 @@ def maxsim_padded(
     """Score reranking candidates from padded inputs, returning ``[B, C]`` fp32.
 
     Packs the inputs via :func:`pack_padded` and delegates to
-    :func:`maxsim_inference_scatter` on CUDA (Triton) or the pure-PyTorch
+    :func:`score_pairs_packed` on CUDA (Triton) or the pure-PyTorch
     :func:`~late_interaction_kernels.reference.maxsim_reference_scatter`
     on CPU / MPS / any non-CUDA device.
 
@@ -210,9 +210,9 @@ def maxsim_padded(
 
     if queries.is_cuda:
         try:
-            from .scatter import maxsim_inference_scatter
+            from .score_pairs import score_pairs_packed
 
-            flat = maxsim_inference_scatter(
+            flat = score_pairs_packed(
                 batch.Q_packed,
                 batch.D_packed,
                 batch.cu_seqlens_q,

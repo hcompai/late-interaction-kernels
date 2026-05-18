@@ -355,7 +355,7 @@ def maxsim_reference_scatter(
     pair_q_idx: torch.Tensor,
     pair_d_idx: torch.Tensor,
 ) -> torch.Tensor:
-    """Pair-list reference for ``maxsim_inference_scatter``: scores ``[num_pairs]``."""
+    """Pair-list reference for ``score_pairs_packed``: scores ``[num_pairs]``."""
     num_pairs = pair_q_idx.numel()
     out = torch.empty(num_pairs, device=Q_packed.device, dtype=torch.float32)
     for k in range(num_pairs):

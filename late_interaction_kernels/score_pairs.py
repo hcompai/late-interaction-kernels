@@ -104,7 +104,7 @@ def _scatter_fwd_kernel(
     tl.store(out_ptr + pid, score_acc)
 
 
-def maxsim_inference_scatter(
+def score_pairs_packed(
     Q_packed: torch.Tensor,
     D_packed: torch.Tensor,
     cu_seqlens_q: torch.Tensor,
@@ -197,4 +197,4 @@ def maxsim_inference_scatter(
     return out
 
 
-__all__ = ["maxsim_inference_scatter"]
+__all__ = ["score_pairs_packed"]

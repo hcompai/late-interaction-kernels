@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Renamed (breaking)
+
+- `maxsim_inference_scatter` → `score_pairs_packed`; module
+  `scatter.py` → `score_pairs.py`. The new name matches the
+  `personal/maxsim` convention and is shorter. The kernel, signature,
+  and semantics are identical.
+
 ### Removed (breaking)
 
 - Top-level deprecation shims for `maxsim_forward`, `maxsim_topk`,

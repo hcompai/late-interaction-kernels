@@ -45,7 +45,7 @@ if _HAS_TRITON:
         maxsim_residual_varlen,
         plaid_approx_score,
     )
-    from .scatter import maxsim_inference_scatter
+    from .score_pairs import score_pairs_packed
     from .varlen import maxsim_varlen
 else:  # pragma: no cover
 
@@ -62,7 +62,7 @@ else:  # pragma: no cover
     maxsim_varlen = _needs_triton
     plaid_approx_score = _needs_triton
     maxsim_residual = maxsim_residual_varlen = _needs_triton
-    maxsim_inference_scatter = _needs_triton
+    score_pairs_packed = _needs_triton
     set_backward_method = get_backward_method = _needs_triton
 
 # Cross-platform high-level entry points:
@@ -92,7 +92,7 @@ __all__ = [
     "maxsim_padded",
     "PackedBatch",
     # reranking on packed batches
-    "maxsim_inference_scatter",
+    "score_pairs_packed",
     # fused D-side head
     "maxsim_from_hidden",
     "maxsim_from_hidden_train",
