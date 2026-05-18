@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- Top-level deprecation shims for `maxsim_forward`, `maxsim_topk`,
+  `maxsim_residual_inference`, `maxsim_varlen_inference`,
+  `maxsim_matryoshka`, `maxsim_xtr`, `soft_maxsim`, `smooth_maxsim`,
+  `quantize_fp8_per_tensor`, `quantize_fp8_per_token`,
+  `dequantize_fp8_per_tensor`, `dequantize_fp8_per_token`. Import from
+  their submodules directly: `late_interaction_kernels.{forward, topk,
+  plaid, varlen, experimental, fp8}`.
+
 ### Added
 
 - **`pack_padded` / `maxsim_padded`** — padded-input reranking helpers.

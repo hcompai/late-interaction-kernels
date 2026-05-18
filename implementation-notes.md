@@ -114,6 +114,34 @@ file rather than starting a new module. Easier to grep.
 
 ---
 
+## Follow-up cleanups (post user "go ahead" with breaking changes)
+
+The user approved a breaking release and asked to sort file hierarchy
+before it gets clumsy. The deprecation shims (which would have made
+the rename/move history opaque) are the first thing to drop.
+
+### D8. Drop top-level deprecation shims
+
+Removed the `__getattr__`-based deprecation re-exports for:
+
+* `maxsim_forward` (→ `forward.maxsim_forward`)
+* `maxsim_topk` (→ `topk.maxsim_topk` — still used internally by
+  `retrieve`)
+* `maxsim_residual_inference`, `maxsim_varlen_inference` (auto-skip
+  argmax in their non-deprecated counterparts)
+* `maxsim_matryoshka`, `maxsim_xtr`, `soft_maxsim`, `smooth_maxsim`
+  (→ `experimental`)
+* `quantize_fp8_*`, `dequantize_fp8_*` (→ `fp8`)
+
+These were carrying 100 lines of `__init__.py` for a 0.1.0 → 0.2.0
+window. With the user OK'ing a breaking release, the shims go and
+users get a clean `AttributeError` from the top-level — same as any
+other import error. The two test functions that exercised them
+(`test_deprecated_symbols_warn_but_still_resolve`,
+`test_deprecated_symbols_not_in_dunder_all`,
+`test_maxsim_varlen_inference_deprecated`) are removed in the same
+commit.
+
 ## Tradeoffs not pursued
 
 * **Pad-position invariance on the kernel side**: maxsim's `padded`
