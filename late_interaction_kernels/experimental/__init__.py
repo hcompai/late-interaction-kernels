@@ -19,10 +19,10 @@ except ImportError:  # pragma: no cover
 
 
 if _HAS_TRITON:
-    from ..matryoshka import maxsim_matryoshka
-    from ..smooth import smooth_maxsim
-    from ..soft import soft_maxsim
-    from ..xtr import maxsim_xtr
+    from .matryoshka import maxsim_matryoshka
+    from .smooth import smooth_maxsim
+    from .soft import soft_maxsim
+    from .xtr import maxsim_xtr
 else:  # pragma: no cover
 
     def _needs_triton(*_args, **_kwargs):

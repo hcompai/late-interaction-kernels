@@ -9,7 +9,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
+from .._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
 
 
 @triton.jit

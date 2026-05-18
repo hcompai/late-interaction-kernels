@@ -5,7 +5,7 @@ import torch
 
 pytest.importorskip("triton", reason="smooth_maxsim requires Triton")
 
-from late_interaction_kernels.smooth import smooth_maxsim_reference  # noqa: E402
+from late_interaction_kernels.experimental.smooth import smooth_maxsim_reference  # noqa: E402
 
 # (Nq, Nd, Lq, Ld, d)
 SHAPES = [

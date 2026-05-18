@@ -16,8 +16,8 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from ._autotune import forward_configs, prune_forward
-from ._utils import next_pow2, pick_compute_dtype
+from .._autotune import forward_configs, prune_forward
+from .._utils import next_pow2, pick_compute_dtype
 
 
 def smooth_maxsim_reference(
