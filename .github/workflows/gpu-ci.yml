@@ -1,0 +1,65 @@
+name: GPU CI
+
+permissions:
+  contents: read
+
+# Runs the CUDA-marked tests on a self-hosted GPU runner. Triggered:
+#   - automatically on push to main and on PRs that touch kernel-related files;
+#   - manually via `workflow_dispatch` (requires write permission on the repo);
+#   - on PRs by adding the `run-gpu-ci` label (label apply requires triage+).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gpu-tests:
+    name: GPU tests (CUDA)
+    # Self-hosted GPU runner. Adjust the labels to match your registered
+    # runner — `linux` and `gpu` are conventional; add an arch-specific label
+    # (e.g. `h100`) if you have multiple GPU runner classes.
+    runs-on: [self-hosted, linux, gpu]
+    # On `labeled` events, only fire when the gating label is applied. All
+    # other events (push, synchronize, dispatch, etc.) skip this guard.
+    if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
+    # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
+    # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
+    # Mirrors scripts/sky_test.yaml. Requires Docker on the runner host.
+    container:
+      image: nvcr.io/nvidia/pytorch:25.06-py3
+      options: --gpus all --ipc=host
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GPU sanity check
+        run: |
+          nvidia-smi
+          python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+      - name: Install package
+        # Prefer the full extras (pylate parity tests); fall back to dev-only
+        # if pylate resolution fails on this image. Matches sky_test.yaml.
+        run: |
+          pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
+
+      - name: Run test suite
+        run: pytest tests/ -v --durations=20

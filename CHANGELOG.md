@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Self-hosted GPU CI workflow (`.github/workflows/gpu-ci.yml`) that runs the
+  CUDA-marked tests on push to `main`, on PRs touching kernel-related files,
+  on `workflow_dispatch`, or on PRs labelled `run-gpu-ci`.
+
 ### Changed
 
 - [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases

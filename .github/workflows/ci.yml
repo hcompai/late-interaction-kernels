@@ -75,5 +75,6 @@ jobs:
       - name: Run CPU-safe tests (CUDA tests auto-skip)
         run: uv run --python ${{ matrix.python-version }} pytest -q
 
-  # GPU tests live on SkyPilot — run manually or via a scheduled dispatch.
-  # See scripts/sky_test.yaml.
+  # GPU tests run on a self-hosted GPU runner via gpu-ci.yml — automatically
+  # on push to main and on kernel-touching PRs, manually via workflow_dispatch,
+  # or by adding the `run-gpu-ci` label to an unrelated PR.
