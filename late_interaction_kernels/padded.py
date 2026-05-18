@@ -139,7 +139,7 @@ def pack_padded(
 
     # --- gather valid query tokens ---
     q_pos = torch.arange(Lq_max, device=device, dtype=torch.int32)
-    q_mask = q_pos[None, :] < qlen[:, None]                     # [B, Lq_max]
+    q_mask = q_pos[None, :] < qlen[:, None]  # [B, Lq_max]
     Q_packed = queries.reshape(B * Lq_max, d)[q_mask.reshape(-1)]
 
     cu_seqlens_q = torch.zeros(B + 1, dtype=torch.int32, device=device)
@@ -147,7 +147,7 @@ def pack_padded(
 
     # --- gather valid document tokens ---
     d_pos = torch.arange(Ld_max, device=device, dtype=torch.int32)
-    d_mask = d_pos[None, None, :] < dlen[:, :, None]            # [B, C, Ld_max]
+    d_mask = d_pos[None, None, :] < dlen[:, :, None]  # [B, C, Ld_max]
     D_packed = documents.reshape(B * C * Ld_max, d)[d_mask.reshape(-1)]
 
     cu_seqlens_d = torch.zeros(B * C + 1, dtype=torch.int32, device=device)

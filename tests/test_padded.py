@@ -207,9 +207,7 @@ def test_maxsim_padded_single_token_queries_and_docs_cpu() -> None:
 @pytest.mark.cuda
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_maxsim_padded_matches_reference_cuda(dtype: torch.dtype) -> None:
-    queries, documents, qlen, dlen = _make_batch(
-        B=4, C=8, Lq=32, Ld=128, d=64, device="cuda", dtype=dtype
-    )
+    queries, documents, qlen, dlen = _make_batch(B=4, C=8, Lq=32, Ld=128, d=64, device="cuda", dtype=dtype)
     scores = maxsim_padded(queries, documents, qlen, dlen)
     expected = maxsim_padded_reference(queries, documents, qlen, dlen)
 
@@ -225,7 +223,5 @@ def test_maxsim_padded_cuda_matches_cpu() -> None:
     B, C, Lq, Ld, d = 2, 5, 24, 64, 64
     queries, documents, qlen, dlen = _make_batch(B=B, C=C, Lq=Lq, Ld=Ld, d=d, dtype=torch.float16)
     scores_cpu = maxsim_padded(queries, documents, qlen, dlen)
-    scores_cuda = maxsim_padded(
-        queries.cuda(), documents.cuda(), qlen.cuda(), dlen.cuda()
-    )
+    scores_cuda = maxsim_padded(queries.cuda(), documents.cuda(), qlen.cuda(), dlen.cuda())
     torch.testing.assert_close(scores_cpu, scores_cuda.cpu(), rtol=5e-3, atol=5e-3)
