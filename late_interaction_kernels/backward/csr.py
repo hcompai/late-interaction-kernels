@@ -12,10 +12,16 @@ heuristic the ``"auto"`` selector uses to pick between ``unified``,
 """
 
 import torch
-import triton
-import triton.language as tl
 
-from ._utils import next_pow2
+try:
+    import triton
+    import triton.language as tl
+
+    _HAS_TRITON = True
+except ImportError:  # pragma: no cover
+    _HAS_TRITON = False
+
+from .._utils import next_pow2
 
 # ---------------------------------------------------------------------------
 # PyTorch-side CSR construction

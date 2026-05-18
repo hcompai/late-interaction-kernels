@@ -10,10 +10,16 @@ by ``tl.argmax`` (lowest index), bitwise-reproducible.
 """
 
 import torch
-import triton
-import triton.language as tl
 
-from ._utils import next_pow2
+try:
+    import triton
+    import triton.language as tl
+
+    _HAS_TRITON = True
+except ImportError:  # pragma: no cover
+    _HAS_TRITON = False
+
+from .._utils import next_pow2
 
 # ---------------------------------------------------------------------------
 # grad_Q kernel — one program per (q_batch, q_token)

@@ -8,7 +8,7 @@ output must match this reference to fp32 tolerance.
 import pytest
 import torch
 
-from late_interaction_kernels.backward_unified import (
+from late_interaction_kernels.backward import (
     maxsim_backward_unified,
     maxsim_backward_unified_reference,
 )

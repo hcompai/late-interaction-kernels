@@ -365,7 +365,7 @@ def test_build_csr_hand_computed():
     gets 2, ``(j=0, t=3)`` gets 1, ``(j=0, t=1)`` is empty, etc. We verify both
     ``row_ptr`` and that every entry in ``perm`` lands in the correct bucket.
     """
-    from late_interaction_kernels.backward_csr import _build_csr
+    from late_interaction_kernels.backward.csr import _build_csr
 
     Nq, Nd, Lq, Ld = 2, 2, 3, 4
     #   (i=0, j=0): s -> [0, 2, 2]

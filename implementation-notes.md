@@ -142,6 +142,15 @@ other import error. The two test functions that exercised them
 `test_maxsim_varlen_inference_deprecated`) are removed in the same
 commit.
 
+### D9. `backward/` subpackage import guard
+
+`atomic.py` and `csr.py` use `@triton.jit` at module level (no `if
+_HAS_TRITON:` wrapper — they predated cross-platform concerns). Moving
+them into `backward/` and eagerly importing them from `backward/__init__.py`
+broke collection on macOS (no Triton). Fix: gate their imports in
+`__init__.py` behind `if _HAS_TRITON:`. `unified.py` already guards
+triton internally, so both its functions are always importable.
+
 ## Tradeoffs not pursued
 
 * **Pad-position invariance on the kernel side**: maxsim's `padded`
