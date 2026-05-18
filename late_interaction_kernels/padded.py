@@ -210,7 +210,7 @@ def maxsim_padded(
 
     if queries.is_cuda:
         try:
-            from .score_pairs import score_pairs_packed
+            from late_interaction_kernels.score_pairs import score_pairs_packed
 
             flat = score_pairs_packed(
                 batch.Q_packed,
@@ -225,7 +225,7 @@ def maxsim_padded(
         except ImportError:
             pass  # Triton not available — fall through to reference
 
-    from .reference import maxsim_reference_scatter
+    from late_interaction_kernels.reference import maxsim_reference_scatter
 
     flat = maxsim_reference_scatter(
         batch.Q_packed.float(),

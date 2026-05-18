@@ -32,21 +32,21 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 if _HAS_TRITON:
-    from .autograd import (
+    from late_interaction_kernels.autograd import (
         get_backward_method,
         maxsim,
         maxsim_inference,
         set_backward_method,
     )
-    from .fp8 import maxsim_inference_fp8
-    from .fused_head import maxsim_from_hidden, maxsim_from_hidden_train
-    from .plaid import (
+    from late_interaction_kernels.fp8 import maxsim_inference_fp8
+    from late_interaction_kernels.fused_head import maxsim_from_hidden, maxsim_from_hidden_train
+    from late_interaction_kernels.plaid import (
         maxsim_residual,
         maxsim_residual_varlen,
         plaid_approx_score,
     )
-    from .score_pairs import score_pairs_packed
-    from .varlen import maxsim_varlen
+    from late_interaction_kernels.score_pairs import score_pairs_packed
+    from late_interaction_kernels.varlen import maxsim_varlen
 else:  # pragma: no cover
 
     def _needs_triton(*_args, **_kwargs):  # type: ignore[no-redef]
@@ -71,10 +71,10 @@ else:  # pragma: no cover
 #   on a laptop;
 # * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
 #   `torch.compile`-fused path, anything else → PyLate's own implementation.
-from . import reference  # noqa: E402,F401
-from .padded import PackedBatch, maxsim_padded, pack_padded  # noqa: E402
-from .pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
-from .retrieve import MaxSimScorer, retrieve  # noqa: E402
+from late_interaction_kernels import reference  # noqa: E402,F401
+from late_interaction_kernels.padded import PackedBatch, maxsim_padded, pack_padded  # noqa: E402
+from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
+from late_interaction_kernels.retrieve import MaxSimScorer, retrieve  # noqa: E402
 
 __all__ = [
     "__version__",

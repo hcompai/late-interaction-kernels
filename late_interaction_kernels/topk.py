@@ -6,7 +6,7 @@ over docs so peak HBM stays at ``O(Nq · (chunk + k))``.
 
 import torch
 
-from .forward import maxsim_forward
+from late_interaction_kernels.forward import maxsim_forward
 
 
 def maxsim_topk(

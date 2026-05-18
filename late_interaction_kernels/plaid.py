@@ -16,8 +16,8 @@ import torch
 import triton
 import triton.language as tl
 
-from ._autotune import forward_configs, prune_forward
-from ._utils import ensure_contiguous_last, next_pow2
+from late_interaction_kernels._autotune import forward_configs, prune_forward
+from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2
 
 # -----------------------------------------------------------------------------
 # C1. plaid_approx_score
@@ -962,7 +962,7 @@ def maxsim_residual_varlen(
 # Reference implementations live in ``late_interaction_kernels.reference``
 # so they're importable on CPU-only platforms without Triton. Re-export for
 # convenience.
-from .reference import (  # noqa: E402
+from late_interaction_kernels.reference import (  # noqa: E402
     maxsim_residual_reference,
     plaid_approx_score_reference,
 )

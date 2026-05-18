@@ -8,6 +8,6 @@
 based on shape and the ``LIK_FORCE_MPS_BACKEND`` env variable.
 """
 
-from .compile import is_mps_tensor, maxsim_inference_mps, maxsim_mps
+from late_interaction_kernels.mps.compile import is_mps_tensor, maxsim_inference_mps, maxsim_mps
 
 __all__ = ["maxsim_mps", "maxsim_inference_mps", "is_mps_tensor"]

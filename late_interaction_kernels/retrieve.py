@@ -51,20 +51,20 @@ def _score(
         )
 
     if _HAS_TRITON and Q.is_cuda and D.is_cuda:
-        from .autograd import maxsim, maxsim_inference
+        from late_interaction_kernels.autograd import maxsim, maxsim_inference
 
         if inference:
             return maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 
     if Q.device.type == "mps":
-        from .mps import maxsim_inference_mps, maxsim_mps
+        from late_interaction_kernels.mps import maxsim_inference_mps, maxsim_mps
 
         if inference:
             return maxsim_inference_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
 
-    from .reference import maxsim_reference
+    from late_interaction_kernels.reference import maxsim_reference
 
     with torch.no_grad() if inference else torch.enable_grad():
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
@@ -231,7 +231,7 @@ def retrieve(
         )
 
     if _HAS_TRITON and Q.is_cuda and D.is_cuda:
-        from .topk import maxsim_topk
+        from late_interaction_kernels.topk import maxsim_topk
 
         return maxsim_topk(
             Q,
@@ -261,9 +261,9 @@ def retrieve(
     # Pick the per-device scoring kernel. MPS goes through ``torch.compile``
     # to fuse einsum+max+sum; CPU stays in eager (no compile dependency).
     if Q.device.type == "mps":
-        from .mps import maxsim_inference_mps as _score_kernel
+        from late_interaction_kernels.mps import maxsim_inference_mps as _score_kernel
     else:
-        from .reference import maxsim_reference as _score_kernel
+        from late_interaction_kernels.reference import maxsim_reference as _score_kernel
 
     def _score_chunk(Q_, D_, qm_, dm_):
         with torch.no_grad():

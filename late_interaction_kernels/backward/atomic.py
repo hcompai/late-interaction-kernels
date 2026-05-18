@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from .._utils import next_pow2
+from late_interaction_kernels._utils import next_pow2
 
 # ---------------------------------------------------------------------------
 # grad_Q kernel — one program per (q_batch, q_token)
@@ -244,7 +244,7 @@ def maxsim_backward(
 
     if method == "csr":
         # Imported here to avoid a circular import (backward_csr uses _utils).
-        from .backward_csr import maxsim_backward_csr_dD
+        from late_interaction_kernels.backward.backward_csr import maxsim_backward_csr_dD
 
         grad_D = maxsim_backward_csr_dD(grad_scores, Q, D, argmax, q_mask)
     else:
