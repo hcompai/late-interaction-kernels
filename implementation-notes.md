@@ -151,6 +151,17 @@ broke collection on macOS (no Triton). Fix: gate their imports in
 `__init__.py` behind `if _HAS_TRITON:`. `unified.py` already guards
 triton internally, so both its functions are always importable.
 
+### D10. `mps/` subpackage naming: `compile.py` not `dispatch.py`
+
+`_mps.py` held both the `torch.compile` path and the dispatch heuristic
+(Metal vs compile). Renamed to `compile.py` since the compile path is the
+primary content and "dispatch" isn't visible from outside. `metal.py`
+moves to `mps/metal.py` unchanged. `mps/__init__.py` re-exports the three
+public symbols so existing `from .mps import maxsim_mps` call-sites work.
+Tests used `from late_interaction_kernels import _mps as _mps_mod` to
+access internal helpers for dispatch testing — updated to
+`from late_interaction_kernels.mps import compile as _mps_mod`.
+
 ## Tradeoffs not pursued
 
 * **Pad-position invariance on the kernel side**: maxsim's `padded`

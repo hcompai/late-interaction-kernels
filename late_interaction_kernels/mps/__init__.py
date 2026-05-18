@@ -1,0 +1,13 @@
+"""Apple Silicon (MPS) MaxSim backends.
+
+- :mod:`.compile` — ``torch.compile``-fused path (autograd-aware, all shapes).
+- :mod:`.metal`   — fused ``simdgroup_matrix`` Metal kernel (forward-only,
+  big-batch inference).
+
+:func:`maxsim_mps` and :func:`maxsim_inference_mps` dispatch between the two
+based on shape and the ``LIK_FORCE_MPS_BACKEND`` env variable.
+"""
+
+from .compile import is_mps_tensor, maxsim_inference_mps, maxsim_mps
+
+__all__ = ["maxsim_mps", "maxsim_inference_mps", "is_mps_tensor"]

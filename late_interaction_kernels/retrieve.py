@@ -58,7 +58,7 @@ def _score(
         return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 
     if Q.device.type == "mps":
-        from ._mps import maxsim_inference_mps, maxsim_mps
+        from .mps import maxsim_inference_mps, maxsim_mps
 
         if inference:
             return maxsim_inference_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
@@ -261,7 +261,7 @@ def retrieve(
     # Pick the per-device scoring kernel. MPS goes through ``torch.compile``
     # to fuse einsum+max+sum; CPU stays in eager (no compile dependency).
     if Q.device.type == "mps":
-        from ._mps import maxsim_inference_mps as _score_kernel
+        from .mps import maxsim_inference_mps as _score_kernel
     else:
         from .reference import maxsim_reference as _score_kernel
 

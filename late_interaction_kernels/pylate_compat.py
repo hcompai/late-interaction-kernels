@@ -76,7 +76,7 @@ def _dispatch_maxsim(Q, D, q_mask, d_mask, path: str) -> torch.Tensor:
 
         return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
     if path == "mps":
-        from ._mps import maxsim_mps
+        from .mps import maxsim_mps
 
         return maxsim_mps(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=False)
     raise ValueError(f"unknown dispatch path {path!r}")

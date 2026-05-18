@@ -31,7 +31,7 @@ from collections.abc import Callable
 import torch
 
 from . import metal as _metal
-from .reference import maxsim_reference
+from ..reference import maxsim_reference
 
 _compile_lock = threading.Lock()
 _compiled_cache: dict[tuple, Callable] = {}
