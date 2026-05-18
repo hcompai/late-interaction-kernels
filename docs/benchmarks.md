@@ -221,7 +221,7 @@ CSR is bitwise-reproducible across runs (no atomics); `atomic` /
 order depends on thread scheduling.
 
 ```python
-from late_interaction_kernels import set_backward_method
+from late_interaction_kernels.autograd import set_backward_method
 set_backward_method("csr")        # | "atomic" | "unified" | "auto"
 
 # or per call

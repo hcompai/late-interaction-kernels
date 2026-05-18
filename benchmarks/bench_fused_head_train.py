@@ -19,7 +19,8 @@ import time
 
 import torch
 
-from late_interaction_kernels import maxsim, maxsim_from_hidden_train
+from late_interaction_kernels import maxsim
+from late_interaction_kernels.fused_head import maxsim_from_hidden_train
 
 
 def _unfused(Q, H_d, W, b, *, normalize):

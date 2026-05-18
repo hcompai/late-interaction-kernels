@@ -203,7 +203,7 @@ def fastplaid_exact_pipeline(idx: dict, Q: torch.Tensor) -> torch.Tensor:
 
 def lik_dense(idx: dict, Q: torch.Tensor) -> torch.Tensor:
     """Our existing fused kernel over the padded [Nd, ld_max, packed_dim] format."""
-    from late_interaction_kernels import maxsim_residual
+    from late_interaction_kernels.plaid import maxsim_residual
 
     return maxsim_residual(
         Q.unsqueeze(0),  # [1, Lq, d]
@@ -220,7 +220,7 @@ def lik_dense(idx: dict, Q: torch.Tensor) -> torch.Tensor:
 def lik_varlen(idx: dict, Q: torch.Tensor, max_ld: int) -> torch.Tensor:
     """Our new fused kernel over the ragged (cu_seqlens) format — the native
     storage fast-plaid already uses for `doc_codes_strided`."""
-    from late_interaction_kernels import maxsim_residual_varlen
+    from late_interaction_kernels.plaid import maxsim_residual_varlen
 
     return maxsim_residual_varlen(
         Q.unsqueeze(0),

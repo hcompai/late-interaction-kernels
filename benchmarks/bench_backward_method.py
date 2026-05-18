@@ -20,7 +20,8 @@ from contextlib import nullcontext
 
 import torch
 
-from late_interaction_kernels import maxsim, set_backward_method
+from late_interaction_kernels import maxsim
+from late_interaction_kernels.autograd import set_backward_method
 
 
 def _naive_score(Q, D):

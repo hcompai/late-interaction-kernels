@@ -14,8 +14,8 @@ def _pack(seqs):
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_scatter_matches_reference(dtype):
-    from late_interaction_kernels import score_pairs_packed
     from late_interaction_kernels.reference import maxsim_reference_scatter
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     torch.manual_seed(0)
     d = 64
@@ -40,7 +40,7 @@ def test_scatter_matches_reference(dtype):
 
 
 def test_scatter_handles_empty_pairs_and_empty_seqs():
-    from late_interaction_kernels import score_pairs_packed
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     d = 32
     Qp = torch.randn(8, d, device="cuda", dtype=torch.float16)
@@ -66,7 +66,8 @@ def test_scatter_handles_empty_pairs_and_empty_seqs():
 
 def test_scatter_matches_varlen_full_grid():
     """When the pair list covers every (i, j), scatter and varlen agree."""
-    from late_interaction_kernels import maxsim_varlen, score_pairs_packed
+    from late_interaction_kernels import maxsim_varlen
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     torch.manual_seed(1)
     d = 48

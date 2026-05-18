@@ -203,7 +203,8 @@ def test_unified_matches_csr_deterministic(rel):
 @pytest.mark.cuda
 def test_unified_end_to_end_autograd():
     """``maxsim(...)`` with method='unified' must train identically to 'atomic'."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     torch.manual_seed(2)
     Q_ref = torch.randn(8, 32, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True)

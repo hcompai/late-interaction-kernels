@@ -6,16 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Renamed (breaking)
+### Changed
 
-- `maxsim_inference_scatter` → `score_pairs_packed`; module
-  `scatter.py` → `score_pairs.py`. The new name matches the
-  `personal/maxsim` convention and is shorter. The kernel, signature,
-  and semantics are identical.
+- [breaking] `maxsim_inference_scatter` → `score_pairs_packed`; module
+  `scatter.py` → `score_pairs.py`. Shorter name, matches prior art in
+  https://github.com/ErikKaum/maxsim. Kernel, signature, and semantics
+  are identical.
+- [breaking] Trimmed the top-level public surface to everyday API only:
+  `MaxSimScorer`, `retrieve`, `patch_pylate` / `unpatch_pylate`, `maxsim`,
+  `maxsim_inference`, `maxsim_varlen`, `maxsim_padded`, and the `reference`
+  module. Lower-level / niche kernels must now be imported from their
+  submodule:
+  - `score_pairs_packed` → `late_interaction_kernels.score_pairs`
+  - `pack_padded` / `PackedBatch` → `late_interaction_kernels.padded`
+  - `maxsim_from_hidden` / `maxsim_from_hidden_train` → `late_interaction_kernels.fused_head`
+  - `plaid_approx_score` / `maxsim_residual` / `maxsim_residual_varlen`
+    → `late_interaction_kernels.plaid`
+  - `maxsim_inference_fp8` → `late_interaction_kernels.fp8`
+  - `set_backward_method` / `get_backward_method` → `late_interaction_kernels.autograd`
 
-### Removed (breaking)
+### Removed
 
-- Top-level deprecation shims for `maxsim_forward`, `maxsim_topk`,
+- [breaking] Top-level deprecation shims for `maxsim_forward`, `maxsim_topk`,
   `maxsim_residual_inference`, `maxsim_varlen_inference`,
   `maxsim_matryoshka`, `maxsim_xtr`, `soft_maxsim`, `smooth_maxsim`,
   `quantize_fp8_per_tensor`, `quantize_fp8_per_token`,
@@ -25,13 +37,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`pack_padded` / `maxsim_padded`** — padded-input reranking helpers.
-  `pack_padded(queries, documents, query_lengths, doc_lengths)` converts
-  `[B, Lq, d]` / `[B, C, Ld, d]` tensors to the packed `cu_seqlens` layout
-  used by `maxsim_inference_scatter`, with at most one device→host sync (for
-  `max_seqlen_q`). `maxsim_padded` wraps both steps and returns `[B, C]` fp32;
-  dispatches to the Triton scatter kernel on CUDA and the pure-PyTorch
-  reference elsewhere.
+- **`maxsim_padded`** — padded-input reranking helper (inspired by
+  https://github.com/ErikKaum/maxsim). Takes `[B, Lq, d]` / `[B, C, Ld, d]`
+  tensors with per-row lengths, returns `[B, C]` fp32. Dispatches to the
+  Triton scatter kernel on CUDA and the pure-PyTorch reference elsewhere.
+  The underlying `pack_padded(...)` building block (which converts to the
+  packed `cu_seqlens` layout with at most one device→host sync for
+  `max_seqlen_q`) is available from `late_interaction_kernels.padded`.
 
 ### Documentation
 

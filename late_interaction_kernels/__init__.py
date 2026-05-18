@@ -8,9 +8,18 @@ Common entry points::
     scorer = MaxSimScorer(normalize=True)  # nn.Module, autograd-aware
     scores, idx = retrieve(Q, D, top_k=100)
 
+The top-level surface is intentionally small. Niche / lower-level kernels live
+in submodules and must be imported explicitly:
+
+- pair-list scoring → ``late_interaction_kernels.score_pairs``
+- padded → packed building blocks → ``late_interaction_kernels.padded``
+- fused D-side head → ``late_interaction_kernels.fused_head``
+- PLAID / ColBERTv2 → ``late_interaction_kernels.plaid``
+- FP8 inference → ``late_interaction_kernels.fp8``
+- backward-method config → ``late_interaction_kernels.autograd``
+- research variants → ``late_interaction_kernels.experimental``
+
 See the README for the full API and benchmarks.
-FP8 helpers live in ``late_interaction_kernels.fp8``.
-Research kernels live in ``late_interaction_kernels.experimental``.
 """
 
 from importlib.metadata import PackageNotFoundError
@@ -32,20 +41,7 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 if _HAS_TRITON:
-    from late_interaction_kernels.autograd import (
-        get_backward_method,
-        maxsim,
-        maxsim_inference,
-        set_backward_method,
-    )
-    from late_interaction_kernels.fp8 import maxsim_inference_fp8
-    from late_interaction_kernels.fused_head import maxsim_from_hidden, maxsim_from_hidden_train
-    from late_interaction_kernels.plaid import (
-        maxsim_residual,
-        maxsim_residual_varlen,
-        plaid_approx_score,
-    )
-    from late_interaction_kernels.score_pairs import score_pairs_packed
+    from late_interaction_kernels.autograd import maxsim, maxsim_inference
     from late_interaction_kernels.varlen import maxsim_varlen
 else:  # pragma: no cover
 
@@ -57,22 +53,16 @@ else:  # pragma: no cover
         )
 
     maxsim = maxsim_inference = _needs_triton
-    maxsim_from_hidden = maxsim_from_hidden_train = _needs_triton
-    maxsim_inference_fp8 = _needs_triton
     maxsim_varlen = _needs_triton
-    plaid_approx_score = _needs_triton
-    maxsim_residual = maxsim_residual_varlen = _needs_triton
-    score_pairs_packed = _needs_triton
-    set_backward_method = get_backward_method = _needs_triton
 
 # Cross-platform high-level entry points:
-# * `MaxSimScorer` / `retrieve` fall back to the pure-PyTorch reference on
-#   machines without Triton, so training and retrieval code is unit-testable
-#   on a laptop;
+# * `MaxSimScorer` / `retrieve` / `maxsim_padded` fall back to the pure-PyTorch
+#   reference on machines without Triton, so training and retrieval code is
+#   unit-testable on a laptop;
 # * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
 #   `torch.compile`-fused path, anything else → PyLate's own implementation.
 from late_interaction_kernels import reference  # noqa: E402,F401
-from late_interaction_kernels.padded import PackedBatch, maxsim_padded, pack_padded  # noqa: E402
+from late_interaction_kernels.padded import maxsim_padded  # noqa: E402
 from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
 from late_interaction_kernels.retrieve import MaxSimScorer, retrieve  # noqa: E402
 
@@ -81,29 +71,13 @@ __all__ = [
     # high-level
     "MaxSimScorer",
     "retrieve",
+    "maxsim_padded",
     "patch_pylate",
     "unpatch_pylate",
     # core MaxSim
     "maxsim",
     "maxsim_inference",
     "maxsim_varlen",
-    # padded-input reranking
-    "pack_padded",
-    "maxsim_padded",
-    "PackedBatch",
-    # reranking on packed batches
-    "score_pairs_packed",
-    # fused D-side head
-    "maxsim_from_hidden",
-    "maxsim_from_hidden_train",
-    # PLAID / ColBERTv2
-    "plaid_approx_score",
-    "maxsim_residual",
-    "maxsim_residual_varlen",
-    # FP8 inference
-    "maxsim_inference_fp8",
-    # configuration
-    "set_backward_method",
-    "get_backward_method",
+    # ground-truth reference module
     "reference",
 ]
