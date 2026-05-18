@@ -137,4 +137,11 @@ file rather than starting a new module. Easier to grep.
 
 ## Files touched
 
-(filled in as commits land)
+| File | Change |
+| --- | --- |
+| `late_interaction_kernels/padded.py` | **new** — `PackedBatch`, `pack_padded`, `maxsim_padded` |
+| `late_interaction_kernels/reference.py` | Added `maxsim_padded_reference` |
+| `late_interaction_kernels/__init__.py` | Exported `PackedBatch`, `pack_padded`, `maxsim_padded` |
+| `tests/test_padded.py` | **new** — 16 tests (13 CPU, 3 CUDA-marked) |
+| `README.md` | Added two rows to the API table |
+| `CHANGELOG.md` | Added `[Unreleased] > Added` section |

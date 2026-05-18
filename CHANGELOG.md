@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`pack_padded` / `maxsim_padded`** — padded-input reranking helpers.
+  `pack_padded(queries, documents, query_lengths, doc_lengths)` converts
+  `[B, Lq, d]` / `[B, C, Ld, d]` tensors to the packed `cu_seqlens` layout
+  used by `maxsim_inference_scatter`, with at most one device→host sync (for
+  `max_seqlen_q`). `maxsim_padded` wraps both steps and returns `[B, C]` fp32;
+  dispatches to the Triton scatter kernel on CUDA and the pure-PyTorch
+  reference elsewhere.
+
 ### Documentation
 
 - Spell out what the H100 forward table compares against (eager fp32

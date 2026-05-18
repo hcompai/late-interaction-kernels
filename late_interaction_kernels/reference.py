@@ -369,3 +369,40 @@ def maxsim_reference_scatter(
         S = qi @ dj.T
         out[k] = S.max(dim=-1).values.sum()
     return out
+
+
+def maxsim_padded_reference(
+    queries: torch.Tensor,
+    documents: torch.Tensor,
+    query_lengths: torch.Tensor,
+    doc_lengths: torch.Tensor,
+) -> torch.Tensor:
+    """Reference for :func:`maxsim_padded`.
+
+    Loops over ``(b, c)`` pairs and calls :func:`maxsim_reference` for each.
+    Always returns fp32.
+
+    Args:
+        queries: ``[B, Lq, d]``
+        documents: ``[B, C, Ld, d]``
+        query_lengths: ``[B]``
+        doc_lengths: ``[B, C]``
+
+    Returns:
+        ``[B, C]`` fp32 tensor on the same device as ``queries``.
+    """
+    B, _, _ = queries.shape
+    _, C, _, _ = documents.shape
+    qlen = query_lengths.to(torch.int64).cpu().tolist()
+    dlen = doc_lengths.to(torch.int64).cpu().tolist()
+    out = torch.empty((B, C), dtype=torch.float32, device=queries.device)
+    for b in range(B):
+        q = queries[b, : qlen[b]].float()
+        for c in range(C):
+            d = documents[b, c, : dlen[b][c]].float()
+            if q.shape[0] == 0 or d.shape[0] == 0:
+                out[b, c] = 0.0
+                continue
+            S = q @ d.T  # [lq, ld]
+            out[b, c] = S.max(dim=-1).values.sum()
+    return out

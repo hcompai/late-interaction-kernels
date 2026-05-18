@@ -72,6 +72,7 @@ else:  # pragma: no cover
 # * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
 #   `torch.compile`-fused path, anything else → PyLate's own implementation.
 from . import reference  # noqa: E402,F401
+from .padded import PackedBatch, maxsim_padded, pack_padded  # noqa: E402
 from .pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
 from .retrieve import MaxSimScorer, retrieve  # noqa: E402
 
@@ -190,6 +191,10 @@ __all__ = [
     "maxsim",
     "maxsim_inference",
     "maxsim_varlen",
+    # padded-input reranking
+    "pack_padded",
+    "maxsim_padded",
+    "PackedBatch",
     # reranking on packed batches
     "maxsim_inference_scatter",
     # fused D-side head
