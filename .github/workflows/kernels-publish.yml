@@ -1,0 +1,51 @@
+name: Publish HF Kernel
+
+on:
+  push:
+    tags:
+      - "kernels-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build + test only; skip upload"
+        type: boolean
+        default: false
+
+concurrency:
+  group: kernels-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-upload:
+    name: Build + publish kernel to HF Hub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Use HF cachix cache
+        uses: cachix/cachix-action@v15
+        with:
+          name: huggingface
+          skipPush: true
+
+      - name: Install kernel-builder
+        run: curl -fsSL https://raw.githubusercontent.com/huggingface/kernels/main/install.sh | bash
+
+      - name: Build universal kernel
+        run: kernel-builder build-and-copy -L
+
+      - name: Inspect built tree
+        run: |
+          echo "Built variants:"
+          ls -la build/
+          find build -maxdepth 3 -type f | head -60
+
+      - name: Upload to HF Hub
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          kernel-builder build-and-upload

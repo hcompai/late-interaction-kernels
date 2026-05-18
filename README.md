@@ -45,6 +45,8 @@ uv add late-interaction-kernels       # or: pip install late-interaction-kernels
 > [!NOTE]
 > The PyLate drop-in targets PyLate >= 1.3. The pure-PyTorch reference imports on every platform, so training and retrieval code is unit-testable on a laptop before you rent a GPU.
 
+Also available via the **HuggingFace Kernel Hub** (forward / inference surface only — `from kernels import get_kernel; lik = get_kernel("Hcompany/late-interaction-kernels")`). See [`docs/hf_kernels.md`](docs/hf_kernels.md).
+
 ## Quickstart
 
 ### Patch PyLate (one line)

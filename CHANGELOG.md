@@ -64,6 +64,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now `O(num_pairs · max_lq · d)` on both passes; no `[Nq, Nd]`
   materialisation, no varlen-style off-diagonal compute. Pure inference
   pays no overhead (`save_argmax=False`).
+- **HuggingFace Kernel Hub build** — the forward / inference surface is now
+  publishable to `Hcompany/late-interaction-kernels` via
+  [`kernels`](https://github.com/huggingface/kernels). New top-level files
+  `build.toml` and `flake.nix`, a `torch-ext/late_interaction_kernels/` tree
+  (symlink-based one-source-of-truth), a hand-written `layers.MaxSim`
+  `nn.Module` for `kernelize()`, a `tests/test_hf_kernels_layer.py`
+  parity-and-contract test suite, the `.github/workflows/kernels-publish.yml`
+  tag-triggered publish workflow, and full maintainer docs in
+  [`docs/hf_kernels.md`](docs/hf_kernels.md).
 
 ### Fixed
 

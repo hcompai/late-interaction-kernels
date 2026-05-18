@@ -1,0 +1,7 @@
+[general]
+name = "late_interaction_kernels"
+version = 1
+universal = true
+
+[general.hub]
+repo-id = "Hcompany/late-interaction-kernels"

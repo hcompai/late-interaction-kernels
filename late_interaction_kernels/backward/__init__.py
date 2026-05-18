@@ -25,6 +25,16 @@ if _HAS_TRITON:
     # atomic.py and csr.py use @triton.jit at module level — only import on CUDA.
     from late_interaction_kernels.backward.atomic import maxsim_backward
     from late_interaction_kernels.backward.csr import maxsim_backward_csr_dD
+else:  # pragma: no cover — Triton missing; bind stubs so `from .backward import X` works.
+
+    def _needs_triton(*_args, **_kwargs):
+        raise RuntimeError(
+            "late-interaction-kernels backward kernels require Triton, which isn't "
+            "installed on this platform (Linux + CUDA only)."
+        )
+
+    maxsim_backward = _needs_triton
+    maxsim_backward_csr_dD = _needs_triton
 
 __all__ = [
     "maxsim_backward",
