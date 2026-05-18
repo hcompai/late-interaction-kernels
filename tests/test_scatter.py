@@ -66,7 +66,7 @@ def test_scatter_handles_empty_pairs_and_empty_seqs():
 
 def test_scatter_matches_varlen_full_grid():
     """When the pair list covers every (i, j), scatter and varlen agree."""
-    from late_interaction_kernels import score_pairs_packed, maxsim_varlen
+    from late_interaction_kernels import maxsim_varlen, score_pairs_packed
 
     torch.manual_seed(1)
     d = 48

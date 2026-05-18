@@ -18,8 +18,7 @@ import sys
 
 import torch
 
-from late_interaction_kernels.backward import maxsim_backward
-from late_interaction_kernels.backward import maxsim_backward_unified
+from late_interaction_kernels.backward import maxsim_backward, maxsim_backward_unified
 from late_interaction_kernels.forward import _run_forward
 
 # (name, Nq, Nd, Lq, Ld, d)

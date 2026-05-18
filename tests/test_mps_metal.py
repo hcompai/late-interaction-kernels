@@ -304,8 +304,8 @@ def test_train_time_call_uses_compile_path():
 
 def test_retrieve_uses_metal_path_when_eligible(monkeypatch):
     """``retrieve()`` is inference-only → it should pick Metal on the right shapes."""
-    from late_interaction_kernels.mps import compile as _mps_mod
     from late_interaction_kernels import retrieve
+    from late_interaction_kernels.mps import compile as _mps_mod
 
     monkeypatch.delenv("LIK_FORCE_MPS_BACKEND", raising=False)
     _mps_mod._compiled_cache.clear()

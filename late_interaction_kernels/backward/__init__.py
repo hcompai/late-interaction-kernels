@@ -16,7 +16,10 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 # unified.py guards Triton internally; both functions are always importable.
-from late_interaction_kernels.backward.unified import maxsim_backward_unified, maxsim_backward_unified_reference
+from late_interaction_kernels.backward.unified import (
+    maxsim_backward_unified,
+    maxsim_backward_unified_reference,
+)
 
 if _HAS_TRITON:
     # atomic.py and csr.py use @triton.jit at module level — only import on CUDA.

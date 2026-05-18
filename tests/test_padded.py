@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from late_interaction_kernels.padded import PackedBatch, maxsim_padded, pack_padded
+from late_interaction_kernels.padded import maxsim_padded, pack_padded
 from late_interaction_kernels.reference import maxsim_padded_reference
-
 
 # ---------------------------------------------------------------------------
 # Helpers
