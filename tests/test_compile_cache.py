@@ -73,9 +73,7 @@ def test_scatter_kernel_keys_on_max_lq_and_max_ld():
     for max_ld in distinct_max_ld:
         D = torch.randn(max_ld, d_emb, device="cuda", dtype=torch.float16)
         cu_d = torch.tensor([0, max_ld], device="cuda", dtype=torch.int32)
-        _ = score_pairs_packed(
-            Q, D, cu_q, cu_d, pair_q, pair_d, max_seqlen_q=lq, max_seqlen_d=max_ld
-        )
+        _ = score_pairs_packed(Q, D, cu_q, cu_d, pair_q, pair_d, max_seqlen_q=lq, max_seqlen_d=max_ld)
 
     cache = _scatter_fwd_kernel.cache
     assert len(cache) == len(distinct_max_ld), (
