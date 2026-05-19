@@ -200,11 +200,8 @@ def test_maxsim_per_call_backward_invalid_raises():
 
 def test_maxsim_per_call_overrides_global():
     """Per-call `backward=` must not leak back into the global state."""
-    from late_interaction_kernels import (
-        get_backward_method,
-        maxsim,
-        set_backward_method,
-    )
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import get_backward_method, set_backward_method
 
     old = get_backward_method()
     try:

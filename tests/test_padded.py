@@ -149,6 +149,59 @@ def test_pack_padded_validate_flag_catches_zero_length() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Always-on async assert (subprocess-isolated)
+#
+# Triggering ``torch._assert_async`` aborts the CUDA context for the whole
+# process, so the parent pytest can't run any further CUDA work in the same
+# interpreter. We run these in a subprocess and check the exit code.
+# ---------------------------------------------------------------------------
+
+
+_ASYNC_ASSERT_SCRIPT = """
+import torch
+from late_interaction_kernels.padded import pack_padded
+
+B, C, Lq, Ld, d = 2, 2, 4, 6, 16
+queries = torch.randn(B, Lq, d, device="cuda", dtype=torch.float32)
+documents = torch.randn(B, C, Ld, d, device="cuda", dtype=torch.float32)
+qlen = torch.tensor({qlen_vals}, dtype=torch.int32, device="cuda")
+dlen = torch.tensor({dlen_vals}, dtype=torch.int32, device="cuda")
+try:
+    pack_padded(queries, documents, qlen, dlen, validate=False)
+    torch.cuda.synchronize()
+except RuntimeError:
+    raise SystemExit(7)
+raise SystemExit(0)
+"""
+
+
+@pytest.mark.cuda
+def test_pack_padded_async_assert_catches_out_of_bound_qlen() -> None:
+    """``qlen > Lq_max`` triggers the always-on async assert (validate=False)."""
+    import subprocess
+    import sys
+
+    script = _ASYNC_ASSERT_SCRIPT.format(qlen_vals=[5, 5], dlen_vals=[[3, 3], [3, 3]])
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True)
+    assert result.returncode == 7, (
+        f"expected exit 7 (RuntimeError caught); got {result.returncode}\n{result.stderr.decode()}"
+    )
+
+
+@pytest.mark.cuda
+def test_pack_padded_async_assert_catches_out_of_bound_dlen() -> None:
+    """``dlen > Ld_max`` triggers the always-on async assert (validate=False)."""
+    import subprocess
+    import sys
+
+    script = _ASYNC_ASSERT_SCRIPT.format(qlen_vals=[4, 4], dlen_vals=[[7, 7], [7, 7]])
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True)
+    assert result.returncode == 7, (
+        f"expected exit 7 (RuntimeError caught); got {result.returncode}\n{result.stderr.decode()}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # maxsim_padded — CUDA parity (skipped without a GPU)
 #
 # CPU/MPS dispatch goes straight to maxsim_padded_reference, so a CPU parity
@@ -202,7 +255,7 @@ def test_maxsim_padded_supports_backward_cpu() -> None:
 @pytest.mark.cuda
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_maxsim_padded_backward_matches_reference_cuda(dtype: torch.dtype) -> None:
-    """Gradients from the varlen+slice path match the pure-PyTorch reference."""
+    """Gradients from the fused pair-list backward match the pure-PyTorch reference."""
     B, C, Lq, Ld, d = 3, 4, 16, 32, 32
     queries, documents, qlen, dlen = _make_batch(B=B, C=C, Lq=Lq, Ld=Ld, d=d, device="cuda", dtype=dtype)
 
@@ -219,7 +272,54 @@ def test_maxsim_padded_backward_matches_reference_cuda(dtype: torch.dtype) -> No
     scores_ref = maxsim_padded_reference(q_ref, d_ref, qlen, dlen)
     scores_ref.backward(grad_out)
 
-    # The kernel computes the diagonal of an [B, B*C] cross via varlen; the
-    # reference loops in fp32. fp16/bf16 inputs need a looser tolerance.
-    torch.testing.assert_close(q_kernel.grad.float(), q_ref.grad, rtol=5e-2, atol=5e-2)
-    torch.testing.assert_close(d_kernel.grad.float(), d_ref.grad, rtol=5e-2, atol=5e-2)
+    # Kernel accumulates in fp32 atomics; reference loops in fp32. Tolerance
+    # tracks the fp16/bf16 input quantisation only.
+    tol = 1e-2 if dtype is torch.float16 else 2e-2
+    torch.testing.assert_close(q_kernel.grad.float(), q_ref.grad, rtol=tol, atol=tol)
+    torch.testing.assert_close(d_kernel.grad.float(), d_ref.grad, rtol=tol, atol=tol)
+
+
+@pytest.mark.cuda
+def test_score_pairs_packed_sparse_pair_list_backward() -> None:
+    """Low-level entry: gradients on a sparse pair list (not every (q, d) pair).
+
+    Mirrors a real reranker scheduler where each query is scored against
+    only a handful of candidate docs. Multiple pairs share both ``q_idx``
+    and ``d_idx``, so this exercises the atomic-add paths on both grad
+    tensors.
+    """
+    from late_interaction_kernels.score_pairs import score_pairs_packed
+
+    torch.manual_seed(0)
+    d = 32
+    Lq_list = [8, 12, 16]
+    Ld_list = [10, 14, 9, 11, 13]
+    cu_q = torch.tensor([0, *torch.tensor(Lq_list).cumsum(0).tolist()], dtype=torch.int32, device="cuda")
+    cu_d = torch.tensor([0, *torch.tensor(Ld_list).cumsum(0).tolist()], dtype=torch.int32, device="cuda")
+    pair_q = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.int32, device="cuda")
+    pair_d = torch.tensor([0, 1, 1, 2, 3, 4], dtype=torch.int32, device="cuda")
+
+    Q_ref = torch.randn(sum(Lq_list), d, dtype=torch.float32, device="cuda", requires_grad=True)
+    D_ref = torch.randn(sum(Ld_list), d, dtype=torch.float32, device="cuda", requires_grad=True)
+    Q_k = Q_ref.detach().clone().half().requires_grad_(True)
+    D_k = D_ref.detach().clone().half().requires_grad_(True)
+
+    grad_out = torch.randn(pair_q.numel(), dtype=torch.float32, device="cuda")
+
+    # Kernel
+    scores_k = score_pairs_packed(
+        Q_k, D_k, cu_q, cu_d, pair_q, pair_d, max_seqlen_q=max(Lq_list), max_seqlen_d=max(Ld_list)
+    )
+    scores_k.backward(grad_out)
+
+    # Reference: loop over pairs.
+    scores_ref = torch.empty(pair_q.numel(), dtype=torch.float32, device="cuda")
+    for k, (qi, di) in enumerate(zip(pair_q.tolist(), pair_d.tolist(), strict=True)):
+        q_slice = Q_ref[cu_q[qi] : cu_q[qi + 1]]
+        d_slice = D_ref[cu_d[di] : cu_d[di + 1]]
+        scores_ref[k] = (q_slice @ d_slice.T).max(dim=-1).values.sum()
+    scores_ref.backward(grad_out)
+
+    torch.testing.assert_close(scores_k.float(), scores_ref, rtol=5e-3, atol=5e-3)
+    torch.testing.assert_close(Q_k.grad.float(), Q_ref.grad, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(D_k.grad.float(), D_ref.grad, rtol=1e-2, atol=1e-2)

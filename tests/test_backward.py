@@ -161,7 +161,8 @@ def test_atomic_csr_equivalence(Nq, Nd, Lq, Ld, d, rel):
     """Both backward paths consume the *same* argmax buffer, so they must agree
     up to fp32 reduction-order noise. grad_Q comes from the same kernel either
     way and must be bitwise identical."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
     D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32)
@@ -185,7 +186,8 @@ def test_atomic_csr_equivalence(Nq, Nd, Lq, Ld, d, rel):
 
 def test_atomic_csr_equivalence_bf16(rel):
     """bf16 inputs: grad_Q identical, grad_D within bf16 ULP drift."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.bfloat16)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -211,7 +213,8 @@ def test_auto_selects_a_valid_path(rel):
     """``auto`` must produce results matching *one of* the two explicit paths
     (whichever its heuristic selected). Run across shapes that exercise both
     branches of the heuristic."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     for Nq, Nd, Lq, Ld, d in [(2, 4, 16, 32, 128), (64, 64, 32, 128, 128)]:
         Q0 = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
@@ -253,7 +256,8 @@ def test_hot_bucket_single_winner(method):
     Atomic path: maximum cache-line contention. CSR path: one bucket holds
     ``Nq * Lq`` entries, all other buckets are empty. Both must produce nonzero
     grad on token 0 and exactly zero grad everywhere else."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Nq, Nd, Lq, Ld, d = 8, 4, 32, 64, 128
     # Deterministic: Q = +1, D[:, 0, :] = +1 (dot = d), D[:, t>0, :] = -1.
@@ -276,7 +280,8 @@ def test_hot_bucket_single_winner(method):
 def test_empty_buckets_write_zero():
     """Most CSR buckets are empty (only t=3 ever wins). The kernel must still
     write zeros to every non-winning ``(j, t)`` output cell."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Nq, Nd, Lq, Ld, d = 2, 2, 8, 64, 128
     Q = torch.ones(Nq, Lq, d, device="cuda", dtype=torch.float32)
@@ -306,7 +311,8 @@ def test_csr_is_bitwise_deterministic():
     """CSR is genuinely bitwise-deterministic: every bucket reduces in a fixed
     order inside one program, no atomics. Running backward three times on the
     same input must produce the exact same grad tensors."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.float32)
@@ -332,7 +338,8 @@ def test_atomic_is_numerically_stable_across_runs(rel):
     atomic path is *not* strictly bitwise-reproducible across runs — but the
     drift is bounded by fp32 ULP (~1e-6 relative). grad_Q (no atomics) still
     matches exactly."""
-    from late_interaction_kernels import maxsim, set_backward_method
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.float32)
