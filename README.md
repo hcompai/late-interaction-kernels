@@ -12,7 +12,7 @@ ColBERT · ColPali · ModernColBERT · LateOn · LateOn-Code · ColBERTv2 · PyL
 [![Triton](https://img.shields.io/badge/Triton-%E2%89%A5%203.0-9146ff.svg)](https://github.com/triton-lang/triton)
 [![PyLate](https://img.shields.io/badge/PyLate-%E2%89%A5%201.3-00b4d8.svg)](https://github.com/lightonai/pylate)
 
-[Install](#install) · [Quickstart](#quickstart) · [Speedups](#speedups-on-h100) · [API](#api) · [Benchmarks](docs/benchmarks.md) · [Design](docs/design.md) · [Models](docs/supported_models.md)
+[Install](#install) · [Quickstart](#quickstart) · [Speedups](#speedups-on-h100) · [API](#api) · 📖 [Walkthrough](https://hcompai.github.io/late-interaction-kernels/) · [Benchmarks](docs/benchmarks.md) · [Design](docs/design.md) · [Models](docs/supported_models.md)
 
 </div>
 
