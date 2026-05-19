@@ -66,32 +66,6 @@
     --o-idle:    oklch(93% 0.030 65);   --o-active:    oklch(52% 0.14 65);   /* ochre — running max */
     --done:      oklch(90% 0.045 150);
   }
-  html[data-theme="dark"], html[data-theme="auto"]:not([data-theme-loaded]) {}
-  @media (prefers-color-scheme: dark) {
-    html[data-theme="auto"] {
-      --bg:        oklch(15% 0.014 65);
-      --bg-soft:   oklch(18% 0.014 65);
-      --panel:     oklch(20% 0.015 65);
-      --line:      oklch(28% 0.014 65);
-      --line-soft: oklch(22% 0.014 65);
-      --ink:       oklch(92% 0.012 75);
-      --ink-mid:   oklch(72% 0.015 75);
-      --ink-dim:   oklch(55% 0.018 75);
-      --accent:    oklch(72% 0.13 25);
-      --accent-2:  oklch(68% 0.10 150);
-      --accent-3:  oklch(75% 0.13 65);
-      --warn:      oklch(70% 0.18 25);
-      --good:      oklch(68% 0.10 150);
-      --code-bg:   oklch(22% 0.016 65);
-      --hbm-fill:  oklch(17% 0.013 65);
-      --sram-fill: oklch(17% 0.013 65);
-      --q-idle:    oklch(28% 0.040 250);  --q-active:    oklch(60% 0.12 250);
-      --d-idle:    oklch(28% 0.040 150);  --d-active:    oklch(62% 0.11 150);
-      --s-idle:    oklch(28% 0.030 30);   --s-active:    oklch(64% 0.08 30);
-      --o-idle:    oklch(28% 0.045 65);   --o-active:    oklch(60% 0.15 65);
-      --done:      oklch(32% 0.055 150);
-    }
-  }
   html[data-theme="dark"] {
     --bg:        oklch(15% 0.014 65);
     --bg-soft:   oklch(18% 0.014 65);
@@ -216,27 +190,25 @@
     font-weight: 500;
   }
   .topbar .brand .dot { color: var(--accent); font-weight: 700; padding: 0 4px; }
-  .theme-select {
+  .theme-toggle {
     background: var(--bg-soft);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 999px;
+    width: 32px; height: 32px;
     color: var(--ink-mid);
-    padding: 6px 30px 6px 12px;
     cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    letter-spacing: 0.04em;
-    appearance: none; -webkit-appearance: none;
-    background-image:
-      linear-gradient(45deg, transparent 50%, currentColor 50%),
-      linear-gradient(135deg, currentColor 50%, transparent 50%);
-    background-position: calc(100% - 14px) 53%, calc(100% - 9px) 53%;
-    background-size: 5px 5px, 5px 5px;
-    background-repeat: no-repeat;
-    transition: color 120ms ease, border-color 120ms ease;
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease, transform 80ms ease;
   }
-  .theme-select:hover { color: var(--ink); border-color: var(--ink-mid); }
-  .theme-select:focus { outline: none; border-color: var(--accent); color: var(--ink); }
+  .theme-toggle:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 6%, var(--bg-soft));
+  }
+  .theme-toggle:active { transform: scale(0.94); }
+  .theme-toggle:focus  { outline: none; border-color: var(--accent); color: var(--accent); }
 
   .toc-toggle {
     background: var(--bg-soft);
@@ -579,14 +551,9 @@
       <span class="glyph" aria-hidden="true">◧</span>
       Contents
     </button>
-    <label class="theme-select-wrap" style="display:flex; align-items:center; gap:8px;">
-      <span style="font-family:var(--font-mono); font-size:11.5px; letter-spacing:0.04em; color:var(--ink-dim);">Theme</span>
-      <select class="theme-select" id="theme-select" aria-label="Theme">
-        <option value="auto">Auto</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme" title="Switch theme">
+      <span aria-hidden="true">☾</span>
+    </button>
   </div>
 </div>
 
@@ -1103,20 +1070,30 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 <!-- ===================== THEME TOGGLE ===================== -->
 <script>
 (function() {
+  var KEY = "lik-theme";
   var root = document.documentElement;
-  var sel  = document.getElementById("theme-select");
+  var btn  = document.getElementById("theme-toggle");
+  if (!btn) return;
+  var glyph = btn.querySelector("span");
+
   var saved = null;
-  try { saved = localStorage.getItem("lik-theme"); } catch (e) {}
-  var mode = saved || "auto";
-  function apply(m) {
-    root.setAttribute("data-theme", m);
-    sel.value = m;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  // Binary: only "light" or "dark". Legacy "auto" → light.
+  var theme = saved === "dark" ? "dark" : "light";
+
+  function apply(t) {
+    root.setAttribute("data-theme", t);
+    var label = t === "dark" ? "Switch to light theme" : "Switch to dark theme";
+    btn.setAttribute("aria-label", label);
+    btn.title = label;
+    if (glyph) glyph.textContent = t === "dark" ? "☀" : "☾";
   }
-  apply(mode);
-  sel.addEventListener("change", function() {
-    mode = sel.value;
-    try { localStorage.setItem("lik-theme", mode); } catch (e) {}
-    apply(mode);
+  apply(theme);
+
+  btn.addEventListener("click", function() {
+    theme = theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+    apply(theme);
   });
 })();
 </script>
