@@ -1,3 +1,5 @@
+<div align="center">
+
 # late-interaction-kernels
 
 [![ColBERT](https://img.shields.io/badge/ColBERT-2004.12832-b31b1b.svg?style=for-the-badge)](https://arxiv.org/abs/2004.12832)
@@ -15,6 +17,8 @@
 [[Design]](docs/design.md)
 [[Supported models]](docs/supported_models.md)
 [[Changelog]](CHANGELOG.md)
+
+</div>
 
 ## Introduction
 
