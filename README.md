@@ -1,18 +1,31 @@
 # late-interaction-kernels
 
+[![ColBERT](https://img.shields.io/badge/ColBERT-2004.12832-b31b1b.svg?style=for-the-badge)](https://arxiv.org/abs/2004.12832)
+[![PyLate](https://img.shields.io/badge/PyLate-100000?style=for-the-badge&logo=github&logoColor=white)](https://github.com/lightonai/pylate)
+[![ColPali](https://img.shields.io/badge/ColPali-100000?style=for-the-badge&logo=github&logoColor=white)](https://github.com/illuin-tech/colpali)
+[![Hugging Face](https://img.shields.io/badge/Hcompany-FFD21E?style=for-the-badge&logo=huggingface&logoColor=000)](https://huggingface.co/Hcompany)
+[![H Company](https://img.shields.io/badge/H_Company-000000?style=for-the-badge)](https://www.hcompany.ai)
+
 [![CI](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hcompai/late-interaction-kernels/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/pypi/v/late-interaction-kernels?color=%2334D058&label=pypi%20package)](https://pypi.org/project/late-interaction-kernels/)
 [![Downloads](https://static.pepy.tech/badge/late-interaction-kernels)](https://pepy.tech/project/late-interaction-kernels)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ---
 
 [[Benchmarks]](docs/benchmarks.md)
 [[Design]](docs/design.md)
-[[Models]](docs/supported_models.md)
+[[Supported models]](docs/supported_models.md)
 [[Changelog]](CHANGELOG.md)
 
-Fused Triton kernels for MaxSim — the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. Numerically identical to plain PyTorch, with an `nn.Module`, a function-level API, and a one-line PyLate drop-in. This is **not** a search engine; for end-to-end retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid) — this library is the MaxSim math they compile down to.
+## Introduction
+
+`late-interaction-kernels` ships fused Triton kernels for **MaxSim** — the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and expose three surfaces:
+
+- a one-line PyLate drop-in (`patch_pylate()`),
+- a stateless `nn.Module` (`MaxSimScorer`) for custom training loops,
+- function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
+
+This is **not** a search engine. For end-to-end retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid) — this library is the MaxSim math their reranking and training compile down to.
 
 ## Install
 
@@ -20,21 +33,29 @@ Fused Triton kernels for MaxSim — the late-interaction scoring at the heart of
 uv add late-interaction-kernels       # or: pip install late-interaction-kernels
 ```
 
-Linux + CUDA (sm_75+) hits the fused Triton path. macOS (Apple Silicon, MPS) uses a fused Metal `simdgroup_matrix` kernel for inference and `torch.compile` for training. CPU / Windows fall back to an autograd-aware pure-PyTorch reference, so training and retrieval code is unit-testable on a laptop. The PyLate drop-in targets PyLate ≥ 1.3.
+| Platform                       | Backend                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| Linux + CUDA (sm_75+)          | Fused Triton kernels (autotuned, FP8 on Hopper).                              |
+| macOS (Apple Silicon, MPS)     | Fused Metal `simdgroup_matrix` for inference, `torch.compile` for training.   |
+| CPU / Windows                  | Autograd-aware pure-PyTorch reference.                                        |
+
+> [!NOTE]
+> The PyLate drop-in targets PyLate ≥ 1.3. The pure-PyTorch reference imports on every platform, so training and retrieval code is unit-testable on a laptop before you rent a GPU.
 
 ## Quickstart
 
-The one-liner — speed up PyLate without touching your code:
+### Patch PyLate (one line)
 
 ```python
 from late_interaction_kernels import patch_pylate
 
 patch_pylate()
+# PyLate training / rerank code is unchanged
 ```
 
 Set `LIK_DISABLE=1` in the environment to fall back to vanilla PyLate at runtime.
 
-Custom training loop:
+### Custom training loop
 
 ```python
 from late_interaction_kernels import MaxSimScorer
@@ -44,7 +65,7 @@ scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
 
-Top-k retrieval over a corpus:
+### Top-k retrieval
 
 ```python
 from late_interaction_kernels import retrieve
@@ -53,7 +74,17 @@ scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
 # both [Nq, 100] — chunk= bounds peak HBM at Nq · (chunk + top_k)
 ```
 
-PLAID / ColBERTv2 rerank on compressed, ragged docs lives in `late_interaction_kernels.plaid`.
+### PLAID / ColBERTv2 on compressed, ragged docs
+
+```python
+from late_interaction_kernels.plaid import maxsim_residual_varlen
+
+scores = maxsim_residual_varlen(
+    Q, codes_flat, residuals_flat, cu_seqlens_d,
+    centroids=centroids, bucket_weights=bucket_weights,
+    nbits=2, normalize=True,
+)  # [Nd] fp32 — one kernel does decompress + L2-normalize + MaxSim
+```
 
 ## Benchmarks
 
@@ -69,22 +100,23 @@ PLAID / ColBERTv2 rerank on compressed, ragged docs lives in `late_interaction_k
 | FP8 MaxSim inference (Hopper)                      | up to 1.4×        |
 | End-to-end training of a 149 M encoder             | 1.00–1.06× (free) |
 
-Wherever MaxSim stops being negligible — inference, reranking, long docs, big effective batch, KD, compressed indices, small encoders — the fused path moves. Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md).
+Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## API
-
-Three symbols cover most use cases:
 
 | Symbol                                | What it does                                                          |
 | ------------------------------------- | --------------------------------------------------------------------- |
 | `patch_pylate()` / `unpatch_pylate()` | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                 |
 | `MaxSimScorer(normalize=, backward=)` | Stateless `nn.Module`, autograd-aware.                                |
 | `retrieve(Q, D, top_k, chunk=)`       | Top-k retrieval, chunked for huge corpora.                            |
+| `maxsim` / `maxsim_inference`         | Core MaxSim, dense layout (autograd / forward-only).                  |
+| `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
+| `maxsim_padded`                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 
-Function-level entry points (`maxsim`, `maxsim_inference`, `maxsim_varlen`, `maxsim_padded`) sit alongside these on the top-level package. Niche kernels live in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `experimental`, `reference`. Walk-through of every kernel, the autograd graph, the backward variants and the numerics: [`docs/design.md`](docs/design.md).
+Niche kernels live in submodules — `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `experimental`, `reference`. Full walk-through of every kernel, the autograd graph, the backward variants and the numerics: [`docs/design.md`](docs/design.md).
 
 <details>
-<summary>Configuration knobs (env vars + kwargs)</summary>
+<summary><strong>🔽 Configuration knobs (env vars + kwargs)</strong></summary>
 
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -93,18 +125,7 @@ Function-level entry points (`maxsim`, `maxsim_inference`, `maxsim_varlen`, `max
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                  |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |
-| `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`                 | Pin the MPS dispatch (default: heuristic on shape).               |
-
-</details>
-
-<details>
-<summary>Hardware support &amp; autotune details</summary>
-
-Primary target: **H100 / H200** (autotuned, FP8 WGMMA, warp-specialized on Triton ≥ 3.2). Also tuned for **A100**, **Ada** (L4 / L40 / 4090) and **Ampere** (A10 / A40 / 3090). Older / unknown CUDA falls back to a conservative shortlist.
-
-**Apple Silicon (MPS)** ships two paths and picks per call: a fused Metal `simdgroup_matrix` kernel (forward-only, 1.9–3.2× over plain PyTorch on realistic inference shapes, ~300× less peak memory because it never materialises `[Nq · Nd · Lq · Ld]`), and a `torch.compile`-fused reference for training-time calls and small-batch inference where the Metal launch overhead doesn't amortise.
-
-Autotune runs once per unique `(Lq, Ld, d, masks)` signature on CUDA and caches the winner; the MPS compile cache keys on `(dtype, normalize, has_q_mask, has_d_mask)` and amortises after the first call.
+| `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`                 | Pin the MPS dispatch.                                             |
 
 </details>
 
@@ -118,11 +139,8 @@ uv run pytest -q                             # CUDA tests auto-skip without a GP
 uv run ruff check . && uv run ruff format --check .
 ```
 
-`uv sync` installs CPU-only torch (per `[tool.uv.sources]` in `pyproject.toml`) so CI doesn't pull the multi-GB CUDA wheel. For local GPU dev:
-
-```bash
-UV_INDEX=https://download.pytorch.org/whl/cu124 uv sync --extra dev --extra pylate
-```
+> [!NOTE]
+> `uv sync` installs CPU-only torch (per `[tool.uv.sources]` in `pyproject.toml`) so CI doesn't pull the multi-GB CUDA wheel. For local GPU dev: `UV_INDEX=https://download.pytorch.org/whl/cu124 uv sync --extra dev --extra pylate`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 
@@ -137,4 +155,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 }
 ```
 
-Aurélien Lac · Tony Wu — H Company · Apache 2.0 (see [`LICENSE`](LICENSE)). Direct inspiration: [flash-maxsim](https://github.com/roipony/flash-maxsim) (IBM, the first public Triton MaxSim) and [FlashAttention](https://github.com/Dao-AILab/flash-attention).
+Aurélien Lac · Tony Wu — H Company · Apache 2.0 (see [`LICENSE`](LICENSE)). Direct inspiration: flash-maxsim and [FlashAttention](https://github.com/Dao-AILab/flash-attention).
