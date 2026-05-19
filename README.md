@@ -153,5 +153,3 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
   url     = {https://github.com/hcompai/late-interaction-kernels},
 }
 ```
-
-Aurélien Lac · Tony Wu, H Company · Apache 2.0 (see [`LICENSE`](LICENSE)). Direct inspiration: flash-maxsim and [FlashAttention](https://github.com/Dao-AILab/flash-attention).
