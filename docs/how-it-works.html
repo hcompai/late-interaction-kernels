@@ -238,13 +238,51 @@
   .theme-select:hover { color: var(--ink); border-color: var(--ink-mid); }
   .theme-select:focus { outline: none; border-color: var(--accent); color: var(--ink); }
 
+  .toc-toggle {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink-mid);
+    padding: 6px 12px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  }
+  .toc-toggle .glyph {
+    font-size: 13px;
+    line-height: 1;
+    color: var(--ink-dim);
+    transition: color 120ms ease;
+  }
+  .toc-toggle:hover  { color: var(--ink); border-color: var(--ink-mid); }
+  .toc-toggle:hover .glyph { color: var(--ink-mid); }
+  .toc-toggle:focus  { outline: none; border-color: var(--accent); color: var(--ink); }
+  .toc-toggle[aria-pressed="true"] {
+    background: color-mix(in oklch, var(--accent) 7%, var(--bg-soft));
+    border-color: color-mix(in oklch, var(--accent) 32%, var(--line));
+    color: var(--accent);
+  }
+  .toc-toggle[aria-pressed="true"] .glyph { color: var(--accent); }
+
   .layout {
     display: grid;
     grid-template-columns: 240px minmax(0, 1fr);
     gap: 56px;
     max-width: 1200px; margin: 0 auto;
     padding: 40px 28px 112px;
+    transition: grid-template-columns 200ms ease;
   }
+  html[data-toc="collapsed"] .layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 820px;
+  }
+  html[data-toc="collapsed"] aside.toc { display: none; }
+  html[data-toc="collapsed"] main { margin: 0 auto; }
   aside.toc {
     position: sticky; top: 76px; align-self: start;
     height: calc(100vh - 100px); overflow-y: auto;
@@ -525,6 +563,7 @@
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px 80px; }
     aside.toc { display: none; }
+    .toc-toggle { display: none; }
     .anim-grid { grid-template-columns: 1fr; }
     body { font-size: 16.5px; }
     h1 { font-size: clamp(1.85rem, 7vw, 2.4rem); }
@@ -535,14 +574,20 @@
 
 <div class="topbar">
   <div class="brand">late-interaction-kernels <span class="dot">·</span> design walkthrough</div>
-  <label class="theme-select-wrap" style="display:flex; align-items:center; gap:8px;">
-    <span style="font-family:var(--mono); font-size:12px; color:var(--ink-dim);">Theme</span>
-    <select class="theme-select" id="theme-select" aria-label="Theme">
-      <option value="auto">Auto</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
-  </label>
+  <div class="topbar-actions" style="display:flex; align-items:center; gap:10px;">
+    <button class="toc-toggle" id="toc-toggle" type="button" aria-pressed="true" aria-controls="toc" aria-label="Toggle contents">
+      <span class="glyph" aria-hidden="true">◧</span>
+      Contents
+    </button>
+    <label class="theme-select-wrap" style="display:flex; align-items:center; gap:8px;">
+      <span style="font-family:var(--font-mono); font-size:11.5px; letter-spacing:0.04em; color:var(--ink-dim);">Theme</span>
+      <select class="theme-select" id="theme-select" aria-label="Theme">
+        <option value="auto">Auto</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  </div>
 </div>
 
 <div class="layout">
@@ -1072,6 +1117,36 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     mode = sel.value;
     try { localStorage.setItem("lik-theme", mode); } catch (e) {}
     apply(mode);
+  });
+})();
+</script>
+
+<!-- ===================== TOC COLLAPSE TOGGLE ===================== -->
+<script>
+(function() {
+  var KEY = "lik-toc";
+  var html = document.documentElement;
+  var btn = document.getElementById("toc-toggle");
+  if (!btn) return;
+
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  var state = saved === "collapsed" ? "collapsed" : "expanded";
+
+  function apply(s) {
+    if (s === "collapsed") html.setAttribute("data-toc", "collapsed");
+    else html.removeAttribute("data-toc");
+    btn.setAttribute("aria-pressed", s === "expanded" ? "true" : "false");
+    var glyph = btn.querySelector(".glyph");
+    if (glyph) glyph.textContent = s === "expanded" ? "◧" : "◨";
+    btn.setAttribute("aria-label", s === "expanded" ? "Hide contents" : "Show contents");
+  }
+  apply(state);
+
+  btn.addEventListener("click", function() {
+    state = state === "expanded" ? "collapsed" : "expanded";
+    try { localStorage.setItem(KEY, state); } catch (e) {}
+    apply(state);
   });
 })();
 </script>
