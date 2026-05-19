@@ -6,7 +6,7 @@ and friends therefore can't run on ``mps:0`` tensors.
 
 Two MaxSim implementations cover the gap:
 
-* :mod:`._mps` (this module) ships a ``torch.compile``-fused reference.
+* :mod:`.compile_dispatch` (this module) ships a ``torch.compile``-fused reference.
   Inductor lowers the einsum + max + sum chain to a single MPSGraph,
   typically ≈2× faster than eager. The compile path is autograd-aware,
   so it carries every training-time call.
