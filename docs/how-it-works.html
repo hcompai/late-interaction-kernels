@@ -1,0 +1,1291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>How the late-interaction kernels work</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body, {delimiters:[
+          {left:'$$',right:'$$',display:true},
+          {left:'$',right:'$',display:false}
+        ]});"></script>
+
+<style>
+  /* ===================== THEME ===================== */
+  :root {
+    color-scheme: light dark;
+    --bg:        #f7f8fa;
+    --bg-soft:   #ffffff;
+    --panel:     #ffffff;
+    --line:      #e2e5ec;
+    --line-soft: #eef0f4;
+    --ink:       #1d2230;
+    --ink-mid:   #4a5160;
+    --ink-dim:   #6e7689;
+    --accent:    #6c2bd9;    /* triton-ish purple */
+    --accent-2:  #0a8c84;    /* teal */
+    --accent-3:  #b35900;    /* amber for highlights */
+    --warn:      #c93a3a;
+    --good:      #178a3a;
+    --code-bg:   #f1f3f7;
+    --mono:      ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --hbm-fill:  #f6f7fb;
+    --sram-fill: #f6f7fb;
+
+    --q-idle:  #dce3f3;  --q-active:  #6680c4;
+    --d-idle:  #d6ecea;  --d-active:  #3a9d95;
+    --s-idle:  #efe6f6;  --s-active:  #a675e6;
+    --o-idle:  #f3e7d6;  --o-active:  #d18a3a;
+    --done:    #cfe8d4;
+  }
+  html[data-theme="dark"], html[data-theme="auto"]:not([data-theme-loaded]) {}
+  @media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] {
+      --bg:        #0d1017;
+      --bg-soft:   #141823;
+      --panel:     #161b27;
+      --line:      #262c3b;
+      --line-soft: #1d2231;
+      --ink:       #e6e9f2;
+      --ink-mid:   #b6bccd;
+      --ink-dim:   #8a91a4;
+      --accent:    #b794ff;
+      --accent-2:  #5fd3c9;
+      --accent-3:  #ffb86b;
+      --warn:      #ff7676;
+      --good:      #6fe27a;
+      --code-bg:   #1b2030;
+      --hbm-fill:  #11151f;
+      --sram-fill: #11151f;
+      --q-idle:    #1f2b46;  --q-active:    #4a6bb3;
+      --d-idle:    #14322f;  --d-active:    #2cb3a8;
+      --s-idle:    #2a1f3a;  --s-active:    #a675e6;
+      --o-idle:    #3a2a1a;  --o-active:    #d18a3a;
+      --done:      #1f3a26;
+    }
+  }
+  html[data-theme="dark"] {
+    --bg:        #0d1017;
+    --bg-soft:   #141823;
+    --panel:     #161b27;
+    --line:      #262c3b;
+    --line-soft: #1d2231;
+    --ink:       #e6e9f2;
+    --ink-mid:   #b6bccd;
+    --ink-dim:   #8a91a4;
+    --accent:    #b794ff;
+    --accent-2:  #5fd3c9;
+    --accent-3:  #ffb86b;
+    --warn:      #ff7676;
+    --good:      #6fe27a;
+    --code-bg:   #1b2030;
+    --hbm-fill:  #11151f;
+    --sram-fill: #11151f;
+    --q-idle:    #1f2b46;  --q-active:    #4a6bb3;
+    --d-idle:    #14322f;  --d-active:    #2cb3a8;
+    --s-idle:    #2a1f3a;  --s-active:    #a675e6;
+    --o-idle:    #3a2a1a;  --o-active:    #d18a3a;
+    --done:      #1f3a26;
+  }
+
+  /* ===================== BASE ===================== */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font: 15.5px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--accent); }
+  code, .mono { font-family: var(--mono); font-size: 0.92em; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; color: var(--accent-2); }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  }
+  h1, h2, h3 { letter-spacing: -0.01em; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 4px 0 12px; font-weight: 700; }
+  h2 { font-size: 22px; margin: 0 0 8px; font-weight: 650; display: flex; align-items: baseline; gap: 12px; }
+  h2 .num {
+    font-family: var(--mono); font-size: 11.5px; color: var(--accent);
+    border: 1px solid var(--accent); padding: 2px 7px; border-radius: 999px; line-height: 1;
+  }
+  h3 { font-size: 16px; margin: 18px 0 6px; color: var(--ink-mid); font-weight: 600; }
+  p { margin: 8px 0 12px; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+
+  /* ===================== LAYOUT ===================== */
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 24px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .topbar .brand {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-mid); letter-spacing: 0.02em;
+  }
+  .topbar .brand .dot { color: var(--accent); }
+  .theme-select {
+    background: var(--bg-soft); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--ink-mid); padding: 5px 28px 5px 10px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px;
+    appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink-mid) 50%),
+                      linear-gradient(135deg, var(--ink-mid) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  .theme-select:hover { color: var(--ink); border-color: var(--ink-mid); }
+  .theme-select:focus { outline: none; border-color: var(--accent); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 48px;
+    max-width: 1180px; margin: 0 auto;
+    padding: 32px 24px 96px;
+  }
+  aside.toc {
+    position: sticky; top: 72px; align-self: start;
+    height: calc(100vh - 96px); overflow-y: auto;
+    border-left: 1px solid var(--line); padding-left: 18px;
+  }
+  aside.toc .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    color: var(--ink-dim); text-transform: uppercase; margin-bottom: 8px;
+  }
+  aside.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+  aside.toc li { counter-increment: toc; margin: 4px 0; }
+  aside.toc a {
+    display: block; padding: 4px 8px; border-radius: 4px;
+    color: var(--ink-mid); font-size: 13px; line-height: 1.35;
+    border: none;
+  }
+  aside.toc a::before {
+    content: counter(toc, decimal-leading-zero);
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim);
+    margin-right: 8px;
+  }
+  aside.toc a:hover { background: var(--line-soft); color: var(--ink); }
+  aside.toc a.active { color: var(--accent); background: var(--line-soft); }
+
+  main { min-width: 0; max-width: 760px; }
+  section { margin-top: 44px; scroll-margin-top: 80px; }
+  section:first-of-type { margin-top: 0; }
+  .lede { color: var(--ink-mid); font-size: 17px; max-width: 60ch; }
+
+  /* ===================== UTILITIES ===================== */
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px;
+    margin: 14px 0;
+  }
+  .note {
+    border-left: 3px solid var(--accent-2); background: var(--line-soft);
+    padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 12px 0;
+    font-size: 14px; color: var(--ink-mid);
+  }
+  .note strong { color: var(--ink); }
+  table.tbl {
+    width: 100%; border-collapse: collapse; font-size: 14px; margin: 8px 0;
+  }
+  table.tbl th, table.tbl td {
+    text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line);
+  }
+  table.tbl th {
+    color: var(--ink-dim); font-weight: 500; font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  table.tbl td.num { font-family: var(--mono); color: var(--accent-2); }
+  table.tbl tr:last-child td { border-bottom: none; }
+
+  /* ===================== HERO TAG ===================== */
+  .eyebrow {
+    display: inline-block;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+    color: var(--accent-2); text-transform: uppercase;
+    border: 1px solid var(--accent-2); padding: 3px 9px; border-radius: 999px;
+    margin-bottom: 14px;
+  }
+
+  /* ===================== MEMORY HIERARCHY ===================== */
+  .mem-bar {
+    height: 8px; border-radius: 4px; margin: 6px 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+
+  /* ===================== NAIVE BLOW-UP CHART ===================== */
+  .chart-wrap { position: relative; }
+  .chart-wrap svg { display: block; width: 100%; height: auto; }
+  .chart-legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    font-size: 12px; color: var(--ink-mid); margin-top: 10px;
+    font-family: var(--mono);
+  }
+  .chart-legend .sw {
+    display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+    vertical-align: -2px; margin-right: 6px;
+  }
+
+  /* ===================== INTERACTIVE ANIMATION ===================== */
+  .anim-box { margin-top: 8px; }
+  .anim-stage svg { display: block; width: 100%; height: auto; }
+  .anim-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;
+  }
+  .anim-panel {
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px;
+  }
+  .anim-panel h4 {
+    margin: 0 0 6px; font-family: var(--mono); font-size: 11.5px;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-2);
+    font-weight: 600;
+  }
+  .stat-grid {
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+    font-family: var(--mono); font-size: 12.5px;
+  }
+  .stat-grid .k { color: var(--ink-dim); }
+  .stat-grid .v { color: var(--ink); }
+  .stat-grid .v.hot { color: var(--accent-2); }
+  .stat-grid .v.warn { color: var(--warn); }
+
+  .anim-log {
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; margin-top: 10px;
+    height: 132px; overflow-y: auto;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+    color: var(--ink-mid);
+  }
+  .anim-log .ln-load { color: #2c79c7; }
+  .anim-log .ln-comp { color: var(--accent); }
+  .anim-log .ln-write { color: var(--accent-3); }
+  .anim-log .ln-meta { color: var(--ink-dim); }
+  html[data-theme="dark"] .anim-log .ln-load,
+  @media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] .anim-log .ln-load { color: #7cc4ff; }
+  }
+
+  .anim-controls {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    margin-top: 10px;
+  }
+  .anim-controls button {
+    background: var(--bg-soft); border: 1px solid var(--line);
+    color: var(--ink); padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px;
+  }
+  .anim-controls button:hover { border-color: var(--accent); color: var(--accent); }
+  .anim-controls .status {
+    margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+  }
+
+  .legend-row {
+    display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px;
+    color: var(--ink-dim); margin-top: 8px; font-family: var(--mono);
+  }
+  .legend-row .sw {
+    display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+    vertical-align: -2px; margin-right: 5px; border: 1px solid var(--line);
+  }
+
+  /* responsive */
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; gap: 16px; }
+    aside.toc { display: none; }
+    .anim-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">late-interaction-kernels <span class="dot">·</span> design walkthrough</div>
+  <label class="theme-select-wrap" style="display:flex; align-items:center; gap:8px;">
+    <span style="font-family:var(--mono); font-size:12px; color:var(--ink-dim);">Theme</span>
+    <select class="theme-select" id="theme-select" aria-label="Theme">
+      <option value="auto">Auto</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </label>
+</div>
+
+<div class="layout">
+
+<aside class="toc" id="toc">
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#problem">The MaxSim score</a></li>
+    <li><a href="#hierarchy">GPU memory hierarchy</a></li>
+    <li><a href="#naive">Why the naive form is bandwidth-bound</a></li>
+    <li><a href="#fused">Fused forward: tile, stream, accumulate</a></li>
+    <li><a href="#online-max">The online-max recurrence</a></li>
+    <li><a href="#backward">Backward: argmax-only gradients</a></li>
+    <li><a href="#perf">Performance summary</a></li>
+    <li><a href="#variants">Variants in the library</a></li>
+  </ol>
+</aside>
+
+<main>
+
+<header>
+  <div class="eyebrow">how it works</div>
+  <h1>Scoring every query–document token pair without materialising the table</h1>
+  <p class="lede">
+    Late-interaction retrieval models compare every query token to every
+    document token. A direct implementation builds a four-dimensional similarity
+    tensor that overflows GPU memory at modern context lengths. The kernels in
+    this library compute the same result without ever storing that tensor — by
+    streaming tiles through on-chip memory and folding the reductions into the
+    same pass.
+  </p>
+</header>
+
+<!-- ============================================================ -->
+<section id="problem">
+  <h2><span class="num">1</span>The MaxSim score</h2>
+
+  <p>
+    A late-interaction encoder turns a query and a document into sequences of
+    token-level vectors, $Q \in \mathbb{R}^{L_q \times d}$ and
+    $D \in \mathbb{R}^{L_d \times d}$. The relevance score introduced by
+    ColBERT is:
+  </p>
+
+  <p>
+    $$\operatorname{score}(Q, D) \;=\; \sum_{s=1}^{L_q} \; \max_{t=1}^{L_d} \; \langle Q_s, D_t \rangle.$$
+  </p>
+
+  <p>
+    For each query token, take the largest inner product against any document
+    token, and sum across the query. In practice we score a batch of queries
+    against a batch of documents at once, so the input shapes are
+    $Q \in \mathbb{R}^{N_q \times L_q \times d}$ and
+    $D \in \mathbb{R}^{N_d \times L_d \times d}$, and the output is a matrix
+    of scores in $\mathbb{R}^{N_q \times N_d}$. Optional boolean masks drop
+    padding tokens from the sum and from the inner max.
+  </p>
+
+  <div class="note">
+    <strong>Why this is hard.</strong> Computing one score touches every
+    $(s, t)$ pair, i.e. $L_q \cdot L_d$ inner products. At ColPali scale
+    ($L_q = L_d = 1024$) that is over a million dot products <em>per
+    query–document pair</em>. The interesting question is not how many
+    operations to do — the GPU can do them — but how to do them without
+    spilling intermediate results to off-chip memory.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="hierarchy">
+  <h2><span class="num">2</span>GPU memory hierarchy</h2>
+
+  <p>
+    Modern GPUs are dramatically faster at arithmetic than at moving data. An
+    H100 can sustain roughly $990$ TFLOP/s of bf16 tensor-core throughput
+    against $3.3$ TB/s of HBM bandwidth — a ratio of about $300$ FLOPs per
+    byte. Any kernel that moves data more aggressively than it computes on it
+    becomes <em>bandwidth-bound</em>, and the SMs sit idle waiting for memory.
+  </p>
+
+  <p>
+    The trick to writing a fast kernel is therefore not to write faster
+    arithmetic, but to write fewer round-trips to HBM. The hierarchy in play:
+  </p>
+
+  <table class="tbl">
+    <thead>
+      <tr><th>Level</th><th>Size</th><th>Bandwidth</th><th>Where it lives</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Registers</td>            <td>256 KB / SM</td>          <td>~20 TB/s</td>   <td>Inside each thread</td></tr>
+      <tr><td>SRAM (shared memory)</td> <td>228 KB / SM (H100)</td>   <td>~19 TB/s</td>   <td>On-chip, per SM</td></tr>
+      <tr><td>L2 cache</td>             <td>50 MB (H100)</td>         <td>~5 TB/s</td>    <td>On-chip, chip-wide</td></tr>
+      <tr><td>HBM</td>                  <td>80 GB (H100)</td>         <td>~3.3 TB/s</td>  <td>Off-chip, on the package</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    SRAM is roughly six times faster than HBM and registers another four times
+    faster than SRAM. A <em>kernel</em> is a small program the GPU runs in
+    parallel; a <em>fused</em> kernel chains several logical operations
+    back-to-back inside SRAM and registers, writing only the final result to
+    HBM. That is the entire optimisation strategy used below.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="naive">
+  <h2><span class="num">3</span>Why the naive form is bandwidth-bound</h2>
+
+  <p>
+    The textbook implementation of MaxSim — the one inside PyLate's reference
+    code — separates the two reductions:
+  </p>
+
+<pre><code>S = einsum("nsd, mtd -&gt; nmst", Q, D)   <span style="color:var(--ink-dim)"># [Nq, Nd, Lq, Ld]  ← lives in HBM</span>
+M = S.max(dim=-1).values               <span style="color:var(--ink-dim)"># [Nq, Nd, Lq]      ← max over t</span>
+scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq, Nd]          ← sum over s</span>
+</code></pre>
+
+  <p>
+    The full similarity tensor $S$ is written to HBM, then read back to take
+    the row-wise max, then read again for the sum. Its memory footprint is
+  </p>
+
+  <p>
+    $$\text{bytes}(S) \;=\; N_q \cdot N_d \cdot L_q \cdot L_d \cdot \text{sizeof(float)}.$$
+  </p>
+
+  <p>
+    Scaling is quadratic in the sequence length. At ColPali shapes
+    ($N_q = N_d = 64$, $L_q = L_d = 1024$, fp32) the tensor is $16$ GB; in
+    fp16 it is $8$ GB. Training builds three or four such intermediates per
+    step. The chart shows the same number plotted as a function of the
+    sequence length:
+  </p>
+
+  <div class="panel">
+    <div class="chart-wrap">
+      <svg viewBox="0 0 720 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Peak HBM memory vs sequence length">
+        <!-- axes -->
+        <line x1="60"  y1="240" x2="700" y2="240" stroke="currentColor" stroke-opacity="0.3" />
+        <line x1="60"  y1="20"  x2="60"  y2="240" stroke="currentColor" stroke-opacity="0.3" />
+
+        <!-- 80 GB GPU memory limit -->
+        <line x1="60" y1="60" x2="700" y2="60" stroke="var(--warn)" stroke-dasharray="4,4" stroke-width="1"/>
+        <text x="695" y="54" fill="var(--warn)" font-size="11" text-anchor="end" font-family="var(--mono)">80 GB · H100 limit</text>
+
+        <!-- Naive curve: quadratic in L  (Nq=Nd=64, d=128, fp16) -->
+        <!-- bytes = Nq*Nd*L*L*2 . Map L∈[128, 2048] to x∈[60, 700], bytes∈[0, ~33 GB] to y∈[240, 20] -->
+        <path d="M 60 240
+                 L 100 239.2
+                 L 140 237.4
+                 L 180 234.4
+                 L 220 230.3
+                 L 260 224.9
+                 L 300 218.3
+                 L 340 210.4
+                 L 380 201.3
+                 L 420 191.0
+                 L 460 179.4
+                 L 500 166.7
+                 L 540 152.6
+                 L 580 137.4
+                 L 620 121.0
+                 L 660 103.3
+                 L 700 84.3"
+              fill="none" stroke="var(--warn)" stroke-width="2.5" />
+        <text x="700" y="78" fill="var(--warn)" font-size="12" text-anchor="end" font-weight="600">Naive · materialises S</text>
+
+        <!-- Fused: nearly flat, only the output [Nq, Nd] scalars + Q, D themselves -->
+        <line x1="60" y1="235" x2="700" y2="232" stroke="var(--accent-2)" stroke-width="2.5"/>
+        <text x="700" y="225" fill="var(--accent-2)" font-size="12" text-anchor="end" font-weight="600">Fused · streams tiles</text>
+
+        <!-- x-axis ticks -->
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="middle">
+          <text x="60"  y="258">256</text>
+          <text x="220" y="258">768</text>
+          <text x="380" y="258">1280</text>
+          <text x="540" y="258">1792</text>
+          <text x="700" y="258">2048</text>
+        </g>
+        <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">sequence length L (L_q = L_d)</text>
+
+        <!-- y-axis ticks -->
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="end">
+          <text x="55" y="244">0</text>
+          <text x="55" y="184">8 GB</text>
+          <text x="55" y="124">16 GB</text>
+          <text x="55" y="64">24 GB</text>
+        </g>
+        <text x="20" y="130" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)" transform="rotate(-90 20 130)">peak HBM for one S</text>
+      </svg>
+      <div class="chart-legend">
+        <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $N_q = N_d = 64$</span>
+        <span><span class="sw" style="background:var(--accent-2)"></span>fused kernel — only the $[N_q, N_d]$ score matrix</span>
+      </div>
+    </div>
+  </div>
+
+  <p>
+    Beyond the memory pressure, the naive version is bandwidth-bound: each
+    element of $S$ is written to HBM once and read twice for a single
+    multiply-add per element. The arithmetic intensity is far below the
+    H100 ridge point, so the SMs spend most of their time waiting on memory.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="fused">
+  <h2><span class="num">4</span>Fused forward: tile, stream, accumulate</h2>
+
+  <p>
+    The fused kernel launches one Triton program per $(q\text{-batch},
+    d\text{-batch})$ pair. Inside the program, the document is processed in
+    tiles of $\text{BLOCK\_D}$ rows; the query is processed in tiles of
+    $\text{BLOCK\_Q}$ rows. The full similarity tensor $S$ never exists in
+    HBM — only $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slices of it, live in
+    SRAM for the duration of one tile-matmul.
+  </p>
+
+<pre><code><span style="color:var(--ink-dim)"># one program per (q_batch, d_batch)</span>
+score ← 0
+for q_start in range(0, Lq, BLOCK_Q):
+    Q_tile ← Q[q_batch, q_start : q_start + BLOCK_Q]      <span style="color:var(--ink-dim)"># SRAM</span>
+    m     ← −∞                                            <span style="color:var(--ink-dim)"># [BLOCK_Q] in registers</span>
+    for d_start in range(0, Ld, BLOCK_D):
+        D_tile ← D[d_batch, d_start : d_start + BLOCK_D]  <span style="color:var(--ink-dim)"># SRAM</span>
+        S_tile  = Q_tile @ D_tileᵀ                        <span style="color:var(--ink-dim)"># tensor cores, fp32 acc</span>
+        S_tile ← mask(S_tile, d_active, −∞)               <span style="color:var(--ink-dim)"># fused-in masking</span>
+        m      ← maximum(m, rowmax(S_tile))               <span style="color:var(--ink-dim)"># online max</span>
+    score += sum(m)                                       <span style="color:var(--ink-dim)"># contribution from this Q tile</span>
+scores[q_batch, d_batch] ← score                           <span style="color:var(--ink-dim)"># only this scalar is written</span>
+</code></pre>
+
+  <p>
+    The structure is the same outer-product tiling that FlashAttention uses,
+    with one simplification: where FlashAttention has to maintain a running
+    max <em>and</em> a running sum of exponentials for softmax,
+    MaxSim only has a running max. The recurrence is exact and there is
+    nothing to rescale.
+  </p>
+
+  <p>
+    Peak SRAM per program is
+    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ for the operand tiles plus
+    $\text{BLOCK\_Q} \cdot \text{BLOCK\_D}$ for the score tile, in low
+    precision, with a $[\text{BLOCK\_Q}]$ fp32 accumulator on top — roughly
+    40 KiB at typical block sizes, leaving room for four concurrent programs
+    per H100 SM.
+  </p>
+
+  <h3>Step through the algorithm</h3>
+  <p>
+    Below is a toy execution with $L_q = 4$, $L_d = 12$, $d = 4$,
+    $\text{BLOCK\_Q} = 4$ (one outer iteration) and $\text{BLOCK\_D} = 4$
+    (three inner iterations). Use the controls to step through; the counters
+    on the right track HBM bytes moved versus the naive baseline.
+  </p>
+
+  <div class="panel anim-box">
+    <div class="anim-stage">
+      <svg id="fwd-svg" viewBox="0 0 880 360" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="anim-grid">
+      <div class="anim-panel">
+        <h4>State (current tile)</h4>
+        <div class="stat-grid" id="fwd-stats">
+          <div class="k">q_start</div><div class="v" id="fwd-qs">—</div>
+          <div class="k">d_start</div><div class="v" id="fwd-ds">—</div>
+          <div class="k">running max  m</div><div class="v hot" id="fwd-m">—</div>
+          <div class="k">partial sum  Σm</div><div class="v hot" id="fwd-sum">—</div>
+          <div class="k">score (final)</div><div class="v" id="fwd-score">—</div>
+        </div>
+      </div>
+      <div class="anim-panel">
+        <h4>HBM traffic (one program)</h4>
+        <div class="stat-grid">
+          <div class="k">reads</div><div class="v" id="fwd-reads">0 B</div>
+          <div class="k">writes</div><div class="v" id="fwd-writes">0 B</div>
+          <div class="k">total · fused</div><div class="v hot" id="fwd-total">0 B</div>
+          <div class="k">naive baseline</div><div class="v warn" id="fwd-naive">0 B</div>
+          <div class="k">ratio</div><div class="v" id="fwd-ratio">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="anim-log" id="fwd-log"></div>
+
+    <div class="anim-controls">
+      <button id="fwd-prev">◀ Prev</button>
+      <button id="fwd-next">Next ▶</button>
+      <button id="fwd-play">▶ Play</button>
+      <button id="fwd-reset">⟲ Reset</button>
+      <span class="status" id="fwd-status">step 0 / 0</span>
+    </div>
+
+    <div class="legend-row">
+      <span><span class="sw" style="background:var(--q-active)"></span>Q (active)</span>
+      <span><span class="sw" style="background:var(--d-active)"></span>D (active)</span>
+      <span><span class="sw" style="background:var(--s-active)"></span>S tile · ephemeral, SRAM only</span>
+      <span><span class="sw" style="background:var(--o-active)"></span>running max m</span>
+      <span><span class="sw" style="background:var(--done)"></span>consumed</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="online-max">
+  <h2><span class="num">5</span>The online-max recurrence</h2>
+
+  <p>
+    To eliminate the score tile entirely, the inner loop replaces every value
+    of $S$ with its contribution to the per-row maximum, which we update
+    incrementally. After consuming the $k$-th tile, the running max obeys
+  </p>
+
+  <p>
+    $$m^{(k)} \;=\; \max\!\bigl(m^{(k-1)},\;\; \operatorname{rowmax}(S^{(k)})\bigr),$$
+  </p>
+
+  <p>
+    with $m^{(0)} = -\infty$. After all tiles are consumed, $m$ is the true
+    per-row maximum and $\sum_s m_s$ is the score contribution for the current
+    $\text{BLOCK\_Q}$. Both quantities are computed in fp32 in registers; the
+    GEMM uses bf16/fp16 operands with fp32 accumulation, matching the
+    tensor-core native path.
+  </p>
+
+  <div class="note">
+    <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
+    softmax has to track $m$ <em>and</em> the running sum of exponentials
+    $\ell$, and rescale both whenever the running max changes — the rescalers
+    are the $\exp(m^{(k-1)} - m^{(k)})$ factors in FA-1. Online max has no such
+    rescaler: $\max$ is idempotent, so the update is just an elementwise max
+    and the result is identical to the offline computation.
+  </div>
+
+  <h3>Worked example</h3>
+  <p>Three doc-tiles, one query row. The argmax index is recorded for backward.</p>
+
+  <table class="tbl">
+    <thead>
+      <tr><th>Tile</th><th>$S$ row (values seen this tile)</th><th>tile max</th><th>running max after tile</th><th>argmax (global $t$)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>0</td><td><span class="mono">[0.42, 0.11, 0.30, 0.18]</span></td><td class="num">0.42</td><td class="num">0.42</td><td class="num">0</td></tr>
+      <tr><td>1</td><td><span class="mono">[0.20, 0.55, 0.05, 0.31]</span></td><td class="num">0.55</td><td class="num">0.55</td><td class="num">5</td></tr>
+      <tr><td>2</td><td><span class="mono">[0.49, 0.40, 0.50, 0.22]</span></td><td class="num">0.50</td><td class="num">0.55</td><td class="num">5</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Masked positions are written as $-\infty$ <em>before</em> the reduction,
+    so they cannot influence the argmax even when scores would otherwise be
+    negative. This is stricter than PyLate's reference, which post-multiplies
+    by a $0/1$ mask, and matches the masking discipline used by
+    <code>flash-maxsim</code> and FlashAttention.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="backward">
+  <h2><span class="num">6</span>Backward: argmax-only gradients</h2>
+
+  <p>
+    Because $\max$ is sub-differentiable — only the argmax position carries a
+    gradient — the backward pass is simpler than for softmax. With
+    $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score:
+  </p>
+
+  <p>
+    $$\nabla_Q \, Q_{i, s} \;=\; q\text{-}\text{mask}_{i,s} \cdot \sum_{j} g_{i,j} \cdot D_{j,\; \operatorname{argmax}_t \langle Q_{i,s}, D_{j,t}\rangle}.$$
+  </p>
+
+  <p>
+    $\nabla_D$ has the symmetric form, summed over the $(i, s)$ pairs whose
+    argmax falls on the same $(j, t)$. To avoid recomputing the forward, the
+    forward kernel optionally writes an $[N_q \cdot N_d, L_q]$ int32 buffer of
+    argmax indices — 4 MB for a typical training batch.
+  </p>
+
+  <p>
+    $\nabla_Q$ is embarrassingly parallel: one program per $(i, s)$ gathers
+    $D_{j, \text{argmax}}$ across $j$ and produces a single output row.
+    $\nabla_D$ has output contention — many $(i, s)$ pairs can land on the
+    same $(j, t)$ — and the library offers three reduction strategies:
+  </p>
+
+  <table class="tbl">
+    <thead><tr><th>Method</th><th>Bitwise reproducible</th><th>When it is picked</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>unified</code></td>
+        <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
+        <td>Default. Single-pass fused $\nabla_Q + \nabla_D$, fp32 atomic add.</td>
+      </tr>
+      <tr>
+        <td><code>csr</code></td>
+        <td>yes</td>
+        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$). Radix-sorts $(i,s)$ by argmax into per-$j$ CSR buckets so each $(j, t)$ output is reduced in a single program.</td>
+      </tr>
+      <tr>
+        <td><code>atomic</code></td>
+        <td>no</td>
+        <td>Legacy two-pass; retained as a fallback on hardware with degraded fp32 atomics.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    All three paths use Triton's stable <code>argmax</code> (lowest-index
+    tie-break) on the forward, so only the $\nabla_D$ reduction order
+    distinguishes them numerically.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="perf">
+  <h2><span class="num">7</span>Performance summary</h2>
+
+  <p>
+    Measured on a single H100 80 GB SXM with bf16/fp16 inputs and fp32
+    accumulators, 50-iteration median; baselines are the same operation in
+    plain PyTorch. Full shapes and reproduction commands are in
+    <a href="benchmarks.md">docs/benchmarks.md</a>.
+  </p>
+
+  <table class="tbl">
+    <thead>
+      <tr><th>Workload</th><th>Speedup vs PyTorch</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Reranking / inference (small to medium)</td>           <td class="num">7 – 23×</td></tr>
+      <tr><td>Long-context ($L_d \geq 8\text{k}$) reranking</td>     <td class="num">runs · naive OOMs</td></tr>
+      <tr><td>PyLate cached-contrastive MaxSim + backward</td>       <td class="num">up to 13.8×</td></tr>
+      <tr><td>PLAID rerank vs <code>fast_plaid.engine.search()</code></td><td class="num">19 – 30×</td></tr>
+      <tr><td>Fused $D$-side head (training)</td>                    <td class="num">1.5 – 4.6×</td></tr>
+      <tr><td>FP8 MaxSim inference (Hopper)</td>                     <td class="num">up to 1.4×</td></tr>
+      <tr><td>End-to-end ModernColBERT training (149 M params)</td>  <td class="num">1.0 – 1.06× (free swap)</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    On full encoder training the MaxSim step is dominated by the transformer
+    forward/backward, so the kernel is effectively a free drop-in. Everywhere
+    MaxSim is not negligible — inference, reranking, long documents, knowledge
+    distillation, compressed indices, small encoders — the fused path
+    dominates.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="variants">
+  <h2><span class="num">8</span>Variants in the library</h2>
+
+  <p>
+    The streaming-and-never-storing structure is the entire optimisation. The
+    rest of the library applies the same idea to a few adjacent workloads:
+  </p>
+
+  <ul>
+    <li>
+      <strong>Variable-length / packed input</strong>
+      (<code>maxsim_varlen</code>). Real corpora have ragged lengths; padding
+      to $L_d^{\max}$ wastes roughly half the FLOPs. The packed kernel
+      consumes $[\text{total\_tokens}, d]$ tensors with FlashAttention-style
+      <code>cu_seqlens</code> offsets and runs the same tiling.
+    </li>
+    <li>
+      <strong>Fused $D$-side projection</strong>
+      (<code>maxsim_from_hidden</code>). For corpora stored as ModernBERT
+      hidden states, the kernel folds
+      $\texttt{Linear} \rightarrow \texttt{L2-normalize} \rightarrow \texttt{MaxSim}$
+      into a single pass. The projected embedding tensor is never written to
+      HBM. The training backward gathers only the winning positions and
+      recomputes the projection locally.
+    </li>
+    <li>
+      <strong>PLAID / ColBERTv2</strong>
+      (<code>maxsim_residual</code>, <code>maxsim_residual_varlen</code>).
+      The doc embeddings live on disk as
+      $(\text{centroid index}, \text{quantised residual})$. The kernel
+      decompresses on the fly in SRAM, optionally L2-normalises, and runs
+      MaxSim — all in one program, with no dense decompressed tensor ever
+      materialised.
+    </li>
+    <li>
+      <strong>FP8 MaxSim</strong> (<code>maxsim_inference_fp8</code>). On
+      Hopper, the GEMM uses the FP8 tensor cores at twice the bf16 throughput;
+      the reduction stays in fp32 to preserve range.
+    </li>
+  </ul>
+
+  <p class="note">
+    Different inputs, same recipe: keep large intermediates on-chip, run the
+    reductions in registers, and ship only the final scores to HBM.
+  </p>
+</section>
+
+<footer style="margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-dim); font-size: 13px;">
+  Algorithmic details and the autograd graph:
+  <a href="design.md">docs/design.md</a> ·
+  benchmarks and reproduction commands:
+  <a href="benchmarks.md">docs/benchmarks.md</a> ·
+  source: <a href="../late_interaction_kernels/forward.py">forward.py</a>.
+</footer>
+
+</main>
+</div>
+
+<!-- ===================== THEME TOGGLE ===================== -->
+<script>
+(function() {
+  var root = document.documentElement;
+  var sel  = document.getElementById("theme-select");
+  var saved = null;
+  try { saved = localStorage.getItem("lik-theme"); } catch (e) {}
+  var mode = saved || "auto";
+  function apply(m) {
+    root.setAttribute("data-theme", m);
+    sel.value = m;
+  }
+  apply(mode);
+  sel.addEventListener("change", function() {
+    mode = sel.value;
+    try { localStorage.setItem("lik-theme", mode); } catch (e) {}
+    apply(mode);
+  });
+})();
+</script>
+
+<!-- ===================== TOC ACTIVE-LINK ===================== -->
+<script>
+(function() {
+  var links = document.querySelectorAll("aside.toc a");
+  var sections = Array.prototype.map.call(links, function(a) {
+    return document.querySelector(a.getAttribute("href"));
+  });
+  function onScroll() {
+    var y = window.scrollY + 120;
+    var active = 0;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i] && sections[i].offsetTop <= y) active = i;
+    }
+    for (var i = 0; i < links.length; i++) {
+      links[i].classList.toggle("active", i === active);
+    }
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+
+<!-- ===================== FORWARD-PASS ANIMATION ===================== -->
+<script>
+(function() {
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("fwd-svg");
+
+  // ---------------- toy problem ----------------
+  var Lq = 4, Ld = 12, d = 4;
+  var BQ = 4, BD = 4;
+  var nQ = Lq / BQ;          // = 1 outer iter
+  var nD = Ld / BD;          // = 3 inner iters
+  var ELEM = 2;              // fp16 bytes for the narrative counter
+
+  // toy display values (per inner iter)
+  var rowMaxAfter = [
+    null,                                  // before any tile
+    [0.42, 0.51, 0.39, 0.47],              // after D tile 0
+    [0.55, 0.51, 0.62, 0.47],              // after D tile 1
+    [0.55, 0.58, 0.62, 0.49]               // after D tile 2
+  ];
+  var sumOfMax = [null, 1.79, 2.15, 2.24];
+  var finalScore = 2.24;
+
+  // ---------------- layout ----------------
+  var W = 880, H = 360;
+  var HBM = { x: 14,  y: 36, w: 420, h: 308 };
+  var SRA = { x: 454, y: 36, w: 412, h: 308 };
+  var CELL = 16;
+
+  // HBM positions
+  var QX = HBM.x + 22, QY = HBM.y + 30;       // Q : Lq×d  → 4×4
+  var DX = HBM.x + 120, DY = HBM.y + 30;      // D : Ld×d → 12×4
+  var SCORE_X = HBM.x + 240, SCORE_Y = HBM.y + 240;
+
+  // SRAM positions
+  var SR_QX = SRA.x + 22,  SR_QY = SRA.y + 30;          // Q tile 4×4
+  var SR_DX = SRA.x + 120, SR_DY = SRA.y + 30;          // D tile 4×4
+  var SR_SX = SRA.x + 220, SR_SY = SRA.y + 30;          // S tile 4×4 (rows = BQ, cols = BD)
+  var SR_MX = SRA.x + 330, SR_MY = SRA.y + 30;          // running max 4×1
+  var SR_SUM_X = SRA.x + 22, SR_SUM_Y = SRA.y + 200;    // partial sum scalar
+
+  // ---------------- helpers ----------------
+  function el(tag, attrs, parent) {
+    var n = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function rect(x, y, w, h, fill, stroke, parent) {
+    return el("rect", { x:x, y:y, width:w, height:h, fill:fill, stroke:stroke||"none", rx:1.5 }, parent);
+  }
+  function text(x, y, str, opts, parent) {
+    opts = opts || {};
+    var t = el("text", {
+      x:x, y:y,
+      fill: opts.fill || "currentColor",
+      "font-size": opts.size || 11,
+      "text-anchor": opts.anchor || "start",
+      "font-family": opts.font || "var(--mono)",
+      "font-weight": opts.weight || 400,
+      "fill-opacity": opts.opacity != null ? opts.opacity : 1
+    }, parent);
+    t.appendChild(document.createTextNode(str));
+    return t;
+  }
+
+  // ---------------- static scaffolding ----------------
+  // background panels
+  rect(HBM.x, HBM.y, HBM.w, HBM.h, "var(--hbm-fill)",  "var(--line)", svg);
+  rect(SRA.x, SRA.y, SRA.w, SRA.h, "var(--sram-fill)", "var(--line)", svg);
+
+  text(HBM.x + 12, HBM.y - 8, "HBM · off-chip · slow & big",
+       { fill:"var(--ink-dim)", weight:600 }, svg);
+  text(SRA.x + 12, SRA.y - 8, "SRAM + registers · on-chip · fast & tiny",
+       { fill:"var(--ink-dim)", weight:600 }, svg);
+
+  // matrix labels
+  text(QX, QY - 8,  "Q  [Lq × d]",  { fill:"var(--accent)" }, svg);
+  text(DX, DY - 8,  "D  [Ld × d]",  { fill:"var(--accent-2)" }, svg);
+  text(SCORE_X, SCORE_Y - 8, "score  [scalar, written once]", { fill:"var(--accent-3)" }, svg);
+
+  text(SR_QX, SR_QY - 8, "Q_tile",          { fill:"var(--accent)" },   svg);
+  text(SR_DX, SR_DY - 8, "D_tile",          { fill:"var(--accent-2)" }, svg);
+  text(SR_SX, SR_SY - 8, "S_tile = Q·Dᵀ",   { fill:"var(--ink-dim)" },  svg);
+  text(SR_MX, SR_MY - 8, "m  (running max)",{ fill:"var(--accent-3)" }, svg);
+  text(SR_SUM_X, SR_SUM_Y - 8, "Σ m  (partial sum)", { fill:"var(--accent-3)" }, svg);
+
+  // HBM Q grid (Lq × d)
+  var qCells = [];
+  for (var r = 0; r < Lq; r++) for (var c = 0; c < d; c++) {
+    qCells.push(rect(QX + c*CELL, QY + r*CELL, CELL-1.5, CELL-1.5, "var(--q-idle)", null, svg));
+  }
+  // HBM D grid (Ld × d)
+  var dCells = [];
+  for (var r = 0; r < Ld; r++) for (var c = 0; c < d; c++) {
+    dCells.push(rect(DX + c*CELL, DY + r*CELL, CELL-1.5, CELL-1.5, "var(--d-idle)", null, svg));
+  }
+  // HBM score box
+  var scoreCell = rect(SCORE_X, SCORE_Y, 80, 24, "var(--o-idle)", "var(--line)", svg);
+  var scoreText = text(SCORE_X + 40, SCORE_Y + 16, "—",
+                       { anchor:"middle", fill:"var(--ink-mid)" }, svg);
+
+  // SRAM grids
+  var srQ = [], srD = [], srS = [], srM = [];
+  for (var r = 0; r < BQ; r++) for (var c = 0; c < d; c++) {
+    srQ.push(rect(SR_QX + c*CELL, SR_QY + r*CELL, CELL-1.5, CELL-1.5, "var(--line-soft)", "var(--line)", svg));
+  }
+  for (var r = 0; r < BD; r++) for (var c = 0; c < d; c++) {
+    srD.push(rect(SR_DX + c*CELL, SR_DY + r*CELL, CELL-1.5, CELL-1.5, "var(--line-soft)", "var(--line)", svg));
+  }
+  for (var r = 0; r < BQ; r++) for (var c = 0; c < BD; c++) {
+    srS.push(rect(SR_SX + c*CELL, SR_SY + r*CELL, CELL-1.5, CELL-1.5, "var(--line-soft)", "var(--line)", svg));
+  }
+  // running max — vertical strip of BQ cells, each with a number
+  var mTexts = [];
+  for (var r = 0; r < BQ; r++) {
+    srM.push(rect(SR_MX, SR_MY + r*CELL, CELL*3, CELL-1.5, "var(--line-soft)", "var(--line)", svg));
+    mTexts.push(text(SR_MX + (CELL*3)/2, SR_MY + r*CELL + 11, "−∞",
+                     { anchor:"middle", fill:"var(--ink-mid)", size:10 }, svg));
+  }
+  var sumBox  = rect(SR_SUM_X, SR_SUM_Y, 90, 24, "var(--line-soft)", "var(--line)", svg);
+  var sumText = text(SR_SUM_X + 45, SR_SUM_Y + 16, "0.00",
+                     { anchor:"middle", fill:"var(--ink-mid)" }, svg);
+
+  // "ghost" tile that flies between HBM and SRAM
+  var ghost = rect(0, 0, 0, 0, "var(--accent-3)", "var(--accent-3)", svg);
+  ghost.setAttribute("fill-opacity", "0.18");
+  ghost.setAttribute("stroke-dasharray", "3,3");
+  ghost.setAttribute("opacity", "0");
+
+  function setGhost(x, y, w, h, on) {
+    ghost.setAttribute("x", x);
+    ghost.setAttribute("y", y);
+    ghost.setAttribute("width", w);
+    ghost.setAttribute("height", h);
+    ghost.setAttribute("opacity", on ? 1 : 0);
+  }
+
+  function colorize(cells, indices, fill) {
+    for (var k = 0; k < indices.length; k++) cells[indices[k]].setAttribute("fill", fill);
+  }
+  function resetGrid(cells, idleFill) {
+    for (var k = 0; k < cells.length; k++) cells[k].setAttribute("fill", idleFill);
+  }
+  function qTileIdx() { var o = []; for (var r=0;r<BQ;r++) for (var c=0;c<d;c++) o.push(r*d+c); return o; }
+  function dTileIdx(j) {
+    var o = []; for (var r = j*BD; r < (j+1)*BD; r++) for (var c=0;c<d;c++) o.push(r*d+c); return o;
+  }
+
+  // ---------------- scenario ----------------
+  // step entries: { kind, msg, mutate }
+  var steps = [];
+  function step(kind, msg, mut) { steps.push({ kind:kind, msg:msg, mutate:mut }); }
+
+  step("init",
+       "Setup. Lq=4, Ld=12, d=4. BLOCK_Q=4 (one outer iter), BLOCK_D=4 (three inner iters).",
+       null);
+
+  step("load-q",
+       "Outer iter: load Q_tile [4×4] from HBM into SRAM. +" + (BQ*d*ELEM) + " B read.",
+       function(s) {
+         s.qs = 0;
+         s.reads += BQ*d*ELEM;
+         s.flags.qLoaded = true;
+       });
+  step("init-m",
+       "Initialise running max m = [−∞, −∞, −∞, −∞] in registers. No HBM traffic.",
+       function(s) {
+         s.m = "[−∞, −∞, −∞, −∞]";
+       });
+
+  for (var j = 0; j < nD; j++) (function(j) {
+    step("load-d",
+         "Inner iter j=" + j + ": load D_tile rows [" + (j*BD) + ":" + ((j+1)*BD) + "] into SRAM. +" + (BD*d*ELEM) + " B read.",
+         function(s) {
+           s.ds = j * BD;
+           s.reads += BD*d*ELEM;
+           s.flags.dLoaded = j;
+         });
+    step("compute-s",
+         "Compute S_tile = Q_tile · D_tileᵀ on tensor cores (fp32 acc). Lives in SRAM only.",
+         function(s) { s.flags.sLive = true; });
+    step("update-m",
+         "Online max: m ← max(m, rowmax(S_tile)). No HBM traffic.",
+         function(s) {
+           s.m = "[" + rowMaxAfter[j+1].map(function(x){return x.toFixed(2);}).join(", ") + "]";
+         });
+    step("free-d",
+         "Discard S_tile and D_tile from SRAM. The tile is never written to HBM.",
+         function(s) { s.flags.dLoaded = -1; s.flags.sLive = false; });
+  })(j);
+
+  step("accum",
+       "Q-tile complete. score += Σ m  = " + sumOfMax[3].toFixed(2) + ".",
+       function(s) {
+         s.partialSum = sumOfMax[3].toFixed(2);
+         s.score = finalScore.toFixed(2);
+       });
+  step("write",
+       "Write the final score scalar to HBM. +" + (4) + " B written. The full S tensor (" + (Lq*Ld*ELEM) + " B) was never stored.",
+       function(s) {
+         s.writes += 4;
+         s.flags.scoreWritten = true;
+       });
+  step("done",
+       "Done. The naive baseline would have written S [Lq×Ld] = " + (Lq*Ld*ELEM) + " B and read it back twice.",
+       null);
+
+  // ---------------- rendering ----------------
+  var refs = {
+    qs:     document.getElementById("fwd-qs"),
+    ds:     document.getElementById("fwd-ds"),
+    m:      document.getElementById("fwd-m"),
+    sum:    document.getElementById("fwd-sum"),
+    score:  document.getElementById("fwd-score"),
+    reads:  document.getElementById("fwd-reads"),
+    writes: document.getElementById("fwd-writes"),
+    total:  document.getElementById("fwd-total"),
+    naive:  document.getElementById("fwd-naive"),
+    ratio:  document.getElementById("fwd-ratio"),
+    status: document.getElementById("fwd-status"),
+    log:    document.getElementById("fwd-log")
+  };
+
+  function fresh() {
+    return {
+      qs: -1, ds: -1,
+      m: "—", partialSum: "0.00", score: "—",
+      reads: 0, writes: 0,
+      flags: { qLoaded:false, dLoaded:-1, sLive:false, scoreWritten:false }
+    };
+  }
+  var state = fresh();
+  var cursor = 0;
+
+  function repaint() {
+    // reset all grids
+    resetGrid(qCells, "var(--q-idle)");
+    resetGrid(dCells, "var(--d-idle)");
+    resetGrid(srQ, "var(--line-soft)");
+    resetGrid(srD, "var(--line-soft)");
+    resetGrid(srS, "var(--line-soft)");
+    resetGrid(srM, "var(--line-soft)");
+
+    // Q tile loaded
+    if (state.flags.qLoaded) {
+      colorize(qCells, qTileIdx(), "var(--q-active)");
+      colorize(srQ, qTileIdx(), "var(--q-active)");
+    }
+    // D tile loaded
+    if (state.flags.dLoaded >= 0) {
+      colorize(dCells, dTileIdx(state.flags.dLoaded), "var(--d-active)");
+      var allD = []; for (var k = 0; k < BD*d; k++) allD.push(k);
+      colorize(srD, allD, "var(--d-active)");
+    }
+    // S tile live
+    if (state.flags.sLive) {
+      var allS = []; for (var k = 0; k < BQ*BD; k++) allS.push(k);
+      colorize(srS, allS, "var(--s-active)");
+    }
+    // running max — color the strip if m is initialised
+    if (state.m && state.m !== "—") {
+      var allM = []; for (var k = 0; k < BQ; k++) allM.push(k);
+      colorize(srM, allM, "var(--o-active)");
+      // parse values
+      var vals = state.m.replace(/[\[\]]/g,"").split(",").map(function(s){return s.trim();});
+      for (var k = 0; k < BQ; k++) {
+        if (mTexts[k]) {
+          mTexts[k].textContent = vals[k] || "—";
+          mTexts[k].setAttribute("fill", "#fff");
+        }
+      }
+    } else {
+      for (var k = 0; k < BQ; k++) {
+        if (mTexts[k]) { mTexts[k].textContent = "−∞"; mTexts[k].setAttribute("fill","var(--ink-mid)"); }
+      }
+    }
+    // partial sum
+    sumText.textContent = state.partialSum;
+    sumText.setAttribute("fill", state.partialSum !== "0.00" ? "#fff" : "var(--ink-mid)");
+    sumBox.setAttribute("fill", state.partialSum !== "0.00" ? "var(--o-active)" : "var(--line-soft)");
+
+    // score in HBM
+    if (state.flags.scoreWritten) {
+      scoreCell.setAttribute("fill", "var(--o-active)");
+      scoreText.textContent = state.score;
+      scoreText.setAttribute("fill", "#fff");
+    } else {
+      scoreCell.setAttribute("fill", "var(--o-idle)");
+      scoreText.textContent = "—";
+      scoreText.setAttribute("fill", "var(--ink-mid)");
+    }
+
+    // numeric panel
+    refs.qs.textContent    = state.qs < 0 ? "—" : String(state.qs);
+    refs.ds.textContent    = state.ds < 0 ? "—" : String(state.ds);
+    refs.m.textContent     = state.m;
+    refs.sum.textContent   = state.partialSum;
+    refs.score.textContent = state.score;
+
+    var total = state.reads + state.writes;
+    var naive = Lq*Ld*ELEM * 3 + Lq*d*ELEM + Ld*d*ELEM;
+    refs.reads.textContent  = state.reads + " B";
+    refs.writes.textContent = state.writes + " B";
+    refs.total.textContent  = total + " B";
+    refs.naive.textContent  = naive + " B";
+    refs.ratio.textContent  = total > 0 ? (naive / total).toFixed(2) + "×" : "—";
+    refs.status.textContent = "step " + cursor + " / " + (steps.length - 1);
+  }
+
+  function appendLog(kind, msg) {
+    var div = document.createElement("div");
+    var cls = "ln-meta";
+    if (kind === "load-q" || kind === "load-d") cls = "ln-load";
+    else if (kind === "compute-s" || kind === "update-m" || kind === "accum" || kind === "init-m") cls = "ln-comp";
+    else if (kind === "write") cls = "ln-write";
+    div.className = cls;
+    div.textContent = "[" + cursor + "] " + msg;
+    refs.log.appendChild(div);
+    refs.log.scrollTop = refs.log.scrollHeight;
+  }
+  function clearLog() { refs.log.innerHTML = ""; }
+
+  // ghost flight
+  var animTimer = null;
+  function flyGhost(fromX, fromY, toX, toY, w, h, durMs, onDone) {
+    if (animTimer) { clearInterval(animTimer); animTimer = null; }
+    var t0 = performance.now();
+    setGhost(fromX, fromY, w, h, true);
+    animTimer = setInterval(function() {
+      var t = (performance.now() - t0) / durMs;
+      if (t >= 1) {
+        clearInterval(animTimer); animTimer = null;
+        setGhost(toX, toY, w, h, true);
+        setTimeout(function() { setGhost(0,0,0,0,false); if (onDone) onDone(); }, 80);
+        return;
+      }
+      var e = 1 - Math.pow(1 - t, 3);
+      setGhost(fromX + (toX-fromX)*e, fromY + (toY-fromY)*e, w, h, true);
+    }, 16);
+  }
+  function maybeFly(step) {
+    if (step.kind === "load-q") {
+      flyGhost(QX, QY, SR_QX, SR_QY, d*CELL, BQ*CELL, 340);
+    } else if (step.kind === "load-d") {
+      var j = state.flags.dLoaded;
+      flyGhost(DX, DY + j*BD*CELL, SR_DX, SR_DY, d*CELL, BD*CELL, 340);
+    } else if (step.kind === "write") {
+      flyGhost(SR_SUM_X, SR_SUM_Y, SCORE_X, SCORE_Y, 80, 24, 340);
+    }
+  }
+
+  function applyStep(step) {
+    if (step.mutate) step.mutate(state);
+    repaint();
+    appendLog(step.kind, step.msg);
+    maybeFly(step);
+  }
+  function reset() {
+    state = fresh(); cursor = 0;
+    clearLog(); setGhost(0,0,0,0,false);
+    applyStep(steps[0]);
+  }
+  function next() {
+    if (cursor >= steps.length - 1) return;
+    cursor++;
+    applyStep(steps[cursor]);
+  }
+  function prev() {
+    if (cursor === 0) return;
+    var target = cursor - 1;
+    state = fresh(); clearLog(); setGhost(0,0,0,0,false);
+    for (var s = 0; s <= target; s++) {
+      cursor = s;
+      var st = steps[s];
+      if (st.mutate) st.mutate(state);
+      appendLog(st.kind, st.msg);
+    }
+    repaint();
+  }
+  var playing = false, playTimer = null;
+  function setPlayLabel() {
+    document.getElementById("fwd-play").textContent = playing ? "❚❚ Pause" : "▶ Play";
+  }
+  function tick() {
+    if (cursor >= steps.length - 1) {
+      playing = false; setPlayLabel();
+      clearInterval(playTimer); playTimer = null;
+      return;
+    }
+    next();
+  }
+  function togglePlay() {
+    playing = !playing; setPlayLabel();
+    if (playing) {
+      if (cursor >= steps.length - 1) reset();
+      playTimer = setInterval(tick, 1100);
+    } else if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  }
+
+  document.getElementById("fwd-next").addEventListener("click", function() { if (playing) togglePlay(); next(); });
+  document.getElementById("fwd-prev").addEventListener("click", function() { if (playing) togglePlay(); prev(); });
+  document.getElementById("fwd-play").addEventListener("click", togglePlay);
+  document.getElementById("fwd-reset").addEventListener("click", function() { if (playing) togglePlay(); reset(); });
+
+  document.addEventListener("keydown", function(e) {
+    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); if (playing) togglePlay(); next(); }
+    if (e.key === "ArrowLeft")  { e.preventDefault(); if (playing) togglePlay(); prev(); }
+  });
+
+  reset();
+})();
+</script>
+
+</body>
+</html>
