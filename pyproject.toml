@@ -137,4 +137,5 @@ testpaths = ["tests"]
 markers = [
   "cuda: requires a CUDA device",
   "slow: long-running perf / fuzz tests",
+  "perf: performance regression test (compares median latency vs benchmarks/baselines/{GPU}.json)",
 ]

@@ -62,4 +62,13 @@ jobs:
           pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
 
       - name: Run test suite
-        run: pytest tests/ -v --durations=20
+        run: pytest tests/ -v --durations=20 -m "not perf"
+
+      - name: Run perf regression suite
+        # Times each kernel and compares median latency against the baseline
+        # JSON committed under benchmarks/baselines/{GPU}.json. Fails if any
+        # kernel is more than 5 % slower than its baseline. Skips cleanly if
+        # there is no baseline for this runner's GPU class — regenerate via
+        # `pytest tests/regression/ -m perf --update-perf-baseline` and commit
+        # the resulting file.
+        run: pytest tests/regression/ -m perf -v --durations=10
