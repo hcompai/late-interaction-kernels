@@ -19,13 +19,13 @@
 
 ## Introduction
 
-`late-interaction-kernels` ships fused Triton kernels for **MaxSim** — the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and expose three surfaces:
+`late-interaction-kernels` provides fused Triton kernels for **MaxSim**, the late-interaction scoring used by ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and come with three APIs:
 
 - a one-line PyLate drop-in (`patch_pylate()`),
 - a stateless `nn.Module` (`MaxSimScorer`) for custom training loops,
 - function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
 
-This is **not** a search engine. For end-to-end retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid) — this library is the MaxSim math their reranking and training compile down to.
+This is **not** a search engine. For end-to-end retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid). This library is the MaxSim math they compile down to.
 
 ## Install
 
@@ -40,7 +40,7 @@ uv add late-interaction-kernels       # or: pip install late-interaction-kernels
 | CPU / Windows                  | Autograd-aware pure-PyTorch reference.                                        |
 
 > [!NOTE]
-> The PyLate drop-in targets PyLate ≥ 1.3. The pure-PyTorch reference imports on every platform, so training and retrieval code is unit-testable on a laptop before you rent a GPU.
+> The PyLate drop-in targets PyLate >= 1.3. The pure-PyTorch reference imports on every platform, so training and retrieval code is unit-testable on a laptop before you rent a GPU.
 
 ## Quickstart
 
@@ -71,7 +71,7 @@ scores.mean().backward()
 from late_interaction_kernels import retrieve
 
 scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
-# both [Nq, 100] — chunk= bounds peak HBM at Nq · (chunk + top_k)
+# both [Nq, 100]; chunk= bounds peak HBM at Nq * (chunk + top_k)
 ```
 
 ### PLAID / ColBERTv2 on compressed, ragged docs
@@ -83,22 +83,22 @@ scores = maxsim_residual_varlen(
     Q, codes_flat, residuals_flat, cu_seqlens_d,
     centroids=centroids, bucket_weights=bucket_weights,
     nbits=2, normalize=True,
-)  # [Nd] fp32 — one kernel does decompress + L2-normalize + MaxSim
+)  # [Nd] fp32; one kernel does decompress + L2-normalize + MaxSim
 ```
 
 ## Benchmarks
 
-1×H100, bf16/fp16, 50-iter median, vs the same op in plain PyTorch:
+1xH100, bf16/fp16, 50-iter median, vs the same op in plain PyTorch:
 
 | Workload                                           | Speedup           |
 | -------------------------------------------------- | ----------------- |
-| Reranking / inference vs naive einsum              | 7–23×             |
-| Long-context (`Ld ≥ 8k`) reranking                 | runs; naive OOMs  |
-| PyLate cached-contrastive MaxSim + backward        | up to 13.8×       |
-| PLAID rerank vs `fast_plaid.engine.search()`       | 19–30×            |
-| Fused D-side head (training)                       | 1.5–4.6×          |
-| FP8 MaxSim inference (Hopper)                      | up to 1.4×        |
-| End-to-end training of a 149 M encoder             | 1.00–1.06× (free) |
+| Reranking / inference vs naive einsum              | 7-23x             |
+| Long-context (`Ld >= 8k`) reranking                | runs; naive OOMs  |
+| PyLate cached-contrastive MaxSim + backward        | up to 13.8x       |
+| PLAID rerank vs `fast_plaid.engine.search()`       | 19-30x            |
+| Fused D-side head (training)                       | 1.5-4.6x          |
+| FP8 MaxSim inference (Hopper)                      | up to 1.4x        |
+| End-to-end training of a 149M encoder              | 1.00-1.06x (free) |
 
 Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md).
 
@@ -113,7 +113,7 @@ Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md
 | `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
 | `maxsim_padded`                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 
-Niche kernels live in submodules — `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `experimental`, `reference`. Full walk-through of every kernel, the autograd graph, the backward variants and the numerics: [`docs/design.md`](docs/design.md).
+Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `experimental`, `reference`. See [`docs/design.md`](docs/design.md) for details on every kernel, the autograd graph and the backward variants.
 
 <details>
 <summary><strong>🔽 Configuration knobs (env vars + kwargs)</strong></summary>
@@ -121,7 +121,7 @@ Niche kernels live in submodules — `padded`, `score_pairs`, `fused_head`, `pla
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.             |
-| `set_backward_method(...)` / `get_backward_method()`              | Process-wide default — `late_interaction_kernels.autograd`.       |
+| `set_backward_method(...)` / `get_backward_method()`              | Process-wide default via `late_interaction_kernels.autograd`.     |
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                  |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |
@@ -155,4 +155,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 }
 ```
 
-Aurélien Lac · Tony Wu — H Company · Apache 2.0 (see [`LICENSE`](LICENSE)). Direct inspiration: flash-maxsim and [FlashAttention](https://github.com/Dao-AILab/flash-attention).
+Aurélien Lac · Tony Wu, H Company · Apache 2.0 (see [`LICENSE`](LICENSE)). Direct inspiration: flash-maxsim and [FlashAttention](https://github.com/Dao-AILab/flash-attention).
