@@ -177,3 +177,49 @@ def test_maxsim_padded_cuda_matches_cpu() -> None:
     scores_cpu = maxsim_padded(queries, documents, qlen, dlen)
     scores_cuda = maxsim_padded(queries.cuda(), documents.cuda(), qlen.cuda(), dlen.cuda())
     torch.testing.assert_close(scores_cpu, scores_cuda.cpu(), rtol=5e-3, atol=5e-3)
+
+
+# ---------------------------------------------------------------------------
+# maxsim_padded — backward
+# ---------------------------------------------------------------------------
+
+
+def test_maxsim_padded_supports_backward_cpu() -> None:
+    """Smoke test: grads flow through the reference dispatch path."""
+    queries, documents, qlen, dlen = _make_batch(B=2, C=3, Lq=6, Ld=8, d=16)
+    queries = queries.requires_grad_(True)
+    documents = documents.requires_grad_(True)
+
+    scores = maxsim_padded(queries, documents, qlen, dlen)
+    scores.sum().backward()
+
+    assert queries.grad is not None and queries.grad.shape == queries.shape
+    assert documents.grad is not None and documents.grad.shape == documents.shape
+    assert (queries.grad != 0).any()
+    assert (documents.grad != 0).any()
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_maxsim_padded_backward_matches_reference_cuda(dtype: torch.dtype) -> None:
+    """Gradients from the varlen+slice path match the pure-PyTorch reference."""
+    B, C, Lq, Ld, d = 3, 4, 16, 32, 32
+    queries, documents, qlen, dlen = _make_batch(B=B, C=C, Lq=Lq, Ld=Ld, d=d, device="cuda", dtype=dtype)
+
+    q_kernel = queries.detach().clone().requires_grad_(True)
+    d_kernel = documents.detach().clone().requires_grad_(True)
+    q_ref = queries.detach().clone().float().requires_grad_(True)
+    d_ref = documents.detach().clone().float().requires_grad_(True)
+
+    grad_out = torch.randn(B, C, device="cuda", dtype=torch.float32)
+
+    scores_kernel = maxsim_padded(q_kernel, d_kernel, qlen, dlen)
+    scores_kernel.backward(grad_out)
+
+    scores_ref = maxsim_padded_reference(q_ref, d_ref, qlen, dlen)
+    scores_ref.backward(grad_out)
+
+    # The kernel computes the diagonal of an [B, B*C] cross via varlen; the
+    # reference loops in fp32. fp16/bf16 inputs need a looser tolerance.
+    torch.testing.assert_close(q_kernel.grad.float(), q_ref.grad, rtol=5e-2, atol=5e-2)
+    torch.testing.assert_close(d_kernel.grad.float(), d_ref.grad, rtol=5e-2, atol=5e-2)
