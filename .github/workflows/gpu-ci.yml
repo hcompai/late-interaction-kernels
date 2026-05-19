@@ -3,7 +3,7 @@ name: GPU CI
 permissions:
   contents: read
 
-# Runs the CUDA-marked tests on a self-hosted GPU runner. Triggered:
+# Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
 #   - automatically on push to main and on PRs that touch kernel-related files;
 #   - manually via `workflow_dispatch` (requires write permission on the repo);
 #   - on PRs by adding the `run-gpu-ci` label (label apply requires triage+).
@@ -33,16 +33,16 @@ concurrency:
 jobs:
   gpu-tests:
     name: GPU tests (CUDA)
-    # Self-hosted GPU runner. Adjust the labels to match your registered
-    # runner — `linux` and `gpu` are conventional; add an arch-specific label
-    # (e.g. `h100`) if you have multiple GPU runner classes.
-    runs-on: [self-hosted, linux, gpu]
+    # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
+    # the org admin. Swap the label here if more GPU SKUs come online later.
+    runs-on: gpu-t4-4-core
     # On `labeled` events, only fire when the gating label is applied. All
     # other events (push, synchronize, dispatch, etc.) skip this guard.
     if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
     # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
     # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
-    # Mirrors scripts/sky_run_benchmarks.yaml setup. Requires Docker on the runner host.
+    # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
+    # on GitHub-hosted larger runners.
     container:
       image: nvcr.io/nvidia/pytorch:25.06-py3
       options: --gpus all --ipc=host
