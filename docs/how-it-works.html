@@ -14,10 +14,19 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
-        onload="renderMathInElement(document.body, {delimiters:[
-          {left:'$$',right:'$$',display:true},
-          {left:'$',right:'$',display:false}
-        ]});"></script>
+        onload="renderMathInElement(document.body, {
+          delimiters: [
+            {left:'$$', right:'$$', display:true},
+            {left:'$',  right:'$',  display:false}
+          ],
+          trust: function (ctx) { return ctx.command === '\\htmlClass'; },
+          macros: {
+            '\\Qm': '\\htmlClass{lik-q}{Q}',
+            '\\Dm': '\\htmlClass{lik-d}{D}',
+            '\\Mm': '\\htmlClass{lik-m}{m}',
+            '\\Sm': '\\htmlClass{lik-s}{S}'
+          }
+        });"></script>
 
 <style>
   /* ===================== THEME =====================
@@ -520,6 +529,15 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* ===================== MATH SYMBOL COLORS =====================
+     Used selectively in the defining equations only — not every
+     inline $Q$. Mirrors the animation palette so prose, formulas,
+     and the SVG tile-walker speak the same color language. */
+  .katex .lik-q { color: var(--q-active); }
+  .katex .lik-d { color: var(--d-active); }
+  .katex .lik-m { color: var(--o-active); }
+  .katex .lik-s { color: var(--s-active); }
+
   /* Scrollbar — quiet, in-palette */
   .anim-log::-webkit-scrollbar { width: 8px; }
   .anim-log::-webkit-scrollbar-track { background: transparent; }
@@ -595,21 +613,21 @@
 
   <p>
     A late-interaction encoder turns a query and a document into sequences of
-    token-level vectors, $Q \in \mathbb{R}^{L_q \times d}$ and
-    $D \in \mathbb{R}^{L_d \times d}$. The relevance score introduced by
+    token-level vectors, $\Qm \in \mathbb{R}^{L_q \times d}$ and
+    $\Dm \in \mathbb{R}^{L_d \times d}$. The relevance score introduced by
     ColBERT is:
   </p>
 
   <p>
-    $$\operatorname{score}(Q, D) \;=\; \sum_{s=1}^{L_q} \; \max_{t=1}^{L_d} \; \langle Q_s, D_t \rangle.$$
+    $$\operatorname{score}(\Qm, \Dm) \;=\; \sum_{s=1}^{L_q} \; \max_{t=1}^{L_d} \; \langle \Qm_s, \Dm_t \rangle.$$
   </p>
 
   <p>
     For each query token, take the largest inner product against any document
     token, and sum across the query. In practice we score a batch of queries
     against a batch of documents at once, so the input shapes are
-    $Q \in \mathbb{R}^{N_q \times L_q \times d}$ and
-    $D \in \mathbb{R}^{N_d \times L_d \times d}$, and the output is a matrix
+    $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ and
+    $\Dm \in \mathbb{R}^{N_d \times L_d \times d}$, and the output is a matrix
     of scores in $\mathbb{R}^{N_q \times N_d}$. Optional boolean masks drop
     padding tokens from the sum and from the inner max.
   </p>
@@ -974,7 +992,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    $$m^{(k)} \;=\; \max\!\bigl(m^{(k-1)},\;\; \operatorname{rowmax}(S^{(k)})\bigr),$$
+    $$\Mm^{(k)} \;=\; \max\!\bigl(\Mm^{(k-1)},\;\; \operatorname{rowmax}(\Sm^{(k)})\bigr),$$
   </p>
 
   <p>
