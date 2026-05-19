@@ -1,7 +1,5 @@
 """Tests for pack_padded and maxsim_padded."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

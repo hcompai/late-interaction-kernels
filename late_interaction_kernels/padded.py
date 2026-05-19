@@ -13,8 +13,6 @@ maxsim_padded
     returns ``[B, C]`` fp32.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import torch
