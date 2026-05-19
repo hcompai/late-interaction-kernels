@@ -149,57 +149,10 @@ def test_pack_padded_validate_flag_catches_zero_length() -> None:
 
 
 # ---------------------------------------------------------------------------
-# maxsim_padded — correctness vs reference (CPU, no CUDA required)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_maxsim_padded_matches_reference_cpu(dtype: torch.dtype) -> None:
-    queries, documents, qlen, dlen = _make_batch(B=3, C=5, Lq=12, Ld=20, d=32, dtype=dtype)
-    scores = maxsim_padded(queries, documents, qlen, dlen)
-    expected = maxsim_padded_reference(queries, documents, qlen, dlen)
-
-    assert scores.shape == expected.shape == (3, 5)
-    assert scores.dtype == torch.float32
-
-    tol = {"rtol": 1e-3, "atol": 1e-3} if dtype != torch.float32 else {"rtol": 1e-5, "atol": 1e-5}
-    torch.testing.assert_close(scores, expected, **tol)
-
-
-def test_maxsim_padded_ignores_pad_positions_cpu() -> None:
-    """Garbage beyond declared lengths must not affect results."""
-    B, C, Lq, Ld, d = 2, 3, 8, 16, 32
-    queries, documents, qlen, dlen = _make_batch(B=B, C=C, Lq=Lq, Ld=Ld, d=d)
-
-    baseline = maxsim_padded(queries, documents, qlen, dlen)
-
-    q_corrupt = queries.clone()
-    d_corrupt = documents.clone()
-    for b in range(B):
-        q_corrupt[b, int(qlen[b].item()) :] = 1e4
-        for c in range(C):
-            d_corrupt[b, c, int(dlen[b, c].item()) :] = -1e4
-
-    out = maxsim_padded(q_corrupt, d_corrupt, qlen, dlen)
-    torch.testing.assert_close(out, baseline, rtol=1e-5, atol=1e-5)
-
-
-def test_maxsim_padded_single_token_queries_and_docs_cpu() -> None:
-    """Each query/doc has exactly one token — MaxSim reduces to a dot product."""
-    B, C, d = 2, 3, 16
-    torch.manual_seed(7)
-    queries = torch.randn(B, 1, d)
-    documents = torch.randn(B, C, 1, d)
-    qlen = torch.ones(B, dtype=torch.int32)
-    dlen = torch.ones(B, C, dtype=torch.int32)
-
-    scores = maxsim_padded(queries, documents, qlen, dlen)
-    expected = maxsim_padded_reference(queries, documents, qlen, dlen)
-    torch.testing.assert_close(scores, expected, rtol=1e-5, atol=1e-5)
-
-
-# ---------------------------------------------------------------------------
 # maxsim_padded — CUDA parity (skipped without a GPU)
+#
+# CPU/MPS dispatch goes straight to maxsim_padded_reference, so a CPU parity
+# test would be tautological — the reference's own tests cover that path.
 # ---------------------------------------------------------------------------
 
 

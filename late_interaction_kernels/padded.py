@@ -196,55 +196,44 @@ def maxsim_padded(
 ) -> torch.Tensor:
     """Score reranking candidates from padded inputs, returning ``[B, C]`` fp32.
 
-    Packs the inputs via :func:`pack_padded` and delegates to
-    :func:`score_pairs_packed` on CUDA (Triton) or the pure-PyTorch
-    :func:`~late_interaction_kernels.reference.maxsim_reference_scatter`
-    on CPU / MPS / any non-CUDA device.
+    On CUDA, packs via :func:`pack_padded` and dispatches to the Triton
+    :func:`score_pairs_packed` kernel. On CPU / MPS / any non-CUDA device,
+    delegates straight to :func:`~late_interaction_kernels.reference.maxsim_padded_reference`
+    (the pure-PyTorch loop) — the packed scatter path is pointless without
+    Triton and just adds gather/cumsum/pair-index allocations.
 
     Args:
         queries: ``[B, Lq, d]``.
         documents: ``[B, C, Ld, d]`` — ``C`` candidates per query.
         query_lengths: ``[B]`` valid query lengths.
         doc_lengths: ``[B, C]`` valid doc lengths.
-        validate: forward to :func:`pack_padded`; enables extra D2H checks.
+        validate: forward to :func:`pack_padded` on CUDA; ignored on
+            non-CUDA devices.
 
     Returns:
         scores: ``[B, C]`` fp32 on the same device as ``queries``.
     """
-    B = queries.shape[0]
-    C = documents.shape[1]
-
-    batch = pack_padded(queries, documents, query_lengths, doc_lengths, validate=validate)
-
     if queries.is_cuda:
-        try:
-            from late_interaction_kernels.score_pairs import score_pairs_packed
+        from late_interaction_kernels.score_pairs import score_pairs_packed
 
-            flat = score_pairs_packed(
-                batch.Q_packed,
-                batch.D_packed,
-                batch.cu_seqlens_q,
-                batch.cu_seqlens_d,
-                batch.pair_q_idx,
-                batch.pair_d_idx,
-                max_seqlen_q=batch.max_seqlen_q,
-                max_seqlen_d=batch.max_seqlen_d,
-            )
-            return flat.view(B, C)
-        except ImportError:
-            pass  # Triton not available — fall through to reference
+        B = queries.shape[0]
+        C = documents.shape[1]
+        batch = pack_padded(queries, documents, query_lengths, doc_lengths, validate=validate)
+        flat = score_pairs_packed(
+            batch.Q_packed,
+            batch.D_packed,
+            batch.cu_seqlens_q,
+            batch.cu_seqlens_d,
+            batch.pair_q_idx,
+            batch.pair_d_idx,
+            max_seqlen_q=batch.max_seqlen_q,
+            max_seqlen_d=batch.max_seqlen_d,
+        )
+        return flat.view(B, C)
 
-    from late_interaction_kernels.reference import maxsim_reference_scatter
+    from late_interaction_kernels.reference import maxsim_padded_reference
 
-    flat = maxsim_reference_scatter(
-        batch.Q_packed.float(),
-        batch.D_packed.float(),
-        batch.cu_seqlens_q,
-        batch.cu_seqlens_d,
-        batch.pair_q_idx,
-        batch.pair_d_idx,
-    )
-    return flat.view(B, C)
+    return maxsim_padded_reference(queries, documents, query_lengths, doc_lengths)
 
 
 __all__ = ["PackedBatch", "pack_padded", "maxsim_padded"]
