@@ -136,6 +136,16 @@ def score_pairs_packed(
         Skips the ``[Nq, Nd]`` allocation. Use this when the pair list is
         sparse relative to ``Nq * Nd`` (typical reranker scheduling).
         For full pairwise scoring, ``maxsim_varlen`` is faster.
+
+        **Compile cache.** ``max_seqlen_q`` and ``max_seqlen_d`` are
+        ``tl.constexpr`` and part of the autotune key, so each distinct
+        ``(max_lq, max_ld)`` pair triggers a fresh compile + autotune
+        sweep. In typical reranking ``max_seqlen`` lives in a handful of
+        buckets and this is fine; if autotune dominates wall time, pad
+        callers to a canonical max-seqlen. The dense forward kernel moved
+        ``Ld`` out of its key in PR #27 — the scatter kernel could follow
+        suit as a later optimisation (the cache-regression test in
+        ``tests/test_compile_cache.py`` pins the current behaviour).
     """
     if Q_packed.dim() != 2 or D_packed.dim() != 2:
         raise ValueError(
