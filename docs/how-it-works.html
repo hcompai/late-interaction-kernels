@@ -1341,13 +1341,13 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   // matrix labels
   text(QX, QY - 8,  "Q  [Lq × d]",  { fill:"var(--accent)" }, svg);
   text(DX, DY - 8,  "D  [Ld × d]",  { fill:"var(--accent-2)" }, svg);
-  text(SCORE_X, SCORE_Y - 8, "score  [scalar, written once]", { fill:"var(--accent-3)" }, svg);
+  text(SCORE_X, SCORE_Y - 8, "score  [scalar]", { fill:"var(--accent-3)" }, svg);
 
-  text(SR_QX, SR_QY - 8, "Q_tile",          { fill:"var(--accent)" },   svg);
-  text(SR_DX, SR_DY - 8, "D_tile",          { fill:"var(--accent-2)" }, svg);
-  text(SR_SX, SR_SY - 8, "S_tile = Q·Dᵀ",   { fill:"var(--ink-dim)" },  svg);
-  text(SR_MX, SR_MY - 8, "m  (running max)",{ fill:"var(--accent-3)" }, svg);
-  text(SR_SUM_X, SR_SUM_Y - 8, "Σ m  (partial sum)", { fill:"var(--accent-3)" }, svg);
+  text(SR_QX, SR_QY - 8, "Q_tile",       { fill:"var(--accent)" },   svg);
+  text(SR_DX, SR_DY - 8, "D_tile",       { fill:"var(--accent-2)" }, svg);
+  text(SR_SX, SR_SY - 8, "S = Q·Dᵀ",     { fill:"var(--ink-dim)" },  svg);
+  text(SR_MX, SR_MY - 8, "m  (max)",     { fill:"var(--accent-3)" }, svg);
+  text(SR_SUM_X, SR_SUM_Y - 8, "Σ m  (sum)", { fill:"var(--accent-3)" }, svg);
 
   // HBM Q grid (Lq × d)
   var qCells = [];
