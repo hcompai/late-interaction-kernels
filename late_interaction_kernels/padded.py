@@ -49,10 +49,16 @@ class PackedBatch:
 
     max_seqlen_q: int
     """Maximum query length (Python int) — pass to :func:`score_pairs_packed`
-    as ``max_seqlen_q`` to skip the kernel's own D2H validation."""
+    as ``max_seqlen_q`` to skip the kernel's own D2H sync."""
+
+    max_seqlen_d: int
+    """Maximum doc length (Python int) — pass to :func:`score_pairs_packed`
+    as ``max_seqlen_d`` to skip the kernel's own D2H sync."""
 
     def __iter__(self):
-        """Allow tuple-style unpacking: ``Q, cu_q, D, cu_d, pq, pd, max_lq = pack_padded(...)``."""
+        """Allow tuple-style unpacking:
+        ``Q, cu_q, D, cu_d, pq, pd, max_lq, max_ld = pack_padded(...)``.
+        """
         yield self.Q_packed
         yield self.cu_seqlens_q
         yield self.D_packed
@@ -60,6 +66,7 @@ class PackedBatch:
         yield self.pair_q_idx
         yield self.pair_d_idx
         yield self.max_seqlen_q
+        yield self.max_seqlen_d
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +86,9 @@ def pack_padded(
 
     Builds a :class:`PackedBatch` from padded ``[B, Lq, d]`` /
     ``[B, C, Ld, d]`` inputs using boolean-mask gather + ``cumsum`` — no
-    ``.item()`` syncs except for the single unavoidable
-    ``max_seqlen_q = int(qlen.max().item())`` that :func:`score_pairs_packed`
-    needs to size shared memory.
+    ``.item()`` syncs except for a single combined ``max_seqlen_q``/
+    ``max_seqlen_d`` fetch that :func:`score_pairs_packed` needs to size
+    shared memory (and would otherwise re-fetch itself, two syncs not one).
 
     Args:
         queries: ``[B, Lq, d]`` fp16 / bf16 / fp32.
@@ -105,6 +112,7 @@ def pack_padded(
         pair_q_idx:    [B * C]          int32  — pair_q_idx[b*C+c] = b
         pair_d_idx:    [B * C]          int32  — pair_d_idx[b*C+c] = b*C+c
         max_seqlen_q:  Python int
+        max_seqlen_d:  Python int
     """
     if queries.dim() != 3:
         raise ValueError(f"queries must be [B, Lq, d]; got shape {tuple(queries.shape)}")
@@ -156,8 +164,10 @@ def pack_padded(
     pair_q_idx = (flat_idx // C).contiguous()
     pair_d_idx = flat_idx.contiguous()
 
-    # One D2H sync: pull max_seqlen_q so the kernel can skip its own.
-    max_seqlen_q = int(qlen.max().item())
+    # One combined D2H sync: pull both maxes so score_pairs_packed can skip
+    # its own (otherwise it recomputes max_seqlen_d from cu_seqlens_d, giving
+    # two syncs per call instead of one).
+    max_seqlen_q, max_seqlen_d = torch.stack([qlen.max(), dlen.max()]).tolist()
 
     return PackedBatch(
         Q_packed=Q_packed,
@@ -167,6 +177,7 @@ def pack_padded(
         pair_q_idx=pair_q_idx,
         pair_d_idx=pair_d_idx,
         max_seqlen_q=max_seqlen_q,
+        max_seqlen_d=max_seqlen_d,
     )
 
 
@@ -217,6 +228,7 @@ def maxsim_padded(
                 batch.pair_q_idx,
                 batch.pair_d_idx,
                 max_seqlen_q=batch.max_seqlen_q,
+                max_seqlen_d=batch.max_seqlen_d,
             )
             return flat.view(B, C)
         except ImportError:

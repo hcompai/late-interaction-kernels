@@ -125,10 +125,10 @@ def test_pack_padded_ignores_pad_tokens() -> None:
 
 
 def test_pack_padded_iter_unpacking() -> None:
-    """PackedBatch can be unpacked as a 7-tuple via __iter__."""
+    """PackedBatch can be unpacked as an 8-tuple via __iter__."""
     queries, documents, qlen, dlen = _make_batch()
     batch = pack_padded(queries, documents, qlen, dlen)
-    Q, cu_q, D, cu_d, pq, pd, max_lq = batch
+    Q, cu_q, D, cu_d, pq, pd, max_lq, max_ld = batch
     assert Q is batch.Q_packed
     assert cu_q is batch.cu_seqlens_q
     assert D is batch.D_packed
@@ -136,6 +136,7 @@ def test_pack_padded_iter_unpacking() -> None:
     assert pq is batch.pair_q_idx
     assert pd is batch.pair_d_idx
     assert max_lq == batch.max_seqlen_q
+    assert max_ld == batch.max_seqlen_d
 
 
 def test_pack_padded_validate_flag_catches_zero_length() -> None:
