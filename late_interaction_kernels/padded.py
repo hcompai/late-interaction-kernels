@@ -94,10 +94,14 @@ def pack_padded(
         queries: ``[B, Lq, d]`` fp16 / bf16 / fp32.
         documents: ``[B, C, Ld, d]`` same dtype as ``queries``.
         query_lengths: ``[B]`` int32/int64. Valid lengths in ``(0, Lq]``.
-        doc_lengths: ``[B, C]`` int32/int64. Valid lengths in ``(0, Ld]``.
+            Upper-bound violations are caught by an always-on async assert
+            (no D2H sync on the fast path); a clean ``ValueError`` is only
+            raised when ``validate=True``.
+        doc_lengths: ``[B, C]`` int32/int64. Same contract as ``query_lengths``.
         validate: when ``True`` performs three extra D2H syncs to catch
-            zero-length or out-of-range lengths. Leave ``False`` (default)
-            in the hot path; use ``True`` for first-time / debug runs.
+            zero-length or out-of-range lengths with clean ``ValueError``\\ s.
+            Leave ``False`` (default) in the hot path; use ``True`` for
+            first-time / debug runs.
 
     Returns:
         :class:`PackedBatch` with packed tensors, ``cu_seqlens`` offsets,
@@ -134,6 +138,15 @@ def pack_padded(
     device = queries.device
     qlen = query_lengths.to(device=device, dtype=torch.int32)
     dlen = doc_lengths.to(device=device, dtype=torch.int32)
+
+    # Always-on upper-bound check. The boolean-mask gather below uses
+    # ``q_pos < qlen[:, None]`` against an arange of length ``Lq_max``: if
+    # any ``qlen[b] > Lq_max``, pad positions get silently included in the
+    # packed output and the kernel returns wrong scores with no error.
+    # torch._assert_async runs the comparison on-device and schedules the
+    # abort asynchronously — no D2H sync on the fast path.
+    torch._assert_async(qlen.le(Lq_max).all())
+    torch._assert_async(dlen.le(Ld_max).all())
 
     if validate:
         if (qlen <= 0).any().item():
