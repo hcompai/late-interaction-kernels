@@ -2,7 +2,7 @@
 
 Mirrors the CUDA suite in ``tests/test_pylate_compat.py`` but exercises
 the MPS dispatch path: ``patched_colbert_scores`` should route ``mps``
-tensors through :func:`late_interaction_kernels._mps.maxsim_mps` (the
+tensors through :func:`late_interaction_kernels.mps.compile_dispatch.maxsim_mps` (the
 ``torch.compile``-fused, autograd-aware path) instead of falling
 through to PyLate's reference.
 
@@ -38,7 +38,7 @@ if "documents_mask" not in _params or "queries_mask" not in _params:
 @pytest.fixture(autouse=True)
 def _clear_compile_cache():
     """Reset the per-process ``torch.compile`` cache between tests."""
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     yield

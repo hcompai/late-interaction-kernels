@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from ._utils import next_pow2
+from late_interaction_kernels._utils import next_pow2
 
 
 def maxsim_backward_unified_reference(

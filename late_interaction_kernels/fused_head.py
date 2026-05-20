@@ -18,7 +18,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ._utils import next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 
 def _fused_head_configs():

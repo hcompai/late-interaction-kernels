@@ -11,8 +11,8 @@ indices.
 
 import torch
 
-from .forward import maxsim_forward
-from .reference import xtr_reference as _xtr_reference  # noqa: F401
+from late_interaction_kernels.forward import maxsim_forward
+from late_interaction_kernels.reference import xtr_reference as _xtr_reference  # noqa: F401
 
 
 def maxsim_xtr(

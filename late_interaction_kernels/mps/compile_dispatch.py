@@ -6,7 +6,7 @@ and friends therefore can't run on ``mps:0`` tensors.
 
 Two MaxSim implementations cover the gap:
 
-* :mod:`._mps` (this module) ships a ``torch.compile``-fused reference.
+* :mod:`.compile_dispatch` (this module) ships a ``torch.compile``-fused reference.
   Inductor lowers the einsum + max + sum chain to a single MPSGraph,
   typically ≈2× faster than eager. The compile path is autograd-aware,
   so it carries every training-time call.
@@ -30,8 +30,8 @@ from collections.abc import Callable
 
 import torch
 
-from . import metal as _metal
-from .reference import maxsim_reference
+from late_interaction_kernels.mps import metal as _metal
+from late_interaction_kernels.reference import maxsim_reference
 
 _compile_lock = threading.Lock()
 _compiled_cache: dict[tuple, Callable] = {}

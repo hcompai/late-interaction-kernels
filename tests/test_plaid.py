@@ -59,8 +59,7 @@ def _make_quant_index(Nd, max_Ld, d, n_centroids, nbits, device="cuda", seed=0):
 @pytest.mark.parametrize("Lq", [32, 128])
 @pytest.mark.parametrize("max_Ld", [64, 200])
 def test_plaid_approx_score_parity(Lq, max_Ld):
-    from late_interaction_kernels import plaid_approx_score
-    from late_interaction_kernels.plaid import plaid_approx_score_reference
+    from late_interaction_kernels.plaid import plaid_approx_score, plaid_approx_score_reference
 
     torch.manual_seed(0)
     n_centroids = 256
@@ -75,7 +74,7 @@ def test_plaid_approx_score_parity(Lq, max_Ld):
 
 
 def test_plaid_approx_score_handles_empty_docs():
-    from late_interaction_kernels import plaid_approx_score
+    from late_interaction_kernels.plaid import plaid_approx_score
 
     qcs = torch.randn(64, 32, device="cuda", dtype=torch.float32)
     codes = torch.randint(0, 64, (4, 50), device="cuda", dtype=torch.int64)
@@ -95,8 +94,7 @@ def test_plaid_approx_score_handles_empty_docs():
 def test_residual_unpack_roundtrips(nbits):
     """Round-trip a packed residual through our Triton unpack and verify the
     recovered emb matches the ground-truth (centroid + bucket_weight)."""
-    from late_interaction_kernels import maxsim_residual
-    from late_interaction_kernels.plaid import maxsim_residual_reference
+    from late_interaction_kernels.plaid import maxsim_residual, maxsim_residual_reference
 
     idx = _make_quant_index(
         Nd=4,
@@ -133,8 +131,7 @@ def test_residual_unpack_roundtrips(nbits):
 
 @pytest.mark.parametrize("nbits", [2, 4])
 def test_residual_normalize_matches_reference(nbits):
-    from late_interaction_kernels import maxsim_residual
-    from late_interaction_kernels.plaid import maxsim_residual_reference
+    from late_interaction_kernels.plaid import maxsim_residual, maxsim_residual_reference
 
     idx = _make_quant_index(Nd=6, max_Ld=32, d=128, n_centroids=64, nbits=nbits)
     Q = torch.randn(3, 32, 128, device="cuda", dtype=torch.bfloat16)
@@ -177,7 +174,8 @@ def test_residual_backward_grad_Q_matches_dense_autograd(nbits, normalize):
 
     centroids / residuals / codes are non-differentiable by construction.
     """
-    from late_interaction_kernels import maxsim, maxsim_residual
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.plaid import maxsim_residual
     from late_interaction_kernels.reference import unpack_residuals_reference
 
     idx = _make_quant_index(
@@ -240,8 +238,7 @@ def test_residual_backward_grad_Q_matches_dense_autograd(nbits, normalize):
 
 def test_residual_inference_does_not_save_argmax():
     """``maxsim_residual`` with ``Q.requires_grad=False`` skips the argmax buffer."""
-    from late_interaction_kernels import maxsim_residual
-    from late_interaction_kernels.plaid import maxsim_residual_reference
+    from late_interaction_kernels.plaid import maxsim_residual, maxsim_residual_reference
 
     idx = _make_quant_index(Nd=3, max_Ld=16, d=128, n_centroids=32, nbits=4)
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
@@ -295,7 +292,7 @@ def _dense_to_varlen(idx):
 
 @pytest.mark.parametrize("nbits", [2, 4, 8])
 def test_residual_varlen_matches_dense(nbits):
-    from late_interaction_kernels import maxsim_residual, maxsim_residual_varlen
+    from late_interaction_kernels.plaid import maxsim_residual, maxsim_residual_varlen
 
     idx = _make_quant_index(Nd=5, max_Ld=32, d=128, n_centroids=64, nbits=nbits)
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
@@ -330,7 +327,7 @@ def test_residual_varlen_matches_dense(nbits):
 
 
 def test_residual_varlen_handles_empty_docs():
-    from late_interaction_kernels import maxsim_residual_varlen
+    from late_interaction_kernels.plaid import maxsim_residual_varlen
 
     centroids = torch.randn(32, 128, device="cuda", dtype=torch.float32)
     buckets = torch.linspace(-0.1, 0.1, 16, device="cuda", dtype=torch.float32)
@@ -350,7 +347,8 @@ def test_residual_varlen_handles_empty_docs():
 def test_residual_matches_dense_maxsim():
     """With nbits=8 and identity bucket weights, residual scoring should
     recover exact dense MaxSim up to rounding."""
-    from late_interaction_kernels import maxsim, maxsim_residual
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.plaid import maxsim_residual
 
     torch.manual_seed(0)
     Nd, max_Ld, d, n_cent, nbits = 4, 32, 128, 16, 8

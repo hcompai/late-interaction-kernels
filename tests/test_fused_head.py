@@ -84,7 +84,7 @@ pytestmark_cuda = pytest.mark.cuda
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_fused_head_parity(shape, dtype, rel):
-    from late_interaction_kernels import maxsim_from_hidden
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = shape
     torch.manual_seed(0)
@@ -106,7 +106,7 @@ def test_fused_head_parity(shape, dtype, rel):
 
 @pytest.mark.cuda
 def test_fused_head_no_bias():
-    from late_interaction_kernels import maxsim_from_hidden
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = 2, 4, 16, 64, 128, 32
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -121,7 +121,7 @@ def test_fused_head_no_bias():
 
 @pytest.mark.cuda
 def test_fused_head_with_d_mask():
-    from late_interaction_kernels import maxsim_from_hidden
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 32, 128, 256, 64
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -139,7 +139,8 @@ def test_fused_head_with_d_mask():
 @pytest.mark.cuda
 def test_fused_head_matches_unfused_maxsim():
     """The fused kernel must match the canonical `F.linear + normalize + maxsim` path."""
-    from late_interaction_kernels import maxsim_from_hidden, maxsim_inference
+    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nd, Lq, Ld, d_model, d_out = 8, 32, 200, 768, 128
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -159,7 +160,7 @@ def test_fused_head_matches_unfused_maxsim():
 
 @pytest.mark.cuda
 def test_fused_head_rejects_bad_shapes():
-    from late_interaction_kernels import maxsim_from_hidden
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Q = torch.randn(4, 32, 64, device="cuda", dtype=torch.bfloat16)
     H_d = torch.randn(8, 128, 256, device="cuda", dtype=torch.bfloat16)

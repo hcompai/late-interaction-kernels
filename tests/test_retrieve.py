@@ -200,11 +200,8 @@ def test_maxsim_per_call_backward_invalid_raises():
 
 def test_maxsim_per_call_overrides_global():
     """Per-call `backward=` must not leak back into the global state."""
-    from late_interaction_kernels import (
-        get_backward_method,
-        maxsim,
-        set_backward_method,
-    )
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import get_backward_method, set_backward_method
 
     old = get_backward_method()
     try:
@@ -215,22 +212,6 @@ def test_maxsim_per_call_overrides_global():
         assert get_backward_method() == "csr"
     finally:
         set_backward_method(old)
-
-
-def test_maxsim_varlen_inference_deprecated():
-    import warnings
-
-    from late_interaction_kernels import maxsim_varlen_inference
-
-    Q = torch.randn(8, 128, device="cuda", dtype=torch.float16)
-    D = torch.randn(32, 128, device="cuda", dtype=torch.float16)
-    cu_q = torch.tensor([0, 4, 8], device="cuda", dtype=torch.int32)
-    cu_d = torch.tensor([0, 16, 32], device="cuda", dtype=torch.int32)
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        scores = maxsim_varlen_inference(Q, D, cu_q, cu_d)
-    assert scores.shape == (2, 2)
-    assert any(issubclass(x.category, DeprecationWarning) for x in w), w
 
 
 def test_unnormalized_input_warns_once(monkeypatch):

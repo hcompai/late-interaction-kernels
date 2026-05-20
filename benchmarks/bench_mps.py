@@ -5,7 +5,7 @@ Three implementations land on Apple Silicon:
 * ``metal``   — fused ``simdgroup_matrix`` kernel
   (:func:`late_interaction_kernels.metal.maxsim_inference_metal`),
 * ``compile`` — ``torch.compile``-fused reference
-  (:func:`late_interaction_kernels._mps.maxsim_inference_mps`,
+  (:func:`late_interaction_kernels.mps.compile_dispatch.maxsim_inference_mps`,
   forced via ``LIK_FORCE_MPS_BACKEND=compile``),
 * ``eager``   — unfused PyTorch reference (no compile).
 
@@ -39,7 +39,7 @@ from typing import Final
 
 import torch
 
-from late_interaction_kernels import metal as _metal
+from late_interaction_kernels.mps import metal as _metal
 from late_interaction_kernels.reference import maxsim_reference
 
 # (name, Nq, Nd, Lq, Ld, d)
@@ -87,7 +87,7 @@ def _peak_mb(fn) -> float:
 
 def _compile_call(Q, D):
     """Force the compile path even on shapes the heuristic prefers Metal for."""
-    from late_interaction_kernels import _mps
+    from late_interaction_kernels.mps import compile_dispatch as _mps
 
     return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
 

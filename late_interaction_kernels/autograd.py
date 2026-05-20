@@ -5,9 +5,8 @@ import warnings
 
 import torch
 
-from .backward import maxsim_backward
-from .backward_unified import maxsim_backward_unified
-from .forward import _run_forward, maxsim_forward
+from late_interaction_kernels.backward import maxsim_backward, maxsim_backward_unified
+from late_interaction_kernels.forward import _run_forward, maxsim_forward
 
 _BACKWARD_METHOD = "auto"  # module-level toggle, flipped by `set_backward_method`
 

@@ -2,7 +2,7 @@
 
 These exercise the ``simdgroup_matrix``-based forward kernel in
 :mod:`late_interaction_kernels.metal` directly, plus the
-:mod:`late_interaction_kernels._mps` dispatch heuristic that routes
+:mod:`late_interaction_kernels.mps.compile_dispatch` dispatch heuristic that routes
 inference between the Metal kernel and the compile path.
 
 Skips on machines without an MPS-capable PyTorch build or without
@@ -19,7 +19,7 @@ mps = pytest.importorskip(
 if not torch.backends.mps.is_available():
     pytest.skip("MPS device not available", allow_module_level=True)
 
-from late_interaction_kernels import metal as _metal  # noqa: E402
+from late_interaction_kernels.mps import metal as _metal  # noqa: E402
 
 if not _metal.is_available():
     pytest.skip(
@@ -194,7 +194,7 @@ def test_supports_accepts_typical_inference_shape():
 def test_dispatch_falls_back_to_compile_for_fp32():
     """fp32 inputs must use the compile path, not crash on Metal."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(2, 32, 128, dtype=torch.float32, device="mps")
@@ -207,7 +207,7 @@ def test_dispatch_falls_back_to_compile_for_fp32():
 def test_dispatch_falls_back_to_compile_for_unsupported_d():
     """d > 128 routes to compile (Metal threadgroup-memory + Q-cache cap)."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(1, 32, 192, dtype=torch.float16, device="mps")
@@ -221,7 +221,7 @@ def test_dispatch_uses_compile_for_small_batch(monkeypatch):
     """Small Nq*Nd shapes go to compile (lower launch overhead)."""
     monkeypatch.setenv("LIK_MPS_METAL_MIN_BATCH", "10000000")
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(1, 32, 128, dtype=torch.float16, device="mps")
@@ -234,7 +234,7 @@ def test_force_metal_via_env(monkeypatch):
     """``LIK_FORCE_MPS_BACKEND=metal`` bypasses the heuristic at inference."""
     monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "metal")
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     # Tiny shape the heuristic would otherwise route to compile.
@@ -250,7 +250,7 @@ def test_force_compile_via_env(monkeypatch):
     """``LIK_FORCE_MPS_BACKEND=compile`` skips Metal even on a winning shape."""
     monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "compile")
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(1, 32, 128, dtype=torch.float16, device="mps")
@@ -263,7 +263,7 @@ def test_force_reference_via_env(monkeypatch):
     """``LIK_FORCE_MPS_BACKEND=reference`` runs eager — no compile, no Metal."""
     monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "reference")
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(1, 16, 64, dtype=torch.float16, device="mps")
@@ -276,7 +276,7 @@ def test_force_reference_via_env(monkeypatch):
 def test_metal_path_is_used_for_inference_winning_shape(monkeypatch):
     """A canonical inference shape skips the compile cache → Metal path."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     monkeypatch.delenv("LIK_FORCE_MPS_BACKEND", raising=False)
     monkeypatch.delenv("LIK_DISABLE_COMPILE", raising=False)
@@ -291,7 +291,7 @@ def test_metal_path_is_used_for_inference_winning_shape(monkeypatch):
 def test_train_time_call_uses_compile_path():
     """Autograd-tracking calls must use compile (Metal is forward-only)."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     Q = torch.randn(2, 32, 128, dtype=torch.float32, device="mps", requires_grad=True)
@@ -304,8 +304,8 @@ def test_train_time_call_uses_compile_path():
 
 def test_retrieve_uses_metal_path_when_eligible(monkeypatch):
     """``retrieve()`` is inference-only → it should pick Metal on the right shapes."""
-    from late_interaction_kernels import _mps as _mps_mod
     from late_interaction_kernels import retrieve
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     monkeypatch.delenv("LIK_FORCE_MPS_BACKEND", raising=False)
     _mps_mod._compiled_cache.clear()

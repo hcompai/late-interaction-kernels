@@ -22,8 +22,8 @@ try:
     import triton
     import triton.language as tl
 
-    from ._autotune import forward_configs, prune_forward
-    from ._utils import next_pow2
+    from late_interaction_kernels._autotune import forward_configs, prune_forward
+    from late_interaction_kernels._utils import next_pow2
 
     _HAS_TRITON = True
 except ImportError:  # pragma: no cover
@@ -314,7 +314,7 @@ def maxsim_inference_fp8(
             )
             _WARNED_FP8_FALLBACK = True
         # Dequantize and fall back to the regular kernel.
-        from .autograd import maxsim_inference
+        from late_interaction_kernels.autograd import maxsim_inference
 
         if scale_q_per_token:
             Qd = Q.to(torch.bfloat16) * scale_Q.unsqueeze(-1).to(torch.bfloat16)

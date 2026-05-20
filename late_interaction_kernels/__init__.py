@@ -8,9 +8,18 @@ Common entry points::
     scorer = MaxSimScorer(normalize=True)  # nn.Module, autograd-aware
     scores, idx = retrieve(Q, D, top_k=100)
 
+The top-level surface is intentionally small. Niche / lower-level kernels live
+in submodules and must be imported explicitly:
+
+- pair-list scoring → ``late_interaction_kernels.score_pairs``
+- padded → packed building blocks → ``late_interaction_kernels.padded``
+- fused D-side head → ``late_interaction_kernels.fused_head``
+- PLAID / ColBERTv2 → ``late_interaction_kernels.plaid``
+- FP8 inference → ``late_interaction_kernels.fp8``
+- backward-method config → ``late_interaction_kernels.autograd``
+- research variants → ``late_interaction_kernels.experimental``
+
 See the README for the full API and benchmarks.
-FP8 helpers live in ``late_interaction_kernels.fp8``.
-Research kernels live in ``late_interaction_kernels.experimental``.
 """
 
 from importlib.metadata import PackageNotFoundError
@@ -32,21 +41,8 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 if _HAS_TRITON:
-    from .autograd import (
-        get_backward_method,
-        maxsim,
-        maxsim_inference,
-        set_backward_method,
-    )
-    from .fp8 import maxsim_inference_fp8
-    from .fused_head import maxsim_from_hidden, maxsim_from_hidden_train
-    from .plaid import (
-        maxsim_residual,
-        maxsim_residual_varlen,
-        plaid_approx_score,
-    )
-    from .scatter import maxsim_inference_scatter
-    from .varlen import maxsim_varlen
+    from late_interaction_kernels.autograd import maxsim, maxsim_inference
+    from late_interaction_kernels.varlen import maxsim_varlen
 else:  # pragma: no cover
 
     def _needs_triton(*_args, **_kwargs):  # type: ignore[no-redef]
@@ -57,152 +53,31 @@ else:  # pragma: no cover
         )
 
     maxsim = maxsim_inference = _needs_triton
-    maxsim_from_hidden = maxsim_from_hidden_train = _needs_triton
-    maxsim_inference_fp8 = _needs_triton
     maxsim_varlen = _needs_triton
-    plaid_approx_score = _needs_triton
-    maxsim_residual = maxsim_residual_varlen = _needs_triton
-    maxsim_inference_scatter = _needs_triton
-    set_backward_method = get_backward_method = _needs_triton
 
 # Cross-platform high-level entry points:
-# * `MaxSimScorer` / `retrieve` fall back to the pure-PyTorch reference on
-#   machines without Triton, so training and retrieval code is unit-testable
-#   on a laptop;
+# * `MaxSimScorer` / `retrieve` / `maxsim_padded` fall back to the pure-PyTorch
+#   reference on machines without Triton, so training and retrieval code is
+#   unit-testable on a laptop;
 # * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
 #   `torch.compile`-fused path, anything else → PyLate's own implementation.
-from . import reference  # noqa: E402,F401
-from .pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
-from .retrieve import MaxSimScorer, retrieve  # noqa: E402
-
-# Symbols moved out of the top level. Still importable, with a
-# `DeprecationWarning`. Scheduled for removal in a future release.
-_DEPRECATED_EXPERIMENTAL = {
-    "maxsim_matryoshka": "late_interaction_kernels.experimental",
-    "maxsim_xtr": "late_interaction_kernels.experimental",
-    "soft_maxsim": "late_interaction_kernels.experimental",
-    "smooth_maxsim": "late_interaction_kernels.experimental",
-}
-
-_DEPRECATED_FP8_HELPERS = {
-    "quantize_fp8_per_tensor": "late_interaction_kernels.fp8",
-    "quantize_fp8_per_token": "late_interaction_kernels.fp8",
-    "dequantize_fp8_per_tensor": "late_interaction_kernels.fp8",
-    "dequantize_fp8_per_token": "late_interaction_kernels.fp8",
-}
-
-
-def __getattr__(name: str):
-    """PEP 562 — re-export deprecated / moved symbols with a warning."""
-    import warnings
-
-    if name == "maxsim_forward":
-        warnings.warn(
-            "`late_interaction_kernels.maxsim_forward` is deprecated. Use "
-            "`maxsim_inference` for reranking, `maxsim` for gradients, or "
-            "import the primitive from `late_interaction_kernels.forward`.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from .forward import maxsim_forward as _mf
-
-            return _mf
-        return _needs_triton
-
-    if name == "maxsim_topk":
-        warnings.warn(
-            "`maxsim_topk` is deprecated; use `retrieve(Q, D, top_k=...)` "
-            "(same semantics, transparent CPU fallback). Still importable from "
-            "`late_interaction_kernels.topk`.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from .topk import maxsim_topk as _mt
-
-            return _mt
-        return _needs_triton
-
-    if name == "maxsim_residual_inference":
-        warnings.warn(
-            "`maxsim_residual_inference` is deprecated; `maxsim_residual` "
-            "auto-skips the argmax save when `Q.requires_grad=False`.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from .plaid import maxsim_residual_inference as _mri
-
-            return _mri
-        return _needs_triton
-
-    if name == "maxsim_varlen_inference":
-        warnings.warn(
-            "`maxsim_varlen_inference` is deprecated; `maxsim_varlen` "
-            "auto-skips the argmax save when neither input requires grad.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from .varlen import maxsim_varlen_inference as _mvi
-
-            return _mvi
-        return _needs_triton
-
-    if name in _DEPRECATED_EXPERIMENTAL:
-        new_home = _DEPRECATED_EXPERIMENTAL[name]
-        warnings.warn(
-            f"`late_interaction_kernels.{name}` moved to `{new_home}`. Use `from {new_home} import {name}`.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from . import experimental
-
-            return getattr(experimental, name)
-        return _needs_triton
-
-    if name in _DEPRECATED_FP8_HELPERS:
-        new_home = _DEPRECATED_FP8_HELPERS[name]
-        warnings.warn(
-            f"`late_interaction_kernels.{name}` moved to `{new_home}`. Use `from {new_home} import {name}`.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if _HAS_TRITON:
-            from . import fp8
-
-            return getattr(fp8, name)
-        return _needs_triton
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
+from late_interaction_kernels import reference  # noqa: E402,F401
+from late_interaction_kernels.padded import maxsim_padded  # noqa: E402
+from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
+from late_interaction_kernels.retrieve import MaxSimScorer, retrieve  # noqa: E402
 
 __all__ = [
     "__version__",
     # high-level
     "MaxSimScorer",
     "retrieve",
+    "maxsim_padded",
     "patch_pylate",
     "unpatch_pylate",
     # core MaxSim
     "maxsim",
     "maxsim_inference",
     "maxsim_varlen",
-    # reranking on packed batches
-    "maxsim_inference_scatter",
-    # fused D-side head
-    "maxsim_from_hidden",
-    "maxsim_from_hidden_train",
-    # PLAID / ColBERTv2
-    "plaid_approx_score",
-    "maxsim_residual",
-    "maxsim_residual_varlen",
-    # FP8 inference
-    "maxsim_inference_fp8",
-    # configuration
-    "set_backward_method",
-    "get_backward_method",
+    # ground-truth reference module
     "reference",
 ]

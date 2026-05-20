@@ -162,7 +162,7 @@ def time_cuda(fn, warmup: int = 2, iters: int = 5) -> float:
 
 
 def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
-    from late_interaction_kernels import maxsim_residual_varlen
+    from late_interaction_kernels.plaid import maxsim_residual_varlen
 
     print(f"\n{'=' * 70}\n{name}: {n_docs:,} docs × up to {ld_max} toks, nbits={nbits}\n{'=' * 70}")
 

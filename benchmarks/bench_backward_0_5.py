@@ -16,7 +16,8 @@ import os
 
 import torch
 
-from late_interaction_kernels import maxsim, maxsim_residual, maxsim_varlen
+from late_interaction_kernels import maxsim, maxsim_varlen
+from late_interaction_kernels.plaid import maxsim_residual
 from late_interaction_kernels.reference import unpack_residuals_reference
 
 

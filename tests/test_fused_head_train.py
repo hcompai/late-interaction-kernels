@@ -41,7 +41,7 @@ def _unfused_reference(Q, H_d, W, b, *, normalize, d_mask=None):
 @pytest.mark.cuda
 @pytest.mark.parametrize("normalize", [True, False])
 def test_fused_head_train_forward_parity(normalize):
-    from late_interaction_kernels import maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
 
     Nq, Nd, Lq, Ld, d_model, d_out = 2, 8, 32, 128, 768, 128
     dtype = torch.bfloat16
@@ -70,7 +70,7 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
     relative error on a small fraction of ``Q`` rows. With fp32 inputs
     the winner is deterministic and gradients match tightly.
     """
-    from late_interaction_kernels import maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 16, 64, 256, 64
     dtype = torch.float32
@@ -126,7 +126,7 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
 @pytest.mark.cuda
 def test_fused_head_train_only_active_grads_filled():
     """If a tensor doesn't require grad we must not silently allocate for it."""
-    from late_interaction_kernels import maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 8, 16, 128, 64
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -149,7 +149,7 @@ def test_fused_head_train_only_active_grads_filled():
 @pytest.mark.cuda
 def test_fused_head_train_matches_fused_head_inference():
     """Forward of the train variant must agree with the inference variant."""
-    from late_interaction_kernels import maxsim_from_hidden, maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden, maxsim_from_hidden_train
 
     Nq, Nd, Lq, Ld, d_model, d_out = 2, 8, 32, 128, 768, 128
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)

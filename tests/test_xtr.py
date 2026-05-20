@@ -21,7 +21,7 @@ def test_xtr_degenerates_to_maxsim_at_k1():
 @pytest.mark.parametrize("top_k", [2, 5, 10])
 def test_xtr_matches_reference(top_k):
     from late_interaction_kernels.experimental import maxsim_xtr
-    from late_interaction_kernels.xtr import _xtr_reference
+    from late_interaction_kernels.experimental.xtr import _xtr_reference
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 128, 128, device="cuda", dtype=torch.bfloat16)
@@ -33,7 +33,7 @@ def test_xtr_matches_reference(top_k):
 
 def test_xtr_with_masks():
     from late_interaction_kernels.experimental import maxsim_xtr
-    from late_interaction_kernels.xtr import _xtr_reference
+    from late_interaction_kernels.experimental.xtr import _xtr_reference
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
     D = torch.randn(4, 128, 128, device="cuda", dtype=torch.bfloat16)

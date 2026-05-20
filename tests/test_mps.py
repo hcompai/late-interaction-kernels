@@ -1,7 +1,7 @@
 """MPS (Apple Silicon) dispatch tests.
 
 These exercise the ``torch.compile``-fused path in
-:mod:`late_interaction_kernels._mps` against the eager CPU reference.
+:mod:`late_interaction_kernels.mps.compile_dispatch` against the eager CPU reference.
 The whole file auto-skips on machines without an MPS-capable PyTorch
 build, so it lives alongside the CUDA tests but doesn't gate CI.
 
@@ -25,7 +25,7 @@ if not torch.backends.mps.is_available():
 @pytest.fixture(autouse=True)
 def _clear_compile_cache():
     """Reset the compile cache so each test starts from a clean slate."""
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     _mps_mod._compiled_cache.clear()
     yield
@@ -250,7 +250,7 @@ def test_grad_matches_reference_finite_difference():
 def test_compile_cache_reuses_across_calls():
     """Repeated calls with the same signature don't re-compile."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     Q = torch.randn(2, 16, 64, dtype=torch.float16, device="mps")
     D = torch.randn(3, 32, 64, dtype=torch.float16, device="mps")
@@ -265,7 +265,7 @@ def test_compile_cache_reuses_across_calls():
 def test_compile_cache_keys_per_dtype_and_mask_signature():
     """Different dtype / mask combos compile separately."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     scorer = MaxSimScorer(normalize=True)
     Q16 = torch.randn(2, 8, 64, dtype=torch.float16, device="mps")
@@ -284,7 +284,7 @@ def test_compile_cache_keys_per_dtype_and_mask_signature():
 def test_disable_compile_env_var(monkeypatch):
     """``LIK_DISABLE_COMPILE=1`` falls back to eager — no cache entries."""
     from late_interaction_kernels import MaxSimScorer
-    from late_interaction_kernels import _mps as _mps_mod
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
     monkeypatch.setenv("LIK_DISABLE_COMPILE", "1")
     scorer = MaxSimScorer(normalize=True)

@@ -10,10 +10,16 @@ by ``tl.argmax`` (lowest index), bitwise-reproducible.
 """
 
 import torch
-import triton
-import triton.language as tl
 
-from ._utils import next_pow2
+try:
+    import triton
+    import triton.language as tl
+
+    _HAS_TRITON = True
+except ImportError:  # pragma: no cover
+    _HAS_TRITON = False
+
+from late_interaction_kernels._utils import next_pow2
 
 # ---------------------------------------------------------------------------
 # grad_Q kernel — one program per (q_batch, q_token)
@@ -237,8 +243,8 @@ def maxsim_backward(
     )
 
     if method == "csr":
-        # Imported here to avoid a circular import (backward_csr uses _utils).
-        from .backward_csr import maxsim_backward_csr_dD
+        # Imported here to avoid a circular import (csr uses _utils).
+        from late_interaction_kernels.backward.csr import maxsim_backward_csr_dD
 
         grad_D = maxsim_backward_csr_dD(grad_scores, Q, D, argmax, q_mask)
     else:

@@ -251,61 +251,6 @@ def test_module_getattr_rejects_unknown_names():
         _ = lik.this_symbol_does_not_exist  # noqa: B018
 
 
-@pytest.mark.parametrize(
-    "name,new_home",
-    [
-        ("maxsim_forward", "late_interaction_kernels.forward"),
-        ("maxsim_topk", "late_interaction_kernels.topk"),
-        ("maxsim_residual_inference", "late_interaction_kernels.plaid"),
-        ("maxsim_varlen_inference", "late_interaction_kernels.varlen"),
-        ("maxsim_matryoshka", "late_interaction_kernels.experimental"),
-        ("maxsim_xtr", "late_interaction_kernels.experimental"),
-        ("soft_maxsim", "late_interaction_kernels.experimental"),
-        ("smooth_maxsim", "late_interaction_kernels.experimental"),
-        ("quantize_fp8_per_tensor", "late_interaction_kernels.fp8"),
-        ("quantize_fp8_per_token", "late_interaction_kernels.fp8"),
-        ("dequantize_fp8_per_tensor", "late_interaction_kernels.fp8"),
-        ("dequantize_fp8_per_token", "late_interaction_kernels.fp8"),
-    ],
-)
-def test_deprecated_symbols_warn_but_still_resolve(name, new_home):
-    """Symbols moved off the top level still import with a ``DeprecationWarning``."""
-    import warnings
-
-    import late_interaction_kernels as lik
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        fn = getattr(lik, name)
-    assert callable(fn)
-    msgs = [str(x.message) for x in w if issubclass(x.category, DeprecationWarning)]
-    # The new-home hint is only included for the *moved* symbols, not for
-    # the simple aliases (`maxsim_forward`, `*_inference`). Either way we
-    # require the deprecation message to mention the symbol name.
-    assert any(name in m for m in msgs), msgs
-
-
-def test_deprecated_symbols_not_in_dunder_all():
-    """``from late_interaction_kernels import *`` doesn't surface deprecated symbols."""
-    import late_interaction_kernels as lik
-
-    deprecated = {
-        "maxsim_forward",
-        "maxsim_topk",
-        "maxsim_residual_inference",
-        "maxsim_varlen_inference",
-        "maxsim_matryoshka",
-        "maxsim_xtr",
-        "soft_maxsim",
-        "smooth_maxsim",
-        "quantize_fp8_per_tensor",
-        "quantize_fp8_per_token",
-        "dequantize_fp8_per_tensor",
-        "dequantize_fp8_per_token",
-    }
-    assert deprecated.isdisjoint(lik.__all__), deprecated & set(lik.__all__)
-
-
 def test_reference_topk_path_matches_fused_topk_contract_on_ties():
     """Top-k must be stable under the same-ordering convention torch.topk uses.
 

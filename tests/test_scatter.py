@@ -1,4 +1,4 @@
-"""Parity tests for `maxsim_inference_scatter`."""
+"""Parity tests for `score_pairs_packed`."""
 
 import pytest
 import torch
@@ -14,8 +14,8 @@ def _pack(seqs):
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_scatter_matches_reference(dtype):
-    from late_interaction_kernels import maxsim_inference_scatter
     from late_interaction_kernels.reference import maxsim_reference_scatter
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     torch.manual_seed(0)
     d = 64
@@ -31,7 +31,7 @@ def test_scatter_matches_reference(dtype):
     pair_q = torch.tensor([0, 1, 1, 2, 3, 0, 2], dtype=torch.int32, device="cuda")
     pair_d = torch.tensor([4, 0, 2, 1, 3, 2, 0], dtype=torch.int32, device="cuda")
 
-    got = maxsim_inference_scatter(Qp_g, Dp_g, cu_q_g, cu_d_g, pair_q, pair_d)
+    got = score_pairs_packed(Qp_g, Dp_g, cu_q_g, cu_d_g, pair_q, pair_d)
     ref = maxsim_reference_scatter(Qp_g.float(), Dp_g.float(), cu_q_g, cu_d_g, pair_q, pair_d)
 
     rel = (got - ref).abs().max().item() / max(1e-6, ref.abs().max().item())
@@ -40,7 +40,7 @@ def test_scatter_matches_reference(dtype):
 
 
 def test_scatter_handles_empty_pairs_and_empty_seqs():
-    from late_interaction_kernels import maxsim_inference_scatter
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     d = 32
     Qp = torch.randn(8, d, device="cuda", dtype=torch.float16)
@@ -50,10 +50,10 @@ def test_scatter_handles_empty_pairs_and_empty_seqs():
 
     pair_q = torch.tensor([0], dtype=torch.int32, device="cuda")
     pair_d = torch.tensor([0], dtype=torch.int32, device="cuda")
-    out = maxsim_inference_scatter(Qp, Dp, cu_q, cu_d, pair_q, pair_d)
+    out = score_pairs_packed(Qp, Dp, cu_q, cu_d, pair_q, pair_d)
     assert out.shape == (1,) and out.item() == 0.0
 
-    empty = maxsim_inference_scatter(
+    empty = score_pairs_packed(
         Qp,
         torch.randn(4, d, device="cuda", dtype=torch.float16),
         cu_q,
@@ -66,7 +66,8 @@ def test_scatter_handles_empty_pairs_and_empty_seqs():
 
 def test_scatter_matches_varlen_full_grid():
     """When the pair list covers every (i, j), scatter and varlen agree."""
-    from late_interaction_kernels import maxsim_inference_scatter, maxsim_varlen
+    from late_interaction_kernels import maxsim_varlen
+    from late_interaction_kernels.score_pairs import score_pairs_packed
 
     torch.manual_seed(1)
     d = 48
@@ -80,7 +81,7 @@ def test_scatter_matches_varlen_full_grid():
     pair_q = torch.arange(Nq, device="cuda", dtype=torch.int32).repeat_interleave(Nd)
     pair_d = torch.arange(Nd, device="cuda", dtype=torch.int32).repeat(Nq)
 
-    got = maxsim_inference_scatter(Qp, Dp, cu_q, cu_d, pair_q, pair_d).view(Nq, Nd)
+    got = score_pairs_packed(Qp, Dp, cu_q, cu_d, pair_q, pair_d).view(Nq, Nd)
     full = maxsim_varlen(Qp, Dp, cu_q, cu_d)
 
     rel = (got - full).abs().max().item() / max(1e-6, full.abs().max().item())

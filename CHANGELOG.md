@@ -6,6 +6,80 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
+  are no longer tested and the `torch._assert_async` bounds check in
+  `pack_padded` now assumes the symbol is present unconditionally.
+- [breaking] `maxsim_inference_scatter` → `score_pairs_packed`; module
+  `scatter.py` → `score_pairs.py`. Shorter name, matches prior art in
+  https://github.com/ErikKaum/maxsim. Kernel, signature, and semantics
+  are identical.
+- [breaking] Trimmed the top-level public surface to everyday API only:
+  `MaxSimScorer`, `retrieve`, `patch_pylate` / `unpatch_pylate`, `maxsim`,
+  `maxsim_inference`, `maxsim_varlen`, `maxsim_padded`, and the `reference`
+  module. Lower-level / niche kernels must now be imported from their
+  submodule:
+  - `score_pairs_packed` → `late_interaction_kernels.score_pairs`
+  - `pack_padded` / `PackedBatch` → `late_interaction_kernels.padded`
+  - `maxsim_from_hidden` / `maxsim_from_hidden_train` → `late_interaction_kernels.fused_head`
+  - `plaid_approx_score` / `maxsim_residual` / `maxsim_residual_varlen`
+    → `late_interaction_kernels.plaid`
+  - `maxsim_inference_fp8` → `late_interaction_kernels.fp8`
+  - `set_backward_method` / `get_backward_method` → `late_interaction_kernels.autograd`
+- [breaking] Module relocations following the submodule reorganisation.
+  Direct imports of the old paths now raise `ImportError`:
+  - `late_interaction_kernels._mps` → `late_interaction_kernels.mps.compile_dispatch`
+  - `late_interaction_kernels.metal` → `late_interaction_kernels.mps.metal`
+  - `late_interaction_kernels.backward_csr` → `late_interaction_kernels.backward.csr`
+  - `late_interaction_kernels.backward_unified` → `late_interaction_kernels.backward.unified`
+  - `late_interaction_kernels.{soft,smooth,matryoshka,xtr}` →
+    `late_interaction_kernels.experimental.{soft,smooth,matryoshka,xtr}`
+
+### Removed
+
+- [breaking] Top-level deprecation shims for `maxsim_forward`, `maxsim_topk`,
+  `maxsim_residual_inference`, `maxsim_varlen_inference`,
+  `maxsim_matryoshka`, `maxsim_xtr`, `soft_maxsim`, `smooth_maxsim`,
+  `quantize_fp8_per_tensor`, `quantize_fp8_per_token`,
+  `dequantize_fp8_per_tensor`, `dequantize_fp8_per_token`. Import from
+  their submodules directly: `late_interaction_kernels.{forward, topk,
+  plaid, varlen, experimental, fp8}`.
+
+### Added
+
+- **`maxsim_padded`** — padded-input reranking helper (inspired by
+  https://github.com/ErikKaum/maxsim). Takes `[B, Lq, d]` / `[B, C, Ld, d]`
+  tensors with per-row lengths, returns `[B, C]` fp32. Autograd-aware on
+  every device: CUDA dispatches to the fused pair-list scatter kernel
+  (forward + backward), CPU / MPS fall back to the pure-PyTorch reference.
+  The underlying `pack_padded(...)` building block (which converts to the
+  packed `cu_seqlens` layout with a single combined `max_seqlen_q` /
+  `max_seqlen_d` device→host sync) is available from
+  `late_interaction_kernels.padded`.
+- Fused backward for `score_pairs_packed`. The pair-list scatter kernel
+  now saves a `[num_pairs, max_lq]` argmax buffer when either input has
+  `requires_grad=True` and produces `grad_Q` / `grad_D` directly on the
+  packed layout via two atomic-add scatter kernels. Pair-list training is
+  now `O(num_pairs · max_lq · d)` on both passes; no `[Nq, Nd]`
+  materialisation, no varlen-style off-diagonal compute. Pure inference
+  pays no overhead (`save_argmax=False`).
+
+### Fixed
+
+- `late_interaction_kernels.backward.atomic` referenced
+  `late_interaction_kernels.backward.backward_csr` — a stale path from the
+  submodule rename that would have raised `ModuleNotFoundError` the first
+  time the `auto` backward path picked CSR on a real GPU. Pointed at the
+  correct module (`...backward.csr`).
+- `score_pairs_packed` no longer recompiles or re-autotunes per distinct
+  `(max_lq, max_ld)`. Both were `tl.constexpr` and part of the autotune
+  key, so each distinct max-seqlen bucket triggered a fresh compile +
+  autotune sweep — the same trap `Ld` fell into on the dense forward in
+  0.1.0. The kernel now keys only on `d_pad`. Pinned by
+  `tests/test_compile_cache.py` (single autotune entry across 5 distinct
+  `max_ld` / `max_lq` values).
+
 ### Documentation
 
 - Spell out what the H100 forward table compares against (eager fp32
