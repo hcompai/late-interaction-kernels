@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
+  are no longer tested and the `torch._assert_async` bounds check in
+  `pack_padded` now assumes the symbol is present unconditionally.
 - [breaking] `maxsim_inference_scatter` → `score_pairs_packed`; module
   `scatter.py` → `score_pairs.py`. Shorter name, matches prior art in
   https://github.com/ErikKaum/maxsim. Kernel, signature, and semantics

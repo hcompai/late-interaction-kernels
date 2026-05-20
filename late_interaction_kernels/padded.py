@@ -139,19 +139,13 @@ def pack_padded(
     qlen = query_lengths.to(device=device, dtype=torch.int32)
     dlen = doc_lengths.to(device=device, dtype=torch.int32)
 
-    # Always-on upper-bound check. The boolean-mask gather below uses
-    # ``q_pos < qlen[:, None]`` against an arange of length ``Lq_max``: if
-    # any ``qlen[b] > Lq_max``, pad positions get silently included in the
-    # packed output and the kernel returns wrong scores with no error.
-    #
-    # ``torch._assert_async`` runs the comparison on-device and schedules
-    # the abort asynchronously — no D2H sync on the fast path. The leading
-    # underscore is the only public spelling PyTorch ships today; there is
-    # no equivalent in the stable namespace as of torch 2.8. ``hasattr``
-    # fallback keeps the helper usable if PyTorch ever renames it.
-    if hasattr(torch, "_assert_async"):
-        torch._assert_async(qlen.le(Lq_max).all())
-        torch._assert_async(dlen.le(Ld_max).all())
+    # Always-on upper-bound check: if any length exceeds the padded extent,
+    # the boolean-mask gather below silently includes pad positions and the
+    # kernel returns wrong scores. ``torch._assert_async`` runs the check
+    # on-device with no D2H sync; the underscored name is PyTorch's only
+    # public spelling for this primitive.
+    torch._assert_async(qlen.le(Lq_max).all())
+    torch._assert_async(dlen.le(Ld_max).all())
 
     if validate:
         if (qlen <= 0).any().item():
