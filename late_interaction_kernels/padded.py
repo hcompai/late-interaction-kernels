@@ -143,10 +143,15 @@ def pack_padded(
     # ``q_pos < qlen[:, None]`` against an arange of length ``Lq_max``: if
     # any ``qlen[b] > Lq_max``, pad positions get silently included in the
     # packed output and the kernel returns wrong scores with no error.
-    # torch._assert_async runs the comparison on-device and schedules the
-    # abort asynchronously — no D2H sync on the fast path.
-    torch._assert_async(qlen.le(Lq_max).all())
-    torch._assert_async(dlen.le(Ld_max).all())
+    #
+    # ``torch._assert_async`` runs the comparison on-device and schedules
+    # the abort asynchronously — no D2H sync on the fast path. The leading
+    # underscore is the only public spelling PyTorch ships today; there is
+    # no equivalent in the stable namespace as of torch 2.8. ``hasattr``
+    # fallback keeps the helper usable if PyTorch ever renames it.
+    if hasattr(torch, "_assert_async"):
+        torch._assert_async(qlen.le(Lq_max).all())
+        torch._assert_async(dlen.le(Ld_max).all())
 
     if validate:
         if (qlen <= 0).any().item():
@@ -209,23 +214,16 @@ def maxsim_padded(
 ) -> torch.Tensor:
     """Score reranking candidates from padded inputs, returning ``[B, C]`` fp32.
 
-    Dispatch:
+    On CUDA, packs via :func:`pack_padded` and dispatches to the Triton
+    :func:`score_pairs_packed` kernel — which carries its own fused backward,
+    so the call is autograd-aware. On CPU / MPS / any non-CUDA device,
+    delegates straight to
+    :func:`~late_interaction_kernels.reference.maxsim_padded_reference`
+    (the pure-PyTorch loop is differentiable via the underlying ops).
 
-    * Non-CUDA devices delegate to
-      :func:`~late_interaction_kernels.reference.maxsim_padded_reference`
-      (pure PyTorch; autograd-aware via the underlying ops).
-    * CUDA without ``requires_grad`` packs via :func:`pack_padded` and uses
-      the Triton :func:`score_pairs_packed` kernel (sparse pair-list, fast).
-    * CUDA with ``requires_grad`` on either input routes through
-      :func:`~late_interaction_kernels.varlen.maxsim_varlen` (which carries a
-      fused backward) and slices the diagonal ``[B, B*C] → [B, C]``.
-
-    Note on the training cost: the varlen kernel computes the full
-    ``[B, B*C]`` cross — off-diagonal scores are discarded, so forward FLOPs
-    scale as ``O(B^2 * C)`` rather than ``O(B * C)``. In contrastive
-    training the matmul-heavy backward dominates, so this is usually
-    acceptable up to moderate batch sizes; revisit if forward shows up in
-    profiles at large ``B``.
+    Forward and backward both run on the sparse ``B * C`` pair list, so
+    cost scales as ``O(B * C)`` — no off-diagonal compute, no
+    ``[B, B*C]`` materialisation.
 
     Args:
         queries: ``[B, Lq, d]``.
@@ -243,29 +241,11 @@ def maxsim_padded(
 
         return maxsim_padded_reference(queries, documents, query_lengths, doc_lengths)
 
+    from late_interaction_kernels.score_pairs import score_pairs_packed
+
     B = queries.shape[0]
     C = documents.shape[1]
     batch = pack_padded(queries, documents, query_lengths, doc_lengths, validate=validate)
-
-    if queries.requires_grad or documents.requires_grad:
-        from late_interaction_kernels.varlen import maxsim_varlen
-
-        # maxsim_varlen returns [Nq, Nd] = [B, B*C]. The padded API's
-        # contract is that query b is only scored against its own C docs,
-        # so we keep the diagonal blocks: scores_full[b, b*C:(b+1)*C].
-        scores_full = maxsim_varlen(
-            batch.Q_packed,
-            batch.D_packed,
-            batch.cu_seqlens_q,
-            batch.cu_seqlens_d,
-            batch.max_seqlen_q,
-            batch.max_seqlen_d,
-        )
-        idx = torch.arange(B, device=queries.device)
-        return scores_full.view(B, B, C)[idx, idx]
-
-    from late_interaction_kernels.score_pairs import score_pairs_packed
-
     flat = score_pairs_packed(
         batch.Q_packed,
         batch.D_packed,
