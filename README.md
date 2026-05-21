@@ -114,7 +114,11 @@ Not sure which entry point fits your stack? The docs site ships an interactive d
 
 **👉 [hcompai.github.io/late-interaction-kernels/choose-a-kernel.html](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel)**
 
-<!-- TODO: screenshot of the "Pick a kernel" widget goes here. -->
+<p align="center">
+  <a href="https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel">
+    <img src="assets/kernel_picker_widget_preview.webp" alt="Pick a kernel · interactive decision tree" width="720">
+  </a>
+</p>
 
 ## API
 
