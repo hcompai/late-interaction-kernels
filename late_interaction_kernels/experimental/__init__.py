@@ -2,7 +2,6 @@
 
     from late_interaction_kernels.experimental import (
         maxsim_matryoshka,   # Matryoshka: score K truncated dims at once
-        maxsim_xtr,          # XTR top-K aggregation
         soft_maxsim,         # log-sum-exp relaxation
         smooth_maxsim,       # top-K smoother
     )
@@ -22,7 +21,6 @@ if _HAS_TRITON:
     from late_interaction_kernels.experimental.matryoshka import maxsim_matryoshka
     from late_interaction_kernels.experimental.smooth import smooth_maxsim
     from late_interaction_kernels.experimental.soft import soft_maxsim
-    from late_interaction_kernels.experimental.xtr import maxsim_xtr
 else:  # pragma: no cover
 
     def _needs_triton(*_args, **_kwargs):
@@ -32,11 +30,10 @@ else:  # pragma: no cover
             "(Linux only) to use them."
         )
 
-    maxsim_matryoshka = maxsim_xtr = soft_maxsim = smooth_maxsim = _needs_triton
+    maxsim_matryoshka = soft_maxsim = smooth_maxsim = _needs_triton
 
 __all__ = [
     "maxsim_matryoshka",
-    "maxsim_xtr",
     "soft_maxsim",
     "smooth_maxsim",
 ]

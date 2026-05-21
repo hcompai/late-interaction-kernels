@@ -75,8 +75,7 @@ for `Nq = Nd = 64, Lq = 256`).
 `j ∈ Nd`, gathers `D[j, argmax[i,j,s]]`, weighted-sum, write.
 
 `grad_D` has output contention: many `(i, s)` pairs map to the same
-`(j, t)`. Three kernels, selected by `set_backward_method(...)` or per-call
-via `maxsim(..., backward=...)`:
+`(j, t)`. Three kernels, selected per-call via `maxsim(..., backward=...)`:
 
 1. **`unified`** (default for typical training shapes) — single-pass fused
    `grad_Q + grad_D` in one kernel. Hoists `Q[i, s]` out of the doc-batch

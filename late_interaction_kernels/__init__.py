@@ -16,8 +16,10 @@ in submodules and must be imported explicitly:
 - fused D-side head → ``late_interaction_kernels.fused_head``
 - PLAID / ColBERTv2 → ``late_interaction_kernels.plaid``
 - FP8 inference → ``late_interaction_kernels.fp8``
-- backward-method config → ``late_interaction_kernels.autograd``
 - research variants → ``late_interaction_kernels.experimental``
+
+Picking a backward strategy is per-call: ``maxsim(..., backward="auto" | "unified"
+| "csr" | "atomic")`` (or the same kwarg on :class:`MaxSimScorer`).
 
 See the README for the full API and benchmarks.
 """
@@ -62,6 +64,10 @@ else:  # pragma: no cover
 # * `patch_pylate` dispatches per-call: CUDA → Triton kernel, MPS →
 #   `torch.compile`-fused path, anything else → PyLate's own implementation.
 from late_interaction_kernels import reference  # noqa: E402,F401
+from late_interaction_kernels.colpali_compat import (  # noqa: E402
+    patch_colpali_engine,
+    unpatch_colpali_engine,
+)
 from late_interaction_kernels.padded import maxsim_padded  # noqa: E402
 from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate  # noqa: E402
 from late_interaction_kernels.retrieve import MaxSimScorer, retrieve  # noqa: E402
@@ -74,6 +80,8 @@ __all__ = [
     "maxsim_padded",
     "patch_pylate",
     "unpatch_pylate",
+    "patch_colpali_engine",
+    "unpatch_colpali_engine",
     # core MaxSim
     "maxsim",
     "maxsim_inference",

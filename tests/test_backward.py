@@ -5,8 +5,8 @@ Covers three things:
 1. **Gradient parity vs PyTorch autograd** — the kernel's backward must match the
    autograd of the pure-PyTorch reference within the expected fp16 / tf32 ULP drift,
    with and without masks.
-2. **Path equivalence** — ``set_backward_method("atomic" | "csr" | "auto")`` must
-   produce the same gradients up to fp32-reduction-order noise (grad_Q is bitwise
+2. **Path equivalence** — the ``backward=`` kwarg (``"atomic" | "csr" | "unified" | "auto"``)
+   must produce the same gradients up to fp32-reduction-order noise (grad_Q is bitwise
    identical across paths because the Q-grad kernel is the same).
 3. **Stress cases for grad_D** — hot buckets (one doc token wins for every query),
    empty buckets (most doc tokens never win), and non-power-of-two ``d``.
@@ -162,23 +162,18 @@ def test_atomic_csr_equivalence(Nq, Nd, Lq, Ld, d, rel):
     up to fp32 reduction-order noise. grad_Q comes from the same kernel either
     way and must be bitwise identical."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
     D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32)
     grad_out = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
-    set_backward_method("atomic")
     Qa = Q.clone().requires_grad_(True)
     Da = D.clone().requires_grad_(True)
-    maxsim(Qa, Da).backward(grad_out)
+    maxsim(Qa, Da, backward="atomic").backward(grad_out)
 
-    set_backward_method("csr")
     Qc = Q.clone().requires_grad_(True)
     Dc = D.clone().requires_grad_(True)
-    maxsim(Qc, Dc).backward(grad_out)
-
-    set_backward_method("auto")  # restore default
+    maxsim(Qc, Dc, backward="csr").backward(grad_out)
 
     assert torch.equal(Qa.grad, Qc.grad), "grad_Q must be bitwise identical"
     assert rel(Dc.grad, Da.grad) < 1e-5
@@ -187,23 +182,18 @@ def test_atomic_csr_equivalence(Nq, Nd, Lq, Ld, d, rel):
 def test_atomic_csr_equivalence_bf16(rel):
     """bf16 inputs: grad_Q identical, grad_D within bf16 ULP drift."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.bfloat16)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.bfloat16)
     go = torch.randn(4, 8, device="cuda", dtype=torch.float32)
 
-    set_backward_method("atomic")
     Qa = Q0.clone().requires_grad_(True)
     Da = D0.clone().requires_grad_(True)
-    maxsim(Qa, Da).backward(go)
+    maxsim(Qa, Da, backward="atomic").backward(go)
 
-    set_backward_method("csr")
     Qc = Q0.clone().requires_grad_(True)
     Dc = D0.clone().requires_grad_(True)
-    maxsim(Qc, Dc).backward(go)
-
-    set_backward_method("auto")
+    maxsim(Qc, Dc, backward="csr").backward(go)
 
     assert torch.equal(Qa.grad, Qc.grad)
     assert rel(Dc.grad.float(), Da.grad.float()) < 5e-3
@@ -214,7 +204,6 @@ def test_auto_selects_a_valid_path(rel):
     (whichever its heuristic selected). Run across shapes that exercise both
     branches of the heuristic."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     for Nq, Nd, Lq, Ld, d in [(2, 4, 16, 32, 128), (64, 64, 32, 128, 128)]:
         Q0 = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
@@ -223,13 +212,10 @@ def test_auto_selects_a_valid_path(rel):
 
         grads = {}
         for m in ("auto", "csr", "atomic", "unified"):
-            set_backward_method(m)
             Q = Q0.clone().requires_grad_(True)
             D = D0.clone().requires_grad_(True)
-            maxsim(Q, D).backward(go)
+            maxsim(Q, D, backward=m).backward(go)
             grads[m] = (Q.grad.clone(), D.grad.clone())
-
-        set_backward_method("auto")
 
         # grad_Q is row-owned in every path — all four must agree bitwise.
         for m in ("csr", "atomic", "unified"):
@@ -257,7 +243,6 @@ def test_hot_bucket_single_winner(method):
     ``Nq * Lq`` entries, all other buckets are empty. Both must produce nonzero
     grad on token 0 and exactly zero grad everywhere else."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Nq, Nd, Lq, Ld, d = 8, 4, 32, 64, 128
     # Deterministic: Q = +1, D[:, 0, :] = +1 (dot = d), D[:, t>0, :] = -1.
@@ -266,22 +251,17 @@ def test_hot_bucket_single_winner(method):
     D[:, 0, :] = 1.0
     go = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
-    set_backward_method(method)
-    try:
-        Qv = Q.clone().requires_grad_(True)
-        Dv = D.clone().requires_grad_(True)
-        maxsim(Qv, Dv).backward(go)
-        assert Dv.grad[:, 1:, :].abs().max().item() == 0.0
-        assert Dv.grad[:, 0, :].abs().max().item() > 0.0
-    finally:
-        set_backward_method("auto")
+    Qv = Q.clone().requires_grad_(True)
+    Dv = D.clone().requires_grad_(True)
+    maxsim(Qv, Dv, backward=method).backward(go)
+    assert Dv.grad[:, 1:, :].abs().max().item() == 0.0
+    assert Dv.grad[:, 0, :].abs().max().item() > 0.0
 
 
 def test_empty_buckets_write_zero():
     """Most CSR buckets are empty (only t=3 ever wins). The kernel must still
     write zeros to every non-winning ``(j, t)`` output cell."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Nq, Nd, Lq, Ld, d = 2, 2, 8, 64, 128
     Q = torch.ones(Nq, Lq, d, device="cuda", dtype=torch.float32)
@@ -289,17 +269,13 @@ def test_empty_buckets_write_zero():
     D[:, 3, :] = 1.0
     go = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
-    set_backward_method("csr")
-    try:
-        Qv = Q.clone().requires_grad_(True)
-        Dv = D.clone().requires_grad_(True)
-        maxsim(Qv, Dv).backward(go)
-        mask = torch.ones(Ld, dtype=torch.bool, device="cuda")
-        mask[3] = False
-        assert Dv.grad[:, mask, :].abs().max().item() == 0.0
-        assert Dv.grad[:, 3, :].abs().max().item() > 0.0
-    finally:
-        set_backward_method("auto")
+    Qv = Q.clone().requires_grad_(True)
+    Dv = D.clone().requires_grad_(True)
+    maxsim(Qv, Dv, backward="csr").backward(go)
+    mask = torch.ones(Ld, dtype=torch.bool, device="cuda")
+    mask[3] = False
+    assert Dv.grad[:, mask, :].abs().max().item() == 0.0
+    assert Dv.grad[:, 3, :].abs().max().item() > 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -312,25 +288,20 @@ def test_csr_is_bitwise_deterministic():
     order inside one program, no atomics. Running backward three times on the
     same input must produce the exact same grad tensors."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.float32)
     go = torch.randn(4, 8, device="cuda", dtype=torch.float32)
 
-    set_backward_method("csr")
-    try:
-        grads = []
-        for _ in range(3):
-            Q = Q0.clone().requires_grad_(True)
-            D = D0.clone().requires_grad_(True)
-            maxsim(Q, D).backward(go)
-            grads.append((Q.grad.clone(), D.grad.clone()))
-        for k in range(1, 3):
-            assert torch.equal(grads[0][0], grads[k][0])
-            assert torch.equal(grads[0][1], grads[k][1])
-    finally:
-        set_backward_method("auto")
+    grads = []
+    for _ in range(3):
+        Q = Q0.clone().requires_grad_(True)
+        D = D0.clone().requires_grad_(True)
+        maxsim(Q, D, backward="csr").backward(go)
+        grads.append((Q.grad.clone(), D.grad.clone()))
+    for k in range(1, 3):
+        assert torch.equal(grads[0][0], grads[k][0])
+        assert torch.equal(grads[0][1], grads[k][1])
 
 
 def test_atomic_is_numerically_stable_across_runs(rel):
@@ -339,25 +310,20 @@ def test_atomic_is_numerically_stable_across_runs(rel):
     drift is bounded by fp32 ULP (~1e-6 relative). grad_Q (no atomics) still
     matches exactly."""
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import set_backward_method
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.float32)
     go = torch.randn(4, 8, device="cuda", dtype=torch.float32)
 
-    set_backward_method("atomic")
-    try:
-        grads = []
-        for _ in range(3):
-            Q = Q0.clone().requires_grad_(True)
-            D = D0.clone().requires_grad_(True)
-            maxsim(Q, D).backward(go)
-            grads.append((Q.grad.clone(), D.grad.clone()))
-        for k in range(1, 3):
-            assert torch.equal(grads[0][0], grads[k][0])  # grad_Q is scatter-free
-            assert rel(grads[0][1], grads[k][1]) < 1e-5
-    finally:
-        set_backward_method("auto")
+    grads = []
+    for _ in range(3):
+        Q = Q0.clone().requires_grad_(True)
+        D = D0.clone().requires_grad_(True)
+        maxsim(Q, D, backward="atomic").backward(go)
+        grads.append((Q.grad.clone(), D.grad.clone()))
+    for k in range(1, 3):
+        assert torch.equal(grads[0][0], grads[k][0])  # grad_Q is scatter-free
+        assert rel(grads[0][1], grads[k][1]) < 1e-5
 
 
 # --------------------------------------------------------------------------- #

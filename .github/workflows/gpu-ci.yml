@@ -75,9 +75,9 @@ jobs:
               tests/test_matryoshka.py
               tests/test_edge_cases.py
               tests/test_retrieve.py
-              tests/test_xtr.py
               tests/test_pylate_compat.py
               tests/test_pylate_compat_warnings.py
+              tests/test_colpali_compat.py
             args: -m "not perf"
           - name: perf
             paths: tests/regression/

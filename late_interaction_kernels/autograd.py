@@ -8,7 +8,7 @@ import torch
 from late_interaction_kernels.backward import maxsim_backward, maxsim_backward_unified
 from late_interaction_kernels.forward import _run_forward, maxsim_forward
 
-_BACKWARD_METHOD = "auto"  # module-level toggle, flipped by `set_backward_method`
+_BACKWARD_METHOD = "auto"  # module-level toggle, deprecated; prefer per-call `backward=`
 
 _VALID_METHODS = ("auto", "atomic", "csr", "unified")
 
@@ -20,9 +20,10 @@ _WARNED_UNNORMALIZED = False
 def set_backward_method(method: str) -> None:
     """Set the process-wide default ``grad_D`` path.
 
-    Prefer the per-call ``backward=`` kwarg on :func:`maxsim` and
-    :class:`~late_interaction_kernels.MaxSimScorer`. This global is kept
-    for back-compat and for pinning a single method across a benchmark run.
+    .. deprecated::
+        Pass ``backward=`` per call on :func:`maxsim` or
+        :class:`~late_interaction_kernels.MaxSimScorer` instead — the
+        kwarg is strictly more flexible and avoids a process-wide global.
 
     Values:
 
@@ -35,10 +36,28 @@ def set_backward_method(method: str) -> None:
     global _BACKWARD_METHOD
     if method not in _VALID_METHODS:
         raise ValueError(f"method must be one of {_VALID_METHODS}, got {method!r}")
+    warnings.warn(
+        "`set_backward_method` is deprecated; pass `backward=` per call on "
+        "`maxsim(...)` or `MaxSimScorer(backward=...)` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _BACKWARD_METHOD = method
 
 
 def get_backward_method() -> str:
+    """Return the current process-wide default ``grad_D`` path.
+
+    .. deprecated::
+        Pass ``backward=`` per call on :func:`maxsim` or
+        :class:`~late_interaction_kernels.MaxSimScorer` instead.
+    """
+    warnings.warn(
+        "`get_backward_method` is deprecated; pass `backward=` per call on "
+        "`maxsim(...)` or `MaxSimScorer(backward=...)` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _BACKWARD_METHOD
 
 

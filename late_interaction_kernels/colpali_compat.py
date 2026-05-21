@@ -1,0 +1,282 @@
+"""colpali_engine drop-in: route MaxSim through the fused kernel.
+
+::
+
+    from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
+    patch_colpali_engine()        # colpali_engine training + scoring uses our kernel
+    # ... train / score ...
+    unpatch_colpali_engine()      # restore the originals
+
+Patches the four entry points where colpali_engine materializes the
+``[B, C, Lq, Ld]`` similarity tensor with an unfused ``torch.einsum``:
+
+* :meth:`colpali_engine.utils.processing_utils.BaseVisualRetrieverProcessor.score_multi_vector`
+  — the inference / evaluation scoring helper used by ``vidore`` and ad-hoc
+  scoring code.
+* :meth:`colpali_engine.loss.late_interaction_losses.ColbertLoss.forward`
+* :meth:`...ColbertPairwiseCELoss.forward`
+* :meth:`...ColbertSigmoidLoss.forward`
+  — the three in-batch loss heads. Their ``ColbertNegativeCELoss`` and
+  ``ColbertPairwiseNegativeCELoss`` siblings inherit the in-batch term
+  through ``self.inner_loss`` / ``self.inner_pairwise``, so the patch
+  reaches them transparently.
+
+Dispatch rules match :func:`patch_pylate`: CUDA (Ampere+) → fused Triton
+kernel; MPS → ``torch.compile``-fused reference; CPU / sub-Ampere /
+``LIK_DISABLE=1`` / ``use_smooth_max=True`` / shape edge cases fall
+through to colpali_engine's original implementation.
+"""
+
+import os
+
+import torch
+
+# Bookkeeping: ``patch_colpali_engine()`` stashes the original callables
+# here before swapping in ours; ``unpatch_colpali_engine()`` reads them
+# back. Non-empty == patched.
+_ORIGINAL = {}
+
+
+def _device_path(q: torch.Tensor, d: torch.Tensor) -> str | None:
+    """Pick the dispatch path or ``None`` when we should fall back."""
+    if os.environ.get("LIK_DISABLE", "0") == "1":
+        return None
+    if q.device != d.device:
+        return None
+    if q.shape[-1] < 8:
+        return None
+    if q.is_cuda and d.is_cuda:
+        try:
+            cap = torch.cuda.get_device_capability(q.device)
+        except Exception:
+            return None
+        if cap[0] < 8:  # need Ampere or newer for bf16 + modern tensor cores
+            return None
+        return "cuda"
+    if q.device.type == "mps" and d.device.type == "mps":
+        return "mps"
+    return None
+
+
+def _dispatch_maxsim(Q: torch.Tensor, D: torch.Tensor, path: str) -> torch.Tensor:
+    """Compute MaxSim through the fused kernel for ``path``.
+
+    colpali_engine doesn't pass masks into the in-batch einsum (padding is
+    handled by the embeddings themselves — pad tokens are zero), so we
+    don't either.
+    """
+    if path == "cuda":
+        from late_interaction_kernels.autograd import maxsim
+
+        return maxsim(Q, D)
+    if path == "mps":
+        from late_interaction_kernels.mps import maxsim_mps
+
+        return maxsim_mps(Q, D, normalize=False)
+    raise ValueError(f"unknown dispatch path {path!r}")
+
+
+def patched_score_multi_vector(qs, ps, batch_size: int = 128, device=None):
+    """Drop-in replacement for ``BaseVisualRetrieverProcessor.score_multi_vector``.
+
+    Mirrors the original's chunking + ``pad_sequence`` logic, but the inner
+    ``einsum("bnd,csd->bcns").max(dim=3)[0].sum(dim=2)`` collapses into one
+    fused-kernel call per (qs_chunk, ps_chunk) tile.
+    """
+    from colpali_engine.utils.torch_utils import get_torch_device  # type: ignore
+
+    device = device or get_torch_device("auto")
+
+    if len(qs) == 0:
+        raise ValueError("No queries provided")
+    if len(ps) == 0:
+        raise ValueError("No passages provided")
+
+    scores_list: list[torch.Tensor] = []
+
+    for i in range(0, len(qs), batch_size):
+        scores_batch = []
+        qs_batch = torch.nn.utils.rnn.pad_sequence(
+            qs[i : i + batch_size], batch_first=True, padding_value=0
+        ).to(device)
+        for j in range(0, len(ps), batch_size):
+            ps_batch = torch.nn.utils.rnn.pad_sequence(
+                ps[j : j + batch_size], batch_first=True, padding_value=0
+            ).to(device)
+            path = _device_path(qs_batch, ps_batch)
+            if path is None:
+                tile = torch.einsum("bnd,csd->bcns", qs_batch, ps_batch).max(dim=3)[0].sum(dim=2)
+            else:
+                tile = _dispatch_maxsim(qs_batch, ps_batch, path)
+            scores_batch.append(tile)
+        scores_list.append(torch.cat(scores_batch, dim=1).cpu())
+
+    scores = torch.cat(scores_list, dim=0).to(torch.float32)
+    assert scores.shape[0] == len(qs), f"Expected {len(qs)} scores, got {scores.shape[0]}"
+    return scores
+
+
+def _patched_inbatch_scores(self, Q: torch.Tensor, D: torch.Tensor) -> torch.Tensor | None:
+    """Replacement for the ``einsum + amax + sum + normalize`` triplet shared
+    by every ``ColbertModule`` in-batch forward.
+
+    Returns ``None`` when we can't accelerate (``use_smooth_max``,
+    ``LIK_DISABLE``, mixed devices, …) and the caller must fall through to
+    the original ``forward``.
+    """
+    if self.use_smooth_max:
+        return None
+    path = _device_path(Q, D)
+    if path is None:
+        return None
+    lengths = (Q[:, :, 0] != 0).sum(dim=1)
+    scores = _dispatch_maxsim(Q, D, path)
+    if self.normalize_scores:
+        scores = self._apply_normalization(scores, lengths)
+    return scores
+
+
+def patched_colbert_loss_forward(self, query_embeddings, doc_embeddings, offset: int = 0):
+    """Drop-in for :meth:`ColbertLoss.forward`."""
+    scores = _patched_inbatch_scores(self, query_embeddings, doc_embeddings)
+    if scores is None:
+        return _ORIGINAL["ColbertLoss.forward"](self, query_embeddings, doc_embeddings, offset)
+    batch_size = scores.size(0)
+    _idx, pos_idx = self._get_idx(batch_size, offset, scores.device)
+    if self.pos_aware_negative_filtering:
+        self._filter_high_negatives(scores, pos_idx)
+    return self.ce_loss(scores / self.temperature, pos_idx)
+
+
+def patched_colbert_pairwise_ce_forward(self, query_embeddings, doc_embeddings, offset: int = 0):
+    """Drop-in for :meth:`ColbertPairwiseCELoss.forward`."""
+    import torch.nn.functional as F  # local — keeps the module light
+
+    scores = _patched_inbatch_scores(self, query_embeddings, doc_embeddings)
+    if scores is None:
+        return _ORIGINAL["ColbertPairwiseCELoss.forward"](self, query_embeddings, doc_embeddings, offset)
+    batch_size = scores.size(0)
+    _idx, pos_idx = self._get_idx(batch_size, offset, scores.device)
+    if self.pos_aware_negative_filtering:
+        self._filter_high_negatives(scores, pos_idx)
+    pos_scores = scores.diagonal(offset=offset)
+    top2 = scores.topk(2, dim=1).values
+    neg_scores = torch.where(top2[:, 0] == pos_scores, top2[:, 1], top2[:, 0])
+    return F.softplus((neg_scores - pos_scores) / self.temperature).mean()
+
+
+def patched_colbert_sigmoid_forward(self, query_embeddings, doc_embeddings, offset: int = 0):
+    """Drop-in for :meth:`ColbertSigmoidLoss.forward`."""
+    import torch.nn.functional as F
+
+    scores = _patched_inbatch_scores(self, query_embeddings, doc_embeddings)
+    if scores is None:
+        return _ORIGINAL["ColbertSigmoidLoss.forward"](self, query_embeddings, doc_embeddings, offset)
+    batch_size = scores.size(0)
+    _idx, pos_idx = self._get_idx(batch_size, offset, scores.device)
+    if self.pos_aware_negative_filtering:
+        self._filter_high_negatives(scores, pos_idx)
+
+    flat_pos = pos_idx * (batch_size + 1)
+    pos_mask = -torch.ones(batch_size * batch_size, device=scores.device)
+    pos_mask[flat_pos] = 1.0
+    scores = scores.view(-1) / self.temperature
+    return F.softplus(-scores * pos_mask).mean()
+
+
+# ---------------------------------------------------------------------------
+# Public entry points
+# ---------------------------------------------------------------------------
+
+
+def patch_colpali_engine():
+    """Install the fused kernel across colpali_engine's MaxSim entry points."""
+    import warnings
+
+    if _ORIGINAL:
+        return  # already patched
+
+    missed: list[str] = []
+
+    # Inference / evaluation scoring helper.
+    try:
+        from colpali_engine.utils.processing_utils import (  # type: ignore
+            BaseVisualRetrieverProcessor,
+        )
+
+        _ORIGINAL["BaseVisualRetrieverProcessor.score_multi_vector"] = (
+            BaseVisualRetrieverProcessor.score_multi_vector
+        )
+        BaseVisualRetrieverProcessor.score_multi_vector = staticmethod(patched_score_multi_vector)
+    except ImportError:
+        missed.append("colpali_engine.utils.processing_utils")
+
+    # Loss heads. Each one shadows its own forward() so subclasses inherit.
+    losses_module = "colpali_engine.loss.late_interaction_losses"
+    try:
+        import importlib
+
+        losses = importlib.import_module(losses_module)
+    except ImportError:
+        losses = None
+        missed.append(losses_module)
+
+    if losses is not None:
+        for cls_name, replacement in (
+            ("ColbertLoss", patched_colbert_loss_forward),
+            ("ColbertPairwiseCELoss", patched_colbert_pairwise_ce_forward),
+            ("ColbertSigmoidLoss", patched_colbert_sigmoid_forward),
+        ):
+            cls = getattr(losses, cls_name, None)
+            if cls is None:
+                missed.append(f"{losses_module}.{cls_name}")
+                continue
+            _ORIGINAL[f"{cls_name}.forward"] = cls.forward
+            cls.forward = replacement
+
+    if not _ORIGINAL:
+        raise ImportError(
+            "late-interaction-kernels: `patch_colpali_engine()` couldn't reach any "
+            "expected colpali_engine entry point. Install with "
+            "`pip install colpali-engine` and check the version is >=0.3.10."
+        )
+
+    if missed:
+        warnings.warn(
+            "late-interaction-kernels: `patch_colpali_engine()` could not reach "
+            + ", ".join(missed)
+            + ". The reachable entry points are still hooked; any unreachable one "
+            "keeps using vanilla colpali_engine. This usually means colpali_engine "
+            "was refactored — check the installed version.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
+def unpatch_colpali_engine():
+    """Restore colpali_engine's original MaxSim implementations."""
+    if not _ORIGINAL:
+        return
+
+    key = "BaseVisualRetrieverProcessor.score_multi_vector"
+    if key in _ORIGINAL:
+        from colpali_engine.utils.processing_utils import (  # type: ignore
+            BaseVisualRetrieverProcessor,
+        )
+
+        # Re-wrap as staticmethod: descriptor access during patching unwrapped
+        # the original to a plain function; restoring without staticmethod()
+        # would turn it into a bound instance method.
+        BaseVisualRetrieverProcessor.score_multi_vector = staticmethod(_ORIGINAL[key])
+
+    import importlib
+
+    for cls_name in ("ColbertLoss", "ColbertPairwiseCELoss", "ColbertSigmoidLoss"):
+        attr = f"{cls_name}.forward"
+        if attr not in _ORIGINAL:
+            continue
+        losses = importlib.import_module("colpali_engine.loss.late_interaction_losses")
+        cls = getattr(losses, cls_name)
+        cls.forward = _ORIGINAL[attr]
+
+    _ORIGINAL.clear()

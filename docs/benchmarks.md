@@ -221,11 +221,8 @@ CSR is bitwise-reproducible across runs (no atomics); `atomic` /
 order depends on thread scheduling.
 
 ```python
-from late_interaction_kernels.autograd import set_backward_method
-set_backward_method("csr")        # | "atomic" | "unified" | "auto"
-
-# or per call
-maxsim(Q, D, normalize=True, backward="csr")
+# Per-call (recommended):
+maxsim(Q, D, normalize=True, backward="csr")   # | "atomic" | "unified" | "auto"
 ```
 
 ## End-to-end PyLate `Contrastive` training
