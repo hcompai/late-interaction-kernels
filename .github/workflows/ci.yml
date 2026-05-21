@@ -31,7 +31,7 @@ jobs:
           enable-cache: true
           prune-cache: false
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra torch-cpu
       - name: Run ruff linter
         run: uv run ruff check
       - name: Run ruff formatter check
@@ -48,7 +48,7 @@ jobs:
           enable-cache: true
           prune-cache: false
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra torch-cpu
       - name: Run ty type checker
         run: uv run ty check --output-format github
 
@@ -67,7 +67,7 @@ jobs:
           enable-cache: true
           prune-cache: false
       - name: Install dependencies
-        run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
+        run: uv sync --frozen --extra dev --extra torch-cpu --python ${{ matrix.python-version }}
       - name: Import check
         run: |
           uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
