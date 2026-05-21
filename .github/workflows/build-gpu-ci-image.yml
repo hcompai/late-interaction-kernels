@@ -39,16 +39,16 @@ jobs:
 
       - name: Free disk on runner
         # ubuntu-latest ships with ~14 GB free; the NVIDIA PyTorch base is ~9 GB
-        # and the buildx cache doubles it, so we need to evict Android/dotnet/etc.
-        # before the build. Frees ~25 GB.
+        # and Docker's working directory needs another ~9 GB to materialize the
+        # image before push. Frees ~30+ GB by evicting unused toolchains.
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
-          tool-cache: false
+          tool-cache: true
           android: true
           dotnet: true
           haskell: true
-          large-packages: false
-          swap-storage: false
+          large-packages: true
+          swap-storage: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -83,6 +83,7 @@ jobs:
           file: .github/docker/gpu-ci.Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          # GHA-backed layer cache so unchanged Dockerfile rebuilds are ~30 s.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No buildx cache: our Dockerfile is a single RUN on top of the
+          # NVIDIA base, so the only "cached" thing would be the pip install
+          # (~10 s). The GHA cache doubles peak disk usage which we cannot
+          # afford on ubuntu-latest's 14 GB partition. Skip it.
