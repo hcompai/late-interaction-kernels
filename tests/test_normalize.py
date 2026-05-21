@@ -100,16 +100,3 @@ def test_normalize_matches_pylate_formula():
     py_like = maxsim(Qn, Dn).float()
 
     assert (fused - py_like).abs().max().item() / max(1e-6, py_like.abs().max().item()) < 2e-2
-
-
-def test_inference_normalize():
-    """`maxsim_inference(normalize=True)` matches reference."""
-    from late_interaction_kernels import maxsim_inference
-    from late_interaction_kernels.reference import maxsim_reference
-
-    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16)
-    D = torch.randn(4, 200, 128, device="cuda", dtype=torch.float16)
-
-    fast = maxsim_inference(Q, D, normalize=True).float()
-    ref = maxsim_reference(Q.float(), D.float(), normalize=True)
-    assert (fast - ref).abs().max().item() / max(1e-6, ref.abs().max().item()) < 5e-3

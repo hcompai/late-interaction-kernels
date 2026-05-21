@@ -22,6 +22,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `maxsim` now auto-skips the saved argmax buffer when neither input
+  has `requires_grad=True`, matching the dispatch already shipped by
+  `maxsim_varlen` and `maxsim_residual`. `maxsim_inference` is now a
+  thin deprecation shim that forwards to `maxsim`.
+- `maxsim_from_hidden` is now autograd-aware (gradients flow into
+  whichever of `Q` / `H_d` / `W` / `b` carry `requires_grad=True`); the
+  forward-only path is auto-dispatched when none of them do.
+  `maxsim_from_hidden_train` is now a thin deprecation shim.
 - [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
   are no longer tested and the `torch._assert_async` bounds check in
   `pack_padded` now assumes the symbol is present unconditionally.
@@ -35,6 +43,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   setups. Migration: replace `set_backward_method("csr")` with
   `maxsim(..., backward="csr")` (or `MaxSimScorer(backward="csr")`).
   The globals will be removed in the next breaking release.
+- `late_interaction_kernels.maxsim_inference` — use `maxsim(...)` directly.
+- `late_interaction_kernels.fused_head.maxsim_from_hidden_train` — use
+  `maxsim_from_hidden(...)` directly.
 - [breaking] `maxsim_inference_scatter` → `score_pairs_packed`; module
   `scatter.py` → `score_pairs.py`. Shorter name, matches prior art in
   https://github.com/ErikKaum/maxsim. Kernel, signature, and semantics

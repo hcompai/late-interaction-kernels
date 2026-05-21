@@ -64,13 +64,13 @@ def test_maxsim_scorer_composes_in_module():
 
 
 def test_retrieve_matches_explicit_topk():
-    from late_interaction_kernels import maxsim_inference, retrieve
+    from late_interaction_kernels import maxsim, retrieve
 
     torch.manual_seed(0)
     Q = torch.randn(4, 16, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(64, 32, 128, device="cuda", dtype=torch.float16)
     scores, idx = retrieve(Q, D, top_k=10, normalize=True)
-    ref = maxsim_inference(Q, D, normalize=True)
+    ref = maxsim(Q, D, normalize=True)
     ref_scores, ref_idx = torch.topk(ref, 10, dim=-1)
     assert torch.allclose(scores.float(), ref_scores.float(), atol=1e-4, rtol=1e-3)
     assert torch.equal(idx, ref_idx)

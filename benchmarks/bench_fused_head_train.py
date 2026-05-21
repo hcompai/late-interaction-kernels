@@ -1,8 +1,8 @@
 """Training-aware fused head benchmark.
 
-Compares ``maxsim_from_hidden_train`` against the canonical unfused
-autograd path ``F.linear + F.normalize + maxsim`` on realistic LateOn
-/ LateOn-Code / LateOn-Code-edge shapes.
+Compares ``maxsim_from_hidden`` (autograd path) against the canonical
+unfused ``F.linear + F.normalize + maxsim`` on realistic LateOn /
+LateOn-Code / LateOn-Code-edge shapes.
 
 Wall-clock + peak HBM (from the fused head forward + loss + backward
 on a fresh allocator each iteration) are printed side by side.
@@ -20,7 +20,7 @@ import time
 import torch
 
 from late_interaction_kernels import maxsim
-from late_interaction_kernels.fused_head import maxsim_from_hidden_train
+from late_interaction_kernels.fused_head import maxsim_from_hidden
 
 
 def _unfused(Q, H_d, W, b, *, normalize):
@@ -65,7 +65,7 @@ def _step_fused(Q, H_d, W, b, *, normalize):
     for p in (Q, H_d, W, b):
         if p is not None and p.grad is not None:
             p.grad = None
-    scores = maxsim_from_hidden_train(Q, H_d, W, b=b, normalize=normalize)
+    scores = maxsim_from_hidden(Q, H_d, W, b=b, normalize=normalize)
     scores.sum().backward()
 
 

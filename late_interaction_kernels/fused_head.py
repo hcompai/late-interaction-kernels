@@ -6,13 +6,16 @@ the unfused pipeline materializes a multi-GB ``D_proj`` scratch tensor.
 The fused kernel folds ``H @ W.T (+ b) → L2-normalize → MaxSim`` into one
 pass.
 
-* :func:`maxsim_from_hidden` — inference, no autograd.
-* :func:`maxsim_from_hidden_train` — autograd-aware. The backward gathers
-  ``H_d`` at winning positions only (``Nq · Nd · Lq`` rows, typically
-  <10 % of ``Nd · Ld``) and computes the projection + normalize + MaxSim
-  Jacobians in closed form. Matches the unfused
-  ``F.linear → F.normalize → maxsim`` path to bf16 tolerance.
+:func:`maxsim_from_hidden` is autograd-aware. The backward gathers
+``H_d`` at winning positions only (``Nq · Nd · Lq`` rows, typically
+<10 % of ``Nd · Ld``) and computes the projection + normalize + MaxSim
+Jacobians in closed form. Matches the unfused
+``F.linear → F.normalize → maxsim`` path to bf16 tolerance. When none
+of the inputs has ``requires_grad=True``, the argmax save and the
+autograd graph are skipped — same dispatch as :func:`maxsim_varlen`.
 """
+
+import warnings
 
 import torch
 import triton
@@ -256,15 +259,19 @@ def maxsim_from_hidden(
     d_mask: torch.Tensor | None = None,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Fused MaxSim with on-the-fly D-side projection. Inference only.
+    """Fused MaxSim with on-the-fly D-side projection. Autograd-aware.
 
     Equivalent to::
 
         D = F.linear(H_d, W, b)
         D = F.normalize(D, dim=-1) if normalize else D
-        scores = maxsim_inference(Q, D)
+        scores = maxsim(Q, D, d_mask=d_mask)
 
-    but ``D`` is never materialized in HBM.
+    but ``D`` is never materialized in HBM. The backward gathers
+    ``H_d`` only at winning positions; for typical ColBERT shapes that's
+    1–10 % of the dense gradient work. Auto-skips the argmax save and
+    the autograd graph when none of ``Q`` / ``H_d`` / ``W`` / ``b``
+    has ``requires_grad=True``.
 
     Args:
         Q: ``[Lq, d_out]`` or ``[Nq, Lq, d_out]``. Pre-projected; pre-L2
@@ -277,9 +284,6 @@ def maxsim_from_hidden(
 
     Returns:
         scores: ``[Nq, Nd]`` fp32.
-
-    Use :func:`maxsim_from_hidden_train` if you need autograd through
-    the projection.
     """
     q_was_2d = Q.dim() == 2
     if q_was_2d:
@@ -298,13 +302,19 @@ def maxsim_from_hidden(
     if b is not None and (b.dim() != 1 or b.shape[0] != Q.shape[-1]):
         raise ValueError(f"b must be [d_out={Q.shape[-1]}]; got {tuple(b.shape) if b is not None else None}")
 
-    Q = Q.contiguous()
-    H_d = H_d.contiguous()
-    W = W.contiguous()
+    Q_c = Q.contiguous()
+    H_c = H_d.contiguous()
+    W_c = W.contiguous()
     b_c = b.contiguous() if b is not None else None
     d_mask_c = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
 
-    scores, _ = _fused_head_forward(Q, H_d, W, b_c, d_mask_c, normalize, save_argmax=False)
+    needs_grad = (
+        Q_c.requires_grad or H_c.requires_grad or W_c.requires_grad or (b_c is not None and b_c.requires_grad)
+    )
+    if needs_grad:
+        scores = _MaxSimFromHiddenFn.apply(Q_c, H_c, W_c, b_c, d_mask_c, normalize)
+    else:
+        scores, _ = _fused_head_forward(Q_c, H_c, W_c, b_c, d_mask_c, normalize, save_argmax=False)
     if q_was_2d:
         return scores.squeeze(0)
     return scores
@@ -436,42 +446,11 @@ def maxsim_from_hidden_train(
     *,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Autograd-aware fused head. Drop-in for the unfused projection path.
-
-    Equivalent to (with autograd)::
-
-        D = F.normalize(F.linear(H_d, W, b), p=2, dim=-1)
-        scores = maxsim(Q, D, d_mask=d_mask)
-
-    The backward gathers ``H_d`` only at winning positions, so its work
-    scales with ``Nq · Lq / Ld`` (typically 1-10 % at ColBERT shapes).
-    Args match :func:`maxsim_from_hidden`; gradients flow into whichever
-    of ``Q`` / ``H_d`` / ``W`` / ``b`` have ``requires_grad=True``.
-    """
-    q_was_2d = Q.dim() == 2
-    if q_was_2d:
-        Q = Q.unsqueeze(0)
-    if d_mask is not None and d_mask.dim() == 1:
-        d_mask = d_mask.unsqueeze(0)
-
-    if Q.dim() != 3:
-        raise ValueError(f"Q must be [Lq, d_out] or [Nq, Lq, d_out]; got {Q.shape}")
-    if H_d.dim() != 3:
-        raise ValueError(f"H_d must be [Nd, Ld, d_model]; got {H_d.shape}")
-    if W.dim() != 2 or W.shape != (Q.shape[-1], H_d.shape[-1]):
-        raise ValueError(f"W must be [d_out={Q.shape[-1]}, d_model={H_d.shape[-1]}]; got {W.shape}")
-    if Q.device != H_d.device or W.device != Q.device:
-        raise ValueError("Q, H_d, W must be on the same device.")
-    if b is not None and (b.dim() != 1 or b.shape[0] != Q.shape[-1]):
-        raise ValueError(f"b must be [d_out={Q.shape[-1]}]; got {tuple(b.shape) if b is not None else None}")
-
-    Q_c = Q.contiguous()
-    H_c = H_d.contiguous()
-    W_c = W.contiguous()
-    b_c = b.contiguous() if b is not None else None
-    d_mask_c = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
-
-    scores = _MaxSimFromHiddenFn.apply(Q_c, H_c, W_c, b_c, d_mask_c, normalize)
-    if q_was_2d:
-        return scores.squeeze(0)
-    return scores
+    """Deprecated alias for :func:`maxsim_from_hidden`."""
+    warnings.warn(
+        "`maxsim_from_hidden_train` is deprecated; use `maxsim_from_hidden(...)`. "
+        "It auto-skips the argmax save when none of Q / H_d / W / b has requires_grad.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return maxsim_from_hidden(Q, H_d, W, b=b, d_mask=d_mask, normalize=normalize)

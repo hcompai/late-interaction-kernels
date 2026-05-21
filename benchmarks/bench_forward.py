@@ -11,7 +11,7 @@ import os
 
 import torch
 
-from late_interaction_kernels import maxsim_inference
+from late_interaction_kernels import maxsim
 
 try:
     from flash_maxsim import flash_maxsim_batched  # optional
@@ -80,8 +80,8 @@ def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
     rows = []
 
     # late-interaction-kernels
-    t = _time_op(lambda: maxsim_inference(Q, D))
-    m = _peak_mem(lambda: maxsim_inference(Q, D))
+    t = _time_op(lambda: maxsim(Q, D))
+    m = _peak_mem(lambda: maxsim(Q, D))
     rows.append(("late-interaction-kernels", t, m))
 
     # naive

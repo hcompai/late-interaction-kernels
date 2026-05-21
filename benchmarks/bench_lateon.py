@@ -37,7 +37,7 @@ import os
 
 import torch
 
-from late_interaction_kernels import maxsim, maxsim_inference
+from late_interaction_kernels import maxsim
 
 SHAPES = [
     # name             Nq    Nd    Lq    Ld
@@ -118,7 +118,7 @@ def main():
 
         # ---- Forward (inference, no autograd) ----
         def fwd_fast():
-            maxsim_inference(Q.detach(), D.detach())
+            maxsim(Q.detach(), D.detach())
 
         def fwd_naive():
             _naive_score(Q.detach().float(), D.detach().float())

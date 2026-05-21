@@ -313,8 +313,10 @@ def maxsim_inference_fp8(
                 stacklevel=2,
             )
             _WARNED_FP8_FALLBACK = True
-        # Dequantize and fall back to the regular kernel.
-        from late_interaction_kernels.autograd import maxsim_inference
+        # Dequantize and fall back to the regular kernel. ``Q.to(...)``
+        # detaches from autograd so the requires_grad-aware dispatch in
+        # ``maxsim`` lands on the cheap forward-only path.
+        from late_interaction_kernels.autograd import maxsim
 
         if scale_q_per_token:
             Qd = Q.to(torch.bfloat16) * scale_Q.unsqueeze(-1).to(torch.bfloat16)
@@ -324,7 +326,7 @@ def maxsim_inference_fp8(
             Dd = D.to(torch.bfloat16) * scale_D.unsqueeze(-1).to(torch.bfloat16)
         else:
             Dd = D.to(torch.bfloat16) * scale_D.to(torch.bfloat16)
-        scores = maxsim_inference(Qd, Dd, q_mask=q_mask, d_mask=d_mask)
+        scores = maxsim(Qd, Dd, q_mask=q_mask, d_mask=d_mask)
         if q_was_2d and d_was_2d:
             return scores.reshape(())
         if q_was_2d:

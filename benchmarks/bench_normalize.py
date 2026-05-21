@@ -12,7 +12,7 @@ import os
 import torch
 import torch.nn.functional as F
 
-from late_interaction_kernels import maxsim_inference
+from late_interaction_kernels import maxsim
 
 SHAPES = [
     # name, Nq, Nd, Lq, Ld, d
@@ -49,10 +49,10 @@ def main(out_dir: str):
         def _explicit():
             Qn = F.normalize(Q.float(), p=2, dim=-1).to(torch.bfloat16)
             Dn = F.normalize(D.float(), p=2, dim=-1).to(torch.bfloat16)
-            return maxsim_inference(Qn, Dn)
+            return maxsim(Qn, Dn)
 
         def _fused():
-            return maxsim_inference(Q, D, normalize=True)
+            return maxsim(Q, D, normalize=True)
 
         t_explicit = _time(_explicit)
         t_fused = _time(_fused)

@@ -613,15 +613,9 @@
 
       { key: 'maxsim', name: 'maxsim', category: 'core',
         color: C.slate,
-        stack: 'any', phase: 'training', layout: 'dense', workload: 'maxsim',
-        blurb: 'Core fused MaxSim on dense [N, L, d] tensors with full autograd. backward="auto"|"unified"|"atomic"|"csr".',
+        stack: 'any', phase: 'any', layout: 'dense', workload: 'maxsim',
+        blurb: 'Core fused MaxSim on dense [N, L, d] tensors. Autograd-aware; auto-skips the argmax save when neither input has requires_grad. backward="auto"|"unified"|"atomic"|"csr".',
         importLine: 'from late_interaction_kernels import maxsim' },
-
-      { key: 'maxsim_inference', name: 'maxsim_inference', category: 'core',
-        color: C.teal,
-        stack: 'raw', phase: 'inference', layout: 'dense', workload: 'maxsim',
-        blurb: 'Forward-only path on dense [N, L, d] tensors. Skips the argmax buffer the backward needs — slightly cheaper.',
-        importLine: 'from late_interaction_kernels import maxsim_inference' },
 
       { key: 'maxsim_varlen', name: 'maxsim_varlen', category: 'core',
         color: C.moss,
@@ -637,15 +631,9 @@
 
       { key: 'maxsim_from_hidden', name: 'maxsim_from_hidden', category: 'fused_head',
         color: C.slate,
-        stack: 'raw', phase: 'inference', layout: 'dense', workload: 'maxsim',
-        blurb: 'Folds Linear → L2-normalize → MaxSim into one pass. The projected D tensor is never written to HBM.',
+        stack: 'raw', phase: 'any', layout: 'dense', workload: 'maxsim',
+        blurb: 'Folds Linear → L2-normalize → MaxSim into one pass. The projected D tensor is never written to HBM. Autograd-aware; backward gathers winning positions only.',
         importLine: 'from late_interaction_kernels.fused_head import maxsim_from_hidden' },
-
-      { key: 'maxsim_from_hidden_train', name: 'maxsim_from_hidden_train', category: 'fused_head',
-        color: C.plum,
-        stack: 'raw', phase: 'training', layout: 'dense', workload: 'maxsim',
-        blurb: 'Training variant of the fused head. Backward gathers only the winning positions and recomputes the projection locally.',
-        importLine: 'from late_interaction_kernels.fused_head import maxsim_from_hidden_train' },
 
       { key: 'maxsim_residual', name: 'maxsim_residual', category: 'plaid',
         color: C.oxblood,

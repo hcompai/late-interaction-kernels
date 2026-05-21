@@ -1,15 +1,16 @@
-"""Parity + gradient tests for :func:`maxsim_from_hidden_train`.
+"""Backward parity tests for :func:`maxsim_from_hidden`.
 
-The training-aware fused head is the autograd-aware sibling of
-:func:`maxsim_from_hidden`. It must:
+The fused head is autograd-aware (auto-dispatched on ``requires_grad``).
+The backward must:
 
-* match the unfused ``F.linear + normalize + maxsim`` path in forward,
 * flow gradients to ``Q``, ``H_d``, ``W``, ``b`` matching the unfused
-  path (bf16 tolerance),
-* never materialize the ``[Nd, Ld, d_out]`` ``D_proj`` scratch tensor
-  in HBM (sanity-checked by peak-memory delta).
+  ``F.linear + F.normalize + maxsim`` path (bf16 tolerance),
+* allocate gradient buffers only for tensors that actually requested
+  them.
 
-CPU / non-CUDA environments just import and skip.
+Forward parity is covered by :mod:`test_fused_head` — the fused head
+runs the same kernel whether ``requires_grad`` is set or not, so we
+don't duplicate that here.
 """
 
 import pytest
@@ -39,29 +40,8 @@ def _unfused_reference(Q, H_d, W, b, *, normalize, d_mask=None):
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("normalize", [True, False])
-def test_fused_head_train_forward_parity(normalize):
-    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
-
-    Nq, Nd, Lq, Ld, d_model, d_out = 2, 8, 32, 128, 768, 128
-    dtype = torch.bfloat16
-    torch.manual_seed(0)
-    H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype)
-    W = torch.randn(d_out, d_model, device="cuda", dtype=dtype) * (1.0 / (d_model**0.5))
-    b = torch.randn(d_out, device="cuda", dtype=dtype) * 0.01
-    Q = torch.nn.functional.normalize(
-        torch.randn(Nq, Lq, d_out, device="cuda", dtype=dtype).float(), dim=-1
-    ).to(dtype)
-
-    out = maxsim_from_hidden_train(Q, H_d, W, b=b, normalize=normalize)
-    ref = _unfused_reference(Q.float(), H_d.float(), W.float(), b.float(), normalize=normalize)
-    rel = (out.float() - ref).abs().max().item() / max(1e-6, ref.abs().max().item())
-    assert rel < 7e-3, f"rel_err={rel:.3e}"
-
-
-@pytest.mark.cuda
 @pytest.mark.parametrize("need_grads", [["Q"], ["H_d"], ["W"], ["Q", "H_d", "W", "b"]])
-def test_fused_head_train_backward_matches_unfused(need_grads):
+def test_fused_head_backward_matches_unfused(need_grads):
     """All requested gradients must match the unfused autograd path.
 
     Uses fp32 inputs on purpose: bf16 ties on the inner argmax flip the
@@ -70,7 +50,7 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
     relative error on a small fraction of ``Q`` rows. With fp32 inputs
     the winner is deterministic and gradients match tightly.
     """
-    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 16, 64, 256, 64
     dtype = torch.float32
@@ -90,7 +70,7 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
 
     torch.manual_seed(0)
     Q, H_d, W, b = _make()
-    out = maxsim_from_hidden_train(Q, H_d, W, b=b, normalize=True)
+    out = maxsim_from_hidden(Q, H_d, W, b=b, normalize=True)
     out.sum().backward()
     g_fused = {"Q": Q.grad, "H_d": H_d.grad, "W": W.grad, "b": b.grad}
 
@@ -124,9 +104,9 @@ def test_fused_head_train_backward_matches_unfused(need_grads):
 
 
 @pytest.mark.cuda
-def test_fused_head_train_only_active_grads_filled():
+def test_fused_head_only_active_grads_filled():
     """If a tensor doesn't require grad we must not silently allocate for it."""
-    from late_interaction_kernels.fused_head import maxsim_from_hidden_train
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = 1, 4, 8, 16, 128, 64
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -139,7 +119,7 @@ def test_fused_head_train_only_active_grads_filled():
         .requires_grad_(True)
     )
     # Only Q needs grad.
-    out = maxsim_from_hidden_train(Q, H_d, W, normalize=True)
+    out = maxsim_from_hidden(Q, H_d, W, normalize=True)
     out.sum().backward()
     assert Q.grad is not None
     assert W.grad is None
@@ -147,9 +127,13 @@ def test_fused_head_train_only_active_grads_filled():
 
 
 @pytest.mark.cuda
-def test_fused_head_train_matches_fused_head_inference():
-    """Forward of the train variant must agree with the inference variant."""
-    from late_interaction_kernels.fused_head import maxsim_from_hidden, maxsim_from_hidden_train
+def test_fused_head_no_grad_dispatch_matches_grad_path():
+    """Forward result must be identical whether the autograd path ran or not.
+
+    Pins the ``requires_grad`` dispatch in :func:`maxsim_from_hidden`: the
+    no-grad path skips the argmax save but otherwise runs the same kernel.
+    """
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nq, Nd, Lq, Ld, d_model, d_out = 2, 8, 32, 128, 768, 128
     H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=torch.bfloat16)
@@ -159,6 +143,6 @@ def test_fused_head_train_matches_fused_head_inference():
         torch.randn(Nq, Lq, d_out, device="cuda", dtype=torch.bfloat16).float(), dim=-1
     ).to(torch.bfloat16)
 
-    inf = maxsim_from_hidden(Q, H_d, W, b=b, normalize=True)
-    trn = maxsim_from_hidden_train(Q, H_d, W, b=b, normalize=True)
-    torch.testing.assert_close(trn, inf, atol=1e-3, rtol=1e-3)
+    no_grad = maxsim_from_hidden(Q, H_d, W, b=b, normalize=True)
+    with_grad = maxsim_from_hidden(Q.clone().requires_grad_(True), H_d, W, b=b, normalize=True).detach()
+    torch.testing.assert_close(no_grad, with_grad, atol=0, rtol=0)
