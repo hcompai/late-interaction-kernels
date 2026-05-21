@@ -35,7 +35,7 @@ jobs:
     name: GPU tests (CUDA)
     # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
     # the org admin. Swap the label here if more GPU SKUs come online later.
-    runs-on: gpu-t4-4-core
+    runs-on: late-interaction-kernels-runner
     # On `labeled` events, only fire when the gating label is applied. All
     # other events (push, synchronize, dispatch, etc.) skip this guard.
     if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
