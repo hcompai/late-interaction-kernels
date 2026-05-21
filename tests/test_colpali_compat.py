@@ -352,7 +352,7 @@ def test_patched_loss_forwards_match_original_cuda(fake_colpali, cls_name):
 
     # `normalize_scores=False` keeps the comparison free of the small
     # downstream div-by-lengths divisor that masks per-token drift.
-    head_args = {"normalize_scores": False}
+    head_args: dict[str, object] = {"normalize_scores": False}
     if cls_name == "ColbertPairwiseCELoss":
         head_args["temperature"] = 1.0
 
