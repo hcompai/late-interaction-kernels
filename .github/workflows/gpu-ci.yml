@@ -46,6 +46,10 @@ jobs:
     container:
       image: nvcr.io/nvidia/pytorch:25.06-py3
       options: --gpus all --ipc=host
+    # Silence the unnormalized-input warning: many parity tests deliberately
+    # feed unnormalized vectors, so the warning is expected noise here.
+    env:
+      LIK_SUPPRESS_NORM_WARN: "1"
     timeout-minutes: 30
     strategy:
       # One bucket failing shouldn't cancel the others — we want to see all
