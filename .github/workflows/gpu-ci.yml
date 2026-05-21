@@ -2,6 +2,9 @@ name: GPU CI
 
 permissions:
   contents: read
+  # Lets the matrix jobs pull our prebuilt image from ghcr.io even while the
+  # package is private. Harmless if/when we flip the package to public.
+  packages: read
 
 # Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
 #   - automatically on push to main and on PRs that touch kernel-related files;
@@ -16,6 +19,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/gpu-ci.yml"
+      - ".github/docker/gpu-ci.Dockerfile"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
@@ -24,6 +28,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/gpu-ci.yml"
+      - ".github/docker/gpu-ci.Dockerfile"
   workflow_dispatch:
 
 concurrency:
@@ -31,22 +36,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Resolves the prebuilt image tag once so the matrix jobs all agree. The
+  # build-gpu-ci-image workflow tags as `:latest` on main and `:branch-<slug>`
+  # on PRs; we mirror its slug sanitization here so a branch like `foo/bar`
+  # still resolves to the same `:branch-foo-bar` image.
+  resolve-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - id: tag
+        run: |
+          set -euo pipefail
+          base="ghcr.io/${{ github.repository_owner }}/late-interaction-kernels-ci"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            ref="${{ github.head_ref }}"
+          else
+            ref="${{ github.ref_name }}"
+          fi
+          if [[ "$ref" == "main" ]]; then
+            tag="latest"
+          else
+            slug=$(printf '%s' "$ref" | tr -c '[:alnum:]._-' '-' | cut -c1-100)
+            tag="branch-${slug}"
+          fi
+          echo "image=${base}:${tag}" >> "$GITHUB_OUTPUT"
+
   gpu-tests:
-    name: GPU tests (CUDA)
+    needs: resolve-image
+    name: GPU tests (${{ matrix.bucket.name }})
     # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
     # the org admin. Swap the label here if more GPU SKUs come online later.
     runs-on: late-interaction-kernels-runner
     # On `labeled` events, only fire when the gating label is applied. All
     # other events (push, synchronize, dispatch, etc.) skip this guard.
     if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
-    # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
-    # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
-    # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
-    # on GitHub-hosted larger runners.
     container:
-      image: nvcr.io/nvidia/pytorch:25.06-py3
+      # Prebuilt by .github/workflows/build-gpu-ci-image.yml. CUDA torch +
+      # test deps are already inside, so the only install step is the package
+      # itself (editable, --no-deps).
+      image: ${{ needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: --gpus all --ipc=host
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      # One bucket failing shouldn't cancel the others — we want to see all
+      # failures in a single run rather than chase one at a time.
+      fail-fast: false
+      matrix:
+        bucket:
+          # Buckets sized roughly by post-trim per-file durations (see
+          # PR #32 discussion). Rebalance when test additions skew things;
+          # `pytest --durations=20` in each step prints the long pole.
+          - name: heavy-parity
+            paths: >-
+              tests/test_backward.py
+              tests/test_backward_unified.py
+              tests/test_normalize.py
+              tests/test_robustness.py
+              tests/test_fused_head_train.py
+            args: -m "not perf"
+          - name: kernels-medium
+            paths: >-
+              tests/test_plaid.py
+              tests/test_padded.py
+              tests/test_fp8.py
+              tests/test_compile_cache.py
+              tests/test_smooth.py
+              tests/test_fused_head.py
+            args: -m "not perf"
+          - name: kernels-light
+            paths: >-
+              tests/test_forward.py
+              tests/test_varlen.py
+              tests/test_scatter.py
+              tests/test_topk.py
+              tests/test_soft.py
+              tests/test_matryoshka.py
+              tests/test_edge_cases.py
+              tests/test_retrieve.py
+              tests/test_xtr.py
+              tests/test_pylate_compat.py
+              tests/test_pylate_compat_warnings.py
+            args: -m "not perf"
+          - name: perf
+            paths: tests/regression/
+            args: -m perf
     steps:
       - uses: actions/checkout@v4
 
@@ -56,19 +133,10 @@ jobs:
           python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
       - name: Install package
-        # Prefer the full extras (pylate parity tests); fall back to dev-only
-        # if pylate resolution fails on this image.
-        run: |
-          pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
+        # Deps are baked into the image; just register the editable package.
+        run: pip install --no-cache-dir -e . --no-deps
 
-      - name: Run test suite
-        run: pytest tests/ -v --durations=20 -m "not perf"
-
-      - name: Run perf regression suite
-        # Times each kernel and compares median latency against the baseline
-        # JSON committed under benchmarks/baselines/{GPU}.json. Fails if any
-        # kernel is more than 5 % slower than its baseline. Skips cleanly if
-        # there is no baseline for this runner's GPU class — regenerate via
-        # `pytest tests/regression/ -m perf --update-perf-baseline` and commit
-        # the resulting file.
-        run: pytest tests/regression/ -m perf -v --durations=10
+      - name: Run tests (${{ matrix.bucket.name }})
+        # --durations=20 prints the long pole per bucket so we can rebalance
+        # the matrix when test additions shift the picture.
+        run: pytest ${{ matrix.bucket.paths }} -v --durations=20 ${{ matrix.bucket.args }}
