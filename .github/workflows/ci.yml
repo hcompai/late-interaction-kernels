@@ -76,5 +76,4 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} pytest -q
 
   # GPU tests run on a GitHub-hosted GPU larger runner via gpu-ci.yml —
-  # automatically on push to main and on kernel-touching PRs, manually via
-  # workflow_dispatch, or by adding the `run-gpu-ci` label to an unrelated PR.
+  # on every push to main, or on PRs carrying the `run-gpu-tests` label.

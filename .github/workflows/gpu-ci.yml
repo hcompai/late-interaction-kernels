@@ -4,27 +4,13 @@ permissions:
   contents: read
 
 # Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
-#   - automatically on push to main and on PRs that touch kernel-related files;
-#   - manually via `workflow_dispatch` (requires write permission on the repo);
-#   - on PRs by adding the `run-gpu-ci` label (label apply requires triage+).
+#   - on every commit to main;
+#   - on PRs carrying the `run-gpu-tests` label (label apply requires triage+).
 on:
   push:
     branches: [main]
-    paths:
-      - "late_interaction_kernels/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/gpu-ci.yml"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - "late_interaction_kernels/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/gpu-ci.yml"
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,9 +22,11 @@ jobs:
     # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
     # the org admin. Swap the label here if more GPU SKUs come online later.
     runs-on: late-interaction-kernels-runner
-    # On `labeled` events, only fire when the gating label is applied. All
-    # other events (push, synchronize, dispatch, etc.) skip this guard.
-    if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
+    # Run on every push to main; on PRs, only when the `run-gpu-tests` label
+    # is attached (so new commits on a labeled PR also re-run).
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
     # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
     # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
     # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
