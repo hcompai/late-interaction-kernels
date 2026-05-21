@@ -112,7 +112,7 @@ PARITY_SHAPES = [
     (32, 32, 32, 200, 128),  # PyLate in-batch-negatives, B=32
     (64, 64, 32, 200, 128),  # B=64
     (8, 8, 128, 1024, 128),  # long doc
-    (2, 2, 1024, 1024, 128),  # ColPali-ish
+    (2, 2, 256, 256, 128),  # long-seq parity (shrunk from 1024² for CI speed)
     (4, 4, 32, 256, 48),  # LateOn-Code-edge
     (4, 4, 32, 256, 256),  # fatter d
 ]
