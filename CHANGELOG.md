@@ -19,6 +19,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `maxsim_residual_varlen` under the "My own training / inference code"
   branch (in addition to "Raw kernel functions"). Previously the combo
   *custom code + training + packed cu_seqlens* returned "No exact match".
+- Kernel picker shows a composition recipe when the combo
+  *varlen + top-k retrieval* is selected (no single fused kernel covers
+  that today — the answer is `maxsim_varlen` followed by `torch.topk`).
+  The picker still falls back to the generic "No exact match" message
+  for combinations no recipe covers.
 
 ### Changed
 
