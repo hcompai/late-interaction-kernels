@@ -24,7 +24,7 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -41,7 +41,7 @@ jobs:
     name: Type Check (ty)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -60,7 +60,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -76,5 +76,4 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} pytest -q
 
   # GPU tests run on a GitHub-hosted GPU larger runner via gpu-ci.yml —
-  # automatically on push to main and on kernel-touching PRs, manually via
-  # workflow_dispatch, or by adding the `run-gpu-ci` label to an unrelated PR.
+  # on every push to main, or on PRs carrying the `run-gpu-tests` label.

@@ -4,27 +4,13 @@ permissions:
   contents: read
 
 # Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
-#   - automatically on push to main and on PRs that touch kernel-related files;
-#   - manually via `workflow_dispatch` (requires write permission on the repo);
-#   - on PRs by adding the `run-gpu-ci` label (label apply requires triage+).
+#   - on every commit to main;
+#   - on PRs carrying the `run-gpu-tests` label (label apply requires triage+).
 on:
   push:
     branches: [main]
-    paths:
-      - "late_interaction_kernels/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/gpu-ci.yml"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - "late_interaction_kernels/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/gpu-ci.yml"
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,9 +22,11 @@ jobs:
     # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
     # the org admin. Swap the label here if more GPU SKUs come online later.
     runs-on: late-interaction-kernels-runner
-    # On `labeled` events, only fire when the gating label is applied. All
-    # other events (push, synchronize, dispatch, etc.) skip this guard.
-    if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
+    # Run on every push to main; on PRs, only when the `run-gpu-tests` label
+    # is attached (so new commits on a labeled PR also re-run).
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
     # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
     # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
     # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
@@ -46,6 +34,10 @@ jobs:
     container:
       image: nvcr.io/nvidia/pytorch:25.06-py3
       options: --gpus all --ipc=host
+    # Silence the unnormalized-input warning: many parity tests deliberately
+    # feed unnormalized vectors, so the warning is expected noise here.
+    env:
+      LIK_SUPPRESS_NORM_WARN: "1"
     timeout-minutes: 30
     strategy:
       # One bucket failing shouldn't cancel the others — we want to see all
@@ -91,7 +83,7 @@ jobs:
             paths: tests/regression/
             args: -m perf
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: GPU sanity check
         run: |
@@ -99,10 +91,10 @@ jobs:
           python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
       - name: Install package
-        # Prefer the full extras (pylate parity tests); fall back to dev-only
-        # if pylate resolution fails on this image.
-        run: |
-          pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
+        # pylate's dep tree conflicts with the NVCR image's torch, so we skip
+        # the pylate extra here. pylate parity tests auto-skip when the import
+        # fails.
+        run: pip install --no-cache-dir -e ".[dev]"
 
       - name: Run tests (${{ matrix.bucket.name }})
         # --durations=20 prints the long pole per bucket so we can rebalance
