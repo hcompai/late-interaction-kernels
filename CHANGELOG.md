@@ -17,6 +17,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
   are no longer tested and the `torch._assert_async` bounds check in
   `pack_padded` now assumes the symbol is present unconditionally.
+
+### Deprecated
+
+- `set_backward_method` / `get_backward_method` now emit
+  `DeprecationWarning`. The process-wide global has no functional
+  advantage over the per-call `backward=` kwarg on `maxsim` /
+  `MaxSimScorer` and complicates reasoning in multi-thread / multi-rank
+  setups. Migration: replace `set_backward_method("csr")` with
+  `maxsim(..., backward="csr")` (or `MaxSimScorer(backward="csr")`).
+  The globals will be removed in the next breaking release.
 - [breaking] `maxsim_inference_scatter` → `score_pairs_packed`; module
   `scatter.py` → `score_pairs.py`. Shorter name, matches prior art in
   https://github.com/ErikKaum/maxsim. Kernel, signature, and semantics
@@ -51,9 +61,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `dequantize_fp8_per_tensor`, `dequantize_fp8_per_token`. Import from
   their submodules directly: `late_interaction_kernels.{forward, topk,
   plaid, varlen, experimental, fp8}`.
+- [breaking] `maxsim_xtr` (XTR top-K aggregation, the experimental kernel
+  exposed at `late_interaction_kernels.experimental.xtr`). The kernel only
+  ever shipped as a research curiosity; nothing in `MaxSimScorer`,
+  `retrieve`, `patch_pylate`, or `patch_colpali_engine` used it. Users
+  who still need XTR aggregation can take the kernel source from a
+  pre-0.2.0 release or compose `maxsim` with a `topk + sum` on the
+  output. The companion test (`tests/test_xtr.py`) is gone too.
 
 ### Added
 
+- **`patch_colpali_engine()` / `unpatch_colpali_engine()`** — colpali_engine
+  drop-in mirroring `patch_pylate`. Monkey-patches
+  `BaseVisualRetrieverProcessor.score_multi_vector` and the three in-batch
+  loss heads (`ColbertLoss`, `ColbertPairwiseCELoss`, `ColbertSigmoidLoss`)
+  to route their `einsum("bnd,csd->bcns") + amax(-1) + sum(-2)` through the
+  fused kernel. Negative-mining siblings (`ColbertNegativeCELoss`,
+  `ColbertPairwiseNegativeCELoss`) inherit the in-batch term through their
+  `self.inner_loss` reference. Falls back to the original implementation
+  for `use_smooth_max=True`, `LIK_DISABLE=1`, sub-Ampere CUDA, CPU
+  tensors, and `d < 8`.
 - **`maxsim_padded`** — padded-input reranking helper (inspired by
   https://github.com/ErikKaum/maxsim). Takes `[B, Lq, d]` / `[B, C, Ld, d]`
   tensors with per-row lengths, returns `[B, C]` fp32. Autograd-aware on

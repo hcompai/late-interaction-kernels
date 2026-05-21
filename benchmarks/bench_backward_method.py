@@ -21,7 +21,6 @@ from contextlib import nullcontext
 import torch
 
 from late_interaction_kernels import maxsim
-from late_interaction_kernels.autograd import set_backward_method
 
 
 def _naive_score(Q, D):
@@ -58,12 +57,12 @@ def _bench(fn, warmup=5, iters=30):
     return s.elapsed_time(e) / iters
 
 
-def _make_step(Q, D, *, hot=False):
+def _make_step(Q, D, *, backward):
     def _step():
         if Q.grad is not None:
             Q.grad = None
             D.grad = None
-        s = maxsim(Q, D)
+        s = maxsim(Q, D, backward=backward)
         s.sum().backward()
 
     return _step
@@ -110,11 +109,8 @@ def main():
             with torch.no_grad():
                 D[:, 0, :] = 100.0
 
-        step = _make_step(Q, D)
         naive = _make_naive_step(Q, D)
 
-        set_backward_method("auto")
-        t_auto = _bench(step, iters=args.iters)
         # The real selector lives in `_MaxSimFn.backward` (autograd.py):
         # `auto` picks between `unified` (default) and `csr` for very
         # high-contention batches. `atomic` is never picked by `auto`;
@@ -122,14 +118,10 @@ def main():
         high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
         pick = "csr" if high_contention else "unified"
 
-        set_backward_method("unified")
-        t_unified = _bench(step, iters=args.iters)
-
-        set_backward_method("csr")
-        t_csr = _bench(step, iters=args.iters)
-
-        set_backward_method("atomic")
-        t_atomic = _bench(step, iters=args.iters)
+        t_auto = _bench(_make_step(Q, D, backward="auto"), iters=args.iters)
+        t_unified = _bench(_make_step(Q, D, backward="unified"), iters=args.iters)
+        t_csr = _bench(_make_step(Q, D, backward="csr"), iters=args.iters)
+        t_atomic = _bench(_make_step(Q, D, backward="atomic"), iters=args.iters)
 
         try:
             t_naive = _bench(naive, iters=max(5, args.iters // 3))
@@ -160,9 +152,6 @@ def main():
                 "auto_pick": pick,
             }
         )
-
-    # Reset to default for sanity.
-    set_backward_method("auto")
 
     out = os.path.join(args.outdir, f"backward_method_{gpu}.json")
     with open(out, "w") as f:

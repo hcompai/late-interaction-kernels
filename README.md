@@ -148,7 +148,7 @@ Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`,
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.             |
-| `set_backward_method(...)` / `get_backward_method()`              | Process-wide default via `late_interaction_kernels.autograd`.     |
+| `patch_colpali_engine()` / `unpatch_colpali_engine()`             | colpali_engine drop-in: loss + scoring routes through the kernel. |
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                  |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |

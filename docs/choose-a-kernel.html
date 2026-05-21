@@ -587,6 +587,12 @@
         blurb: 'One line, monkey-patches PyLate to route MaxSim through the fused kernels. LIK_DISABLE=1 falls back to vanilla PyLate.',
         importLine: 'from late_interaction_kernels import patch_pylate' },
 
+      { key: 'patch_colpali_engine', name: 'patch_colpali_engine()', category: 'colpali_engine drop-in',
+        color: C.oxblood,
+        stack: 'colpali_engine', phase: 'any', layout: 'any', workload: 'any',
+        blurb: 'One line, monkey-patches colpali_engine\'s loss heads (ColbertLoss, ColbertPairwiseCELoss, ColbertSigmoidLoss) and score_multi_vector. LIK_DISABLE=1 falls back to vanilla colpali_engine.',
+        importLine: 'from late_interaction_kernels import patch_colpali_engine' },
+
       { key: 'MaxSimScorer', name: 'MaxSimScorer', category: 'high-level',
         color: C.moss,
         stack: 'custom', phase: 'any', layout: 'dense', workload: 'maxsim',
@@ -674,11 +680,14 @@
         id: 'stack',
         tag: 'Step 1 of 4',
         question: 'Where will you call MaxSim from?',
-        hint: 'PyLate users get a one-line drop-in. Custom training/inference loops use the high-level wrappers (<code>MaxSimScorer</code>, <code>retrieve</code>, <code>maxsim_padded</code>). Power users wire the fused Triton kernels in directly.',
+        hint: 'PyLate and colpali_engine users get a one-line drop-in. Custom training/inference loops use the high-level wrappers (<code>MaxSimScorer</code>, <code>retrieve</code>, <code>maxsim_padded</code>). Power users wire the fused Triton kernels in directly.',
         choices: [
           { label: 'A PyLate codebase',
             why: 'Drop-in for PyLate trainers and rerankers.',
             filter: eqOrAny('stack', 'pylate') },
+          { label: 'A colpali_engine codebase',
+            why: 'Drop-in for colpali_engine loss heads and scoring helper.',
+            filter: eqOrAny('stack', 'colpali_engine') },
           { label: 'My own training / inference code',
             why: 'High-level nn.Module and retrieval helpers.',
             filter: eqOrAny('stack', 'custom') },

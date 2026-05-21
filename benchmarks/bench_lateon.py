@@ -38,7 +38,6 @@ import os
 import torch
 
 from late_interaction_kernels import maxsim, maxsim_inference
-from late_interaction_kernels.autograd import set_backward_method
 
 SHAPES = [
     # name             Nq    Nd    Lq    Ld
@@ -131,11 +130,16 @@ def main():
             t_fwd_naive = float("nan")
 
         # ---- Backward (training step) ----
-        def bwd_step():
-            if Q.grad is not None:
-                Q.grad = None
-                D.grad = None
-            maxsim(Q, D).sum().backward()
+        def _make_bwd_step(method):
+            def _step():
+                if Q.grad is not None:
+                    Q.grad = None
+                    D.grad = None
+                maxsim(Q, D, backward=method).sum().backward()
+
+            return _step
+
+        bwd_step = _make_bwd_step("auto")
 
         def bwd_naive_step():
             if Q.grad is not None:
@@ -143,13 +147,8 @@ def main():
                 D.grad = None
             _naive_score(Q.float(), D.float()).sum().backward()
 
-        set_backward_method("atomic")
-        t_bwd_atom = _bench(bwd_step, iters=args.iters)
-
-        set_backward_method("csr")
-        t_bwd_csr = _bench(bwd_step, iters=args.iters)
-
-        set_backward_method("auto")
+        t_bwd_atom = _bench(_make_bwd_step("atomic"), iters=args.iters)
+        t_bwd_csr = _bench(_make_bwd_step("csr"), iters=args.iters)
         t_bwd_auto = _bench(bwd_step, iters=args.iters)
 
         try:
@@ -158,7 +157,6 @@ def main():
             t_bwd_naive = float("nan")
 
         # ---- Peak memory ----
-        set_backward_method("auto")
         try:
             mem_flash = _peak_mem_mb(bwd_step)
         except torch.cuda.OutOfMemoryError:
@@ -195,7 +193,6 @@ def main():
             }
         )
 
-    set_backward_method("auto")
     out = os.path.join(args.outdir, f"lateon_{gpu}.json")
     with open(out, "w") as f:
         json.dump(rows, f, indent=2)
