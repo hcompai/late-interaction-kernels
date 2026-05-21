@@ -1,0 +1,75 @@
+name: Build GPU CI image
+
+# Bakes our test-only deps onto the NVIDIA PyTorch base and pushes to ghcr.io.
+# The GPU CI workflow then pulls this lean image instead of the ~9 GB upstream
+# image + a fresh pip install on every run. Tags:
+#   - latest          (main only)
+#   - <git-sha>       (every build, immutable)
+#   - branch-<name>   (PR branches, mutable, used by gpu-ci.yml on the same branch)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/docker/gpu-ci.Dockerfile"
+      - ".github/workflows/build-gpu-ci-image.yml"
+      - "pyproject.toml"
+  pull_request:
+    paths:
+      - ".github/docker/gpu-ci.Dockerfile"
+      - ".github/workflows/build-gpu-ci-image.yml"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/late-interaction-kernels-ci
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # SHA tag (immutable, always pushed).
+          tags="${IMAGE}:${{ github.sha }}"
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            tags="${tags},${IMAGE}:latest"
+          else
+            # Sanitize ref name into a docker-tag-safe slug.
+            branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+            slug=$(printf '%s' "$branch" | tr -c '[:alnum:]._-' '-' | cut -c1-100)
+            tags="${tags},${IMAGE}:branch-${slug}"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .github/docker
+          file: .github/docker/gpu-ci.Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          # GHA-backed layer cache so unchanged Dockerfile rebuilds are ~30 s.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
