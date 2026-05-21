@@ -521,7 +521,7 @@
 
 <footer>
   Stuck between two matches? The full API surface is documented in
-  <a href="../README.md">README.md</a> and
+  <a href="https://github.com/hcompai/late-interaction-kernels#api">README.md</a> and
   <a href="design.md">docs/design.md</a>.
   Algorithmic background: <a href="how-it-works.html">how it works</a>.
 </footer>
@@ -643,15 +643,9 @@
 
       { key: 'maxsim_residual', name: 'maxsim_residual', category: 'plaid',
         color: C.oxblood,
-        stack: 'raw', phase: 'training', layout: 'dense', workload: 'plaid',
-        blurb: 'PLAID-compressed docs (centroid index + quantised residual). Decompresses in SRAM and runs MaxSim — no dense materialisation. Autograd-aware.',
+        stack: 'raw', phase: 'any', layout: 'dense', workload: 'plaid',
+        blurb: 'PLAID-compressed docs (centroid index + quantised residual). Decompresses in SRAM and runs MaxSim — no dense materialisation. Autograd-aware on Q; auto-skips the argmax save when Q.requires_grad=False.',
         importLine: 'from late_interaction_kernels.plaid import maxsim_residual' },
-
-      { key: 'maxsim_residual_inference', name: 'maxsim_residual_inference', category: 'plaid',
-        color: C.clay,
-        stack: 'raw', phase: 'inference', layout: 'dense', workload: 'plaid',
-        blurb: 'Forward-only PLAID MaxSim. Same on-the-fly decompression, skips the gradient bookkeeping.',
-        importLine: 'from late_interaction_kernels.plaid import maxsim_residual_inference' },
 
       { key: 'maxsim_residual_varlen', name: 'maxsim_residual_varlen', category: 'plaid',
         color: C.ochre,
