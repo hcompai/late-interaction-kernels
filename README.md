@@ -31,7 +31,7 @@
 - a stateless `nn.Module` (`MaxSimScorer`) for custom training loops,
 - function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
 
-This is **not** a search engine. For end-to-end retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid). This library is the MaxSim math they compile down to.
+This is **not** a search engine. For end-to-end training or retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid). This library is the MaxSim math they compile down to.
 
 ## Install
 
