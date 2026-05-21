@@ -39,6 +39,9 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+  # The actual torch index (CPU vs CUDA) is selected by the `torch-cpu` /
+  # `torch-cuda` extras below. Plain `uv sync` without either extra falls
+  # back to PyPI's default wheel.
   "torch>=2.5,<3",
   # Triton ships with CUDA torch wheels on Linux. On macOS / Windows the
   # kernels cannot run, but the reference implementation and imports do.
@@ -63,6 +66,12 @@ dev = [
 # we patch against — older PyLate (1.2.x) used a single `mask=` kwarg and
 # is not supported.
 pylate = ["pylate>=1.3.3,<2"]
+# Pick exactly one of these to choose the torch wheel source. CI uses
+# `torch-cpu` to skip the multi-GB CUDA wheel; local GPU dev uses
+# `torch-cuda`. The `[tool.uv]` conflict block below makes them mutually
+# exclusive so the lockfile resolves cleanly for both.
+torch-cpu = ["torch>=2.5,<3"]
+torch-cuda = ["torch>=2.5,<3"]
 
 [project.urls]
 Homepage = "https://github.com/hcompai/late-interaction-kernels"
@@ -81,16 +90,29 @@ select = ["E", "F", "I", "B", "UP"]
 # B023: benchmark closures intentionally capture loop vars.
 ignore = ["E501", "B008", "E741", "B023"]
 
-# CI installs torch from the CPU-only PyTorch index so we don't pull the
-# multi-GB CUDA wheel on Linux runners. GPU users should override this
-# (e.g. `UV_INDEX=https://download.pytorch.org/whl/cu121 uv sync`).
+# Torch wheel source is picked per-extra: `--extra torch-cpu` for CI / CPU
+# laptops, `--extra torch-cuda` for local GPU dev. The conflict block keeps
+# them mutually exclusive so the lockfile stays consistent. On macOS,
+# PyPI's default torch wheel already supports MPS, so we skip the CPU
+# index there (the `pytorch-cpu` index has no Darwin wheels).
+[tool.uv]
+conflicts = [[{ extra = "torch-cpu" }, { extra = "torch-cuda" }]]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+torch = [
+  { index = "pytorch-cpu", extra = "torch-cpu", marker = "platform_system != 'Darwin'" },
+  { index = "pytorch-cu124", extra = "torch-cuda", marker = "platform_system == 'Linux'" },
+]
 
 [tool.ty.src]
 # Only type-check the shipped package and the test suite. Benchmarks and

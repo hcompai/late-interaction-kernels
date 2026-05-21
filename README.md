@@ -36,7 +36,7 @@ This is **not** a search engine. For end-to-end retrieval use [PyLate](https://g
 ## Install
 
 ```bash
-uv add late-interaction-kernels       # or: pip install late-interaction-kernels
+pip install late-interaction-kernels
 ```
 
 | Platform                       | Backend                                                                       |
@@ -161,13 +161,13 @@ Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`,
 ```bash
 git clone https://github.com/hcompai/late-interaction-kernels
 cd late-interaction-kernels
-uv sync --extra dev --extra pylate           # CPU torch by default; see note
-uv run pytest -q                             # CUDA tests auto-skip without a GPU
+uv sync --extra dev --extra pylate --extra torch-cuda   # GPU dev; use --extra torch-cpu on CPU-only boxes
+uv run pytest -q                                        # CUDA tests auto-skip without a GPU
 uv run ruff check . && uv run ruff format --check .
 ```
 
 > [!NOTE]
-> `uv sync` installs CPU-only torch (per `[tool.uv.sources]` in `pyproject.toml`) so CI doesn't pull the multi-GB CUDA wheel. For local GPU dev: `UV_INDEX=https://download.pytorch.org/whl/cu124 uv sync --extra dev --extra pylate`.
+> Pick exactly one of `--extra torch-cuda` (pulls torch from the CUDA index — `cu124`) or `--extra torch-cpu` (CPU-only wheel, what CI uses). The two are declared as conflicting in `pyproject.toml` so the lockfile resolves cleanly for both. On macOS, `--extra torch-cpu` falls back to PyPI's default (MPS-capable) wheel automatically.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 
