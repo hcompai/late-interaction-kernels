@@ -99,10 +99,10 @@ jobs:
           python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
       - name: Install package
-        # Prefer the full extras (pylate parity tests); fall back to dev-only
-        # if pylate resolution fails on this image.
-        run: |
-          pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
+        # pylate's dep tree conflicts with the NVCR image's torch, so we skip
+        # the pylate extra here. pylate parity tests auto-skip when the import
+        # fails.
+        run: pip install --no-cache-dir -e ".[dev]"
 
       - name: Run tests (${{ matrix.bucket.name }})
         # --durations=20 prints the long pole per bucket so we can rebalance
