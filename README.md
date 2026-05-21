@@ -110,15 +110,24 @@ Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md
 
 ## Choose a kernel
 
+<table>
+<tr>
+<td width="55%" valign="middle">
+
 Not sure which entry point fits your stack? The docs site ships an interactive decision tree that narrows the public API down to the right function in four questions (stack · phase · layout · workload):
 
 **👉 [hcompai.github.io/late-interaction-kernels/choose-a-kernel.html](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel)**
 
-<p align="center">
-  <a href="https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel">
-    <img src="assets/kernel_picker_widget_preview.webp" alt="Pick a kernel · interactive decision tree" width="720">
-  </a>
-</p>
+</td>
+<td width="45%" valign="middle" align="center">
+
+<a href="https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel">
+  <img src="assets/kernel_picker_widget_preview.webp" alt="Pick a kernel · interactive decision tree" width="420">
+</a>
+
+</td>
+</tr>
+</table>
 
 ## API
 
