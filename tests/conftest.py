@@ -36,3 +36,13 @@ def rel_err(actual: torch.Tensor, reference: torch.Tensor) -> float:
 @pytest.fixture
 def rel():
     return rel_err
+
+
+def needs_large_smem(d: int) -> bool:
+    """``d >= 513`` overflows the 64 KB shared-mem ceiling on sm_75 (T4) with
+    the kernel's current tiling. sm_80+ (A100/H100) have 100+ KB and run fine.
+    Tests that parametrize over such shapes wrap the offending entry in
+    ``pytest.mark.skipif(needs_large_smem(d), reason=...)``."""
+    if not torch.cuda.is_available():
+        return False
+    return d >= 513 and torch.cuda.get_device_capability()[0] < 8

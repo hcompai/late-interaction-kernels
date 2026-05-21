@@ -3,6 +3,8 @@
 import pytest
 import torch
 
+from tests.conftest import needs_large_smem
+
 pytestmark = pytest.mark.cuda
 
 
@@ -28,7 +30,25 @@ def test_single_query_token():
     assert (a - b).abs().max().item() < 1e-2
 
 
-@pytest.mark.parametrize("d", [16, 33, 37, 63, 96, 111, 250, 513])
+@pytest.mark.parametrize(
+    "d",
+    [
+        16,
+        33,
+        37,
+        63,
+        96,
+        111,
+        250,
+        pytest.param(
+            513,
+            marks=pytest.mark.skipif(
+                needs_large_smem(513),
+                reason="d=513 overflows sm_75 shared memory; runs on sm_80+",
+            ),
+        ),
+    ],
+)
 def test_non_power_of_two_embedding_dim(d):
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.reference import maxsim_reference

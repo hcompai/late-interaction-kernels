@@ -1,0 +1,110 @@
+name: GPU CI
+
+permissions:
+  contents: read
+
+# Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
+#   - automatically on push to main and on PRs that touch kernel-related files;
+#   - manually via `workflow_dispatch` (requires write permission on the repo);
+#   - on PRs by adding the `run-gpu-ci` label (label apply requires triage+).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gpu-tests:
+    name: GPU tests (${{ matrix.bucket.name }})
+    # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
+    # the org admin. Swap the label here if more GPU SKUs come online later.
+    runs-on: late-interaction-kernels-runner
+    # On `labeled` events, only fire when the gating label is applied. All
+    # other events (push, synchronize, dispatch, etc.) skip this guard.
+    if: github.event.action != 'labeled' || github.event.label.name == 'run-gpu-ci'
+    # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
+    # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
+    # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
+    # on GitHub-hosted larger runners.
+    container:
+      image: nvcr.io/nvidia/pytorch:25.06-py3
+      options: --gpus all --ipc=host
+    timeout-minutes: 30
+    strategy:
+      # One bucket failing shouldn't cancel the others — we want to see all
+      # failures in a single run rather than chase one at a time.
+      fail-fast: false
+      matrix:
+        bucket:
+          # Buckets sized roughly by post-trim per-file durations from the
+          # single-shard run; rebalance via the --durations=20 output of
+          # each shard when test additions shift the picture.
+          - name: heavy-parity
+            paths: >-
+              tests/test_backward.py
+              tests/test_backward_unified.py
+              tests/test_normalize.py
+              tests/test_robustness.py
+              tests/test_fused_head_train.py
+            args: -m "not perf"
+          - name: kernels-medium
+            paths: >-
+              tests/test_plaid.py
+              tests/test_padded.py
+              tests/test_fp8.py
+              tests/test_compile_cache.py
+              tests/test_smooth.py
+              tests/test_fused_head.py
+            args: -m "not perf"
+          - name: kernels-light
+            paths: >-
+              tests/test_forward.py
+              tests/test_varlen.py
+              tests/test_scatter.py
+              tests/test_topk.py
+              tests/test_soft.py
+              tests/test_matryoshka.py
+              tests/test_edge_cases.py
+              tests/test_retrieve.py
+              tests/test_xtr.py
+              tests/test_pylate_compat.py
+              tests/test_pylate_compat_warnings.py
+            args: -m "not perf"
+          - name: perf
+            paths: tests/regression/
+            args: -m perf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GPU sanity check
+        run: |
+          nvidia-smi
+          python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+      - name: Install package
+        # Prefer the full extras (pylate parity tests); fall back to dev-only
+        # if pylate resolution fails on this image.
+        run: |
+          pip install --no-cache-dir -e ".[dev,pylate]" || pip install --no-cache-dir -e ".[dev]"
+
+      - name: Run tests (${{ matrix.bucket.name }})
+        # --durations=20 prints the long pole per bucket so we can rebalance
+        # the matrix when test additions shift the picture.
+        run: pytest ${{ matrix.bucket.paths }} -v --durations=20 ${{ matrix.bucket.args }}

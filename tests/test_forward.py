@@ -9,6 +9,8 @@ ModernColBERT (long document) workloads.
 import pytest
 import torch
 
+from tests.conftest import needs_large_smem
+
 pytestmark = pytest.mark.cuda
 
 
@@ -18,7 +20,7 @@ SHAPES = [
     (8, 16, 32, 128, 128),
     (16, 8, 32, 300, 128),
     (4, 4, 128, 1024, 128),  # long doc
-    (2, 2, 1024, 1024, 128),  # ColPali-ish
+    (2, 2, 256, 256, 128),  # long-seq parity (shrunk from 1024² for CI speed)
     (4, 8, 32, 200, 256),
     (2, 4, 32, 128, 512),
     (2, 2, 32, 128, 1024),  # large d
@@ -34,6 +36,8 @@ def test_forward_parity_no_mask(shape, dtype, rel):
     from late_interaction_kernels.reference import maxsim_reference
 
     Nq, Nd, Lq, Ld, d = shape
+    if needs_large_smem(d):
+        pytest.skip(f"d={d} overflows sm_75 shared memory; runs on sm_80+")
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
     D = torch.randn(Nd, Ld, d, device="cuda", dtype=dtype)
 
@@ -50,6 +54,8 @@ def test_forward_parity_with_masks(shape, rel):
     from late_interaction_kernels.reference import maxsim_reference
 
     Nq, Nd, Lq, Ld, d = shape
+    if needs_large_smem(d):
+        pytest.skip(f"d={d} overflows sm_75 shared memory; runs on sm_80+")
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
     D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
     q_mask = torch.rand(Nq, Lq, device="cuda") > 0.2

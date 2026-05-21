@@ -1,0 +1,29 @@
+# One-shot benchmark run on 1×H100. Tests live in GitHub Actions (gpu-ci.yml).
+#   sky jobs launch scripts/sky_run_benchmarks.yaml
+
+name: late-interaction-kernels-bench
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  pip install --no-cache-dir uv
+  # No `pylate` extra — it pulls in a heavy transitive tree
+  # (transformers, sentence-transformers, ...) and is only needed for the
+  # pylate-compat parity tests in the test suite, not for benchmarks.
+  uv pip install --system --no-cache -e ".[dev]"
+
+run: |
+  set -eux
+  cd ~/sky_workdir
+  uv run --no-project python -c "import torch; print(torch.cuda.get_device_name())"
+  uv run --no-project python benchmarks/bench_forward.py --outdir /tmp/bench
+  uv run --no-project python benchmarks/bench_backward_method.py --outdir /tmp/bench
+  ls -la /tmp/bench

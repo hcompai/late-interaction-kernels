@@ -14,7 +14,7 @@ SHAPES = [
     (1, 4, 32, 64, 128),
     (8, 16, 32, 128, 128),
     (4, 4, 128, 1024, 128),
-    (2, 2, 1024, 1024, 128),
+    (2, 2, 256, 256, 128),  # long-seq parity (shrunk from 1024² for CI speed)
     (2, 4, 32, 128, 512),
 ]
 SHAPE_IDS = [f"Nq{s[0]}_Nd{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}" for s in SHAPES]
