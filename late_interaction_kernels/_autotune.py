@@ -8,7 +8,7 @@ Family rules of thumb (verified on H100 / A100 and conservative on the rest):
 - Small ``d`` (≤ 128): prefer `BLOCK_Q=32-64, BLOCK_D=64-128`.
 - Large ``d`` (≥ 512): shrink blocks so the fp16 `Q`/`D` tiles plus the fp32
   `S` tile fit in the SM's shared-memory budget.
-- Hopper loves `num_stages ≥ 3` (warp specialization + async copy).
+- Hopper loves `num_stages=3` (3-deep async pipeline, one warp group).
 - Ampere / Ada are happiest with `num_stages=2`.
 
 Per-family SRAM budgets (KiB of shared memory the kernel can actually use):
@@ -25,11 +25,12 @@ import triton
 
 from late_interaction_kernels._utils import detect_gpu
 
-# Warp specialization (FA-3 style) requires Triton 3.2+. The
-# ``num_consumer_groups`` / ``num_buffers_warp_spec`` kwargs on
-# ``triton.Config`` opt a kernel into producer-consumer warp specialization
-# so loads overlap cleanly with ``tl.dot``. We feature-detect so we still
-# run on older Triton.
+# Warp specialization (FA-3 style) was a manual opt-in via
+# ``num_consumer_groups`` / ``num_buffers_warp_spec`` on Triton 3.2 - 3.3.
+# Triton 3.4+ derives it automatically from the IR and dropped the kwargs.
+# We keep this probe for backwards compat with the brief 3.2/3.3 window —
+# on modern Triton it returns ``False`` and the helper below silently emits
+# plain configs.
 try:
     _CFG_PARAMS = set(inspect.signature(triton.Config).parameters)
 except (TypeError, ValueError):  # pragma: no cover
@@ -37,30 +38,39 @@ except (TypeError, ValueError):  # pragma: no cover
 _HAS_WARP_SPEC = {"num_consumer_groups", "num_buffers_warp_spec"} <= _CFG_PARAMS
 
 
-def _cfg(kwargs, *, num_warps, num_stages, warp_spec=False):
-    """Build a ``triton.Config`` and quietly opt-in to warp specialization
-    when the running Triton supports it.
+def _cfg(kwargs, *, num_warps, num_stages):
+    """Build a ``triton.Config``. The historical ``warp_spec=True`` shortcut
+    has been removed: Triton 3.4+ does warp specialization automatically
+    from the IR (the ``num_consumer_groups`` / ``num_buffers_warp_spec``
+    kwargs were dropped from ``triton.Config``), so the explicit opt-in
+    silently degrades to a plain config on any supported Triton release.
     """
-    extras = {}
-    if warp_spec and _HAS_WARP_SPEC:
-        extras["num_consumer_groups"] = 2
-        extras["num_buffers_warp_spec"] = num_stages
-    return triton.Config(kwargs, num_warps=num_warps, num_stages=num_stages, **extras)
+    return triton.Config(kwargs, num_warps=num_warps, num_stages=num_stages)
 
 
 def _small_d_hopper():
+    """H100 winner across our bench shapes is ``BLOCK_Q=64, BLOCK_D=64,
+    num_warps=4, num_stages=3``:
+
+    1. WGMMA on bf16 uses ``m64nNk16`` natively, so ``BLOCK_Q=64`` fills
+       one warp group's M slot exactly — no masked rows wasted.
+    2. ``num_warps=4`` (= one warp group) gets ``tl.dot`` lowered directly
+       to ``wgmma.mma_async`` without extra orchestration.
+    3. With ``Nq * Nd`` programs on the grid, small per-CTA work means
+       more concurrent CTAs, which hides HBM latency better than fewer
+       fatter CTAs.
+
+    The other configs cover degenerate shapes (very small ``Lq`` or
+    ``Ld``) where the winner above can't fully tile the inner loop.
+    """
     return [
         _cfg({"BLOCK_Q": 32, "BLOCK_D": 64}, num_warps=4, num_stages=3),
-        _cfg({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=8, num_stages=3),
+        _cfg({"BLOCK_Q": 32, "BLOCK_D": 128}, num_warps=4, num_stages=3),
         _cfg({"BLOCK_Q": 64, "BLOCK_D": 64}, num_warps=4, num_stages=3),
+        _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=4, num_stages=3),
         _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3),
         _cfg({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=2),
         _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=2),
-        # Warp-specialized shortlist: producer warp group streams Q/D tiles
-        # into shared memory while consumer group(s) run back-to-back
-        # ``tl.dot`` + running-max. No-ops on Triton < 3.2.
-        _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3, warp_spec=True),
-        _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=3, warp_spec=True),
     ]
 
 
