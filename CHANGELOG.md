@@ -12,6 +12,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CUDA-marked tests on push to `main`, on PRs touching kernel-related files,
   on `workflow_dispatch`, or on PRs labelled `run-gpu-ci`.
 
+### Changed
+
+- Cleaned the H100 autotune pool (`_autotune.py::_small_d_hopper`). Dropped
+  the two `warp_spec=True` configs that have been silent no-ops since
+  Triton 3.5 removed the `num_consumer_groups` / `num_buffers_warp_spec`
+  kwargs (the API moved to compiler-driven warp specialization — without
+  the kwargs, those entries duplicated other configs in the pool and
+  occasionally won the autotune sample on noise alone). Also resized
+  `BLOCK_Q=32, BLOCK_D=128` from `num_warps=8` to `num_warps=4` so it
+  matches the WGMMA warp-group size we actually want, and added the
+  matching `BLOCK_Q=64, BLOCK_D=128, num_warps=4, num_stages=3` row.
+
 ### Fixed
 
 - Interactive kernel picker (`docs/choose-a-kernel.html`) now surfaces
