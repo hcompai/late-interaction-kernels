@@ -51,11 +51,16 @@ def _score(
         )
 
     if _HAS_TRITON and Q.is_cuda and D.is_cuda:
-        from late_interaction_kernels.autograd import maxsim, maxsim_inference
+        from late_interaction_kernels.autograd import maxsim
 
-        if inference:
-            return maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
-        return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
+        # `inference=True` is a stronger contract than auto-dispatch:
+        # `MaxSimScorer.score()` advertises "does not participate in
+        # autograd" even when the inputs have ``requires_grad=True``.
+        # ``torch.no_grad()`` enforces that. The training branch
+        # (`inference=False`) lets `maxsim` route through autograd as
+        # usual.
+        with torch.no_grad() if inference else torch.enable_grad():
+            return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 
     if Q.device.type == "mps":
         from late_interaction_kernels.mps import maxsim_inference_mps, maxsim_mps

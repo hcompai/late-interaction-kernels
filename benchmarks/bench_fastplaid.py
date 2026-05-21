@@ -27,7 +27,7 @@ This bench does two things:
 
      (a) The same ops written in PyTorch: `matmul + masked_fill + max + sum`,
          which dispatch to the identical CUDA kernels libtorch calls.
-     (b) `late-interaction-kernels.maxsim_inference`.
+     (b) `late-interaction-kernels.maxsim` (no-grad).
 
    This shows the operation-level effect of kernel fusion, independent of
    which library is calling it.
@@ -98,11 +98,11 @@ def fastplaid_maxsim_proxy(Q: torch.Tensor, D: torch.Tensor, d_mask: torch.Tenso
 
 def lik_maxsim(Q: torch.Tensor, D: torch.Tensor, d_mask: torch.Tensor) -> torch.Tensor:
     """late-interaction-kernels equivalent. No autograd, no saved argmax."""
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
 
     # late-interaction-kernels wants Q as [Nq, Lq, d]. FastPlaid's rerank is one query at a
     # time, so Nq=1. We squeeze back to [N] at the end to match the proxy.
-    scores = maxsim_inference(Q.unsqueeze(0), D, d_mask=d_mask)  # [1, N]
+    scores = maxsim(Q.unsqueeze(0), D, d_mask=d_mask)  # [1, N]
     return scores.squeeze(0)
 
 

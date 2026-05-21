@@ -1,7 +1,8 @@
 """Inference-only benchmark for edge / small-d ColBERT models.
 
-Targets the regime where :func:`late_interaction_kernels.maxsim_inference`
-structurally wins against the naive ``einsum → max → sum`` path:
+Targets the regime where :func:`late_interaction_kernels.maxsim` (under
+``torch.inference_mode``) structurally wins against the naive
+``einsum → max → sum`` path:
 
 * **small embedding dim** (d ∈ {48, 64}) — LightOn's ``LateOn-Code-edge``
   and Mixedbread's ``mxbai-edge`` family use tiny vectors, trading
@@ -10,7 +11,7 @@ structurally wins against the naive ``einsum → max → sum`` path:
   are designed for full-document reranking, where naive einsum has to
   materialize an O(Nq·Nd·Lq·Ld·d) similarity tensor.
 * **high batch size** (Nd ∈ {64, 512, 4096, 16384}) — the setting where
-  the library replaces a reranker stack. `maxsim_inference` never
+  the library replaces a reranker stack. The fused kernel never
   materializes the [Nq, Nd, Lq, Ld] score tensor; naive does.
 
 This complements ``bench_forward.py`` by focusing purely on
@@ -30,7 +31,7 @@ from collections.abc import Iterable
 
 import torch
 
-from late_interaction_kernels import maxsim_inference
+from late_interaction_kernels import maxsim
 
 # --------------------------------------------------------------------------- #
 # Shapes                                                                       #
@@ -121,7 +122,7 @@ def bench_one(name: str, Nq: int, Nd: int, Lq: int, Ld: int, d: int, dtype: torc
     # --- late-interaction-kernels (inference_mode) --------------------- #
     def _lik(Q=Q, D=D):
         with torch.inference_mode():
-            return maxsim_inference(Q, D)
+            return maxsim(Q, D)
 
     try:
         t_lik = _time_op(_lik)
@@ -221,7 +222,7 @@ def main():
     # Markdown summary
     md = [f"# Inference bench (edge / long-context / high-BS) — {gpu} ({args.dtype})\n"]
     md.append(
-        "Each row compares `maxsim_inference` (Triton, fused, no score-tensor "
+        "Each row compares `maxsim` (Triton, fused, no score-tensor "
         "materialization) against a naive fp32 einsum → max → sum baseline, "
         "inside `torch.inference_mode()`.\n"
     )

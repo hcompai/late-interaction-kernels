@@ -82,7 +82,7 @@ def test_quantize_empty_input():
 def test_maxsim_fp8_parity(shape, scale_q, scale_d):
     if fp8_dtype is None:
         pytest.skip("torch has no FP8 dtype")
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
     from late_interaction_kernels.fp8 import (
         maxsim_inference_fp8,
         quantize_fp8_per_tensor,
@@ -91,7 +91,7 @@ def test_maxsim_fp8_parity(shape, scale_q, scale_d):
 
     Nq, Nd, Lq, Ld, d = shape
     Q, D = _make(Nq, Nd, Lq, Ld, d)
-    ref = maxsim_inference(Q, D)
+    ref = maxsim(Q, D)
 
     qfn = quantize_fp8_per_token if scale_q == "token" else quantize_fp8_per_tensor
     dfn = quantize_fp8_per_token if scale_d == "token" else quantize_fp8_per_tensor
@@ -111,7 +111,7 @@ def test_maxsim_fp8_parity(shape, scale_q, scale_d):
 def test_maxsim_fp8_with_masks():
     if fp8_dtype is None:
         pytest.skip("torch has no FP8 dtype")
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
     from late_interaction_kernels.fp8 import maxsim_inference_fp8, quantize_fp8_per_token
 
     Q, D = _make(2, 8, 32, 128, 128)
@@ -120,7 +120,7 @@ def test_maxsim_fp8_with_masks():
     d_mask = torch.ones(8, 128, dtype=torch.bool, device="cuda")
     d_mask[:, 96:] = False
 
-    ref = maxsim_inference(Q, D, q_mask=q_mask, d_mask=d_mask)
+    ref = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
     Q_fp8, sQ = quantize_fp8_per_token(Q)
     D_fp8, sD = quantize_fp8_per_token(D)
     out = maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD, q_mask=q_mask, d_mask=d_mask)

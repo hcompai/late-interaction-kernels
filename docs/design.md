@@ -140,11 +140,12 @@ attention-mask scratch. `plaid_approx_score` is the IVF-prune step
 
 ## Fused D-side head
 
-`maxsim_from_hidden` and `maxsim_from_hidden_train` fold
-`F.linear(H_d, W, b) → F.normalize → MaxSim` into a single kernel. The
-`[Nd, Ld, d_out]` `D_proj` scratch is never written to HBM; for corpora
-stored as `[Nd, Ld, d_model]` ModernBERT hidden states this saves
-multi-GB of read traffic.
+`maxsim_from_hidden` folds `F.linear(H_d, W, b) → F.normalize → MaxSim`
+into a single kernel; the backward (auto-dispatched on `requires_grad`)
+gathers `H_d` only at winning positions. The `[Nd, Ld, d_out]`
+`D_proj` scratch is never written to HBM; for corpora stored as
+`[Nd, Ld, d_model]` ModernBERT hidden states this saves multi-GB of
+read traffic.
 
 The training backward is closed-form. The forward saves an `[Nq · Nd, Lq]`
 argmax. Backward gathers `H_d` only at winning positions

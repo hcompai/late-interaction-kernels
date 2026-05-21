@@ -107,7 +107,7 @@ def test_smooth_maxsim_kernel_parity(shape, top_k, aggregation):
 @pytest.mark.cuda
 def test_smooth_maxsim_topk1_sum_equals_hard_maxsim():
     """Flagship invariant: (top_k=1, sum) == hard maxsim, bit-for-bit on bf16."""
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
     from late_interaction_kernels.experimental import smooth_maxsim
 
     Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
@@ -115,7 +115,7 @@ def test_smooth_maxsim_topk1_sum_equals_hard_maxsim():
     Q = torch.nn.functional.normalize(Q.float(), dim=-1).to(torch.bfloat16)
     D = torch.nn.functional.normalize(D.float(), dim=-1).to(torch.bfloat16)
 
-    hard = maxsim_inference(Q, D)
+    hard = maxsim(Q, D)
     smooth = smooth_maxsim(Q, D, top_k=1, aggregation="sum")
     torch.testing.assert_close(smooth, hard, atol=1e-3, rtol=1e-3)
 

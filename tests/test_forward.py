@@ -96,6 +96,21 @@ def test_fully_masked_query_scores_zero():
     assert torch.equal(scores[1, :], torch.zeros(2, device="cuda"))
 
 
+def test_no_grad_dispatch_bit_equals_autograd_path():
+    """``maxsim`` must produce a bit-identical forward whether the autograd
+    path is taken or not. Pins the ``requires_grad``-driven dispatch added
+    when ``maxsim_inference`` was folded into ``maxsim``."""
+    from late_interaction_kernels import maxsim
+
+    Nq, Nd, Lq, Ld, d = 4, 8, 32, 128, 128
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
+
+    no_grad = maxsim(Q, D)
+    with_grad = maxsim(Q.clone().requires_grad_(True), D.clone().requires_grad_(True)).detach()
+    torch.testing.assert_close(no_grad, with_grad, atol=0, rtol=0)
+
+
 def test_2d_inputs_return_scalar():
     """Single-query, single-doc call returns a scalar, not a [1, 1] tensor."""
     from late_interaction_kernels import maxsim

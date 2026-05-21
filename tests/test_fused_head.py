@@ -139,7 +139,7 @@ def test_fused_head_with_d_mask():
 @pytest.mark.cuda
 def test_fused_head_matches_unfused_maxsim():
     """The fused kernel must match the canonical `F.linear + normalize + maxsim` path."""
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
     from late_interaction_kernels.fused_head import maxsim_from_hidden
 
     Nd, Lq, Ld, d_model, d_out = 8, 32, 200, 768, 128
@@ -153,7 +153,7 @@ def test_fused_head_matches_unfused_maxsim():
     D_proj = torch.nn.functional.normalize(D_proj, dim=-1).to(torch.bfloat16)
 
     fused = maxsim_from_hidden(Q, H_d, W, b=b, normalize=True)
-    unfused = maxsim_inference(Q, D_proj)
+    unfused = maxsim(Q, D_proj)
 
     assert (fused.squeeze(0) - unfused).abs().max().item() / max(1e-6, unfused.abs().max().item()) < 7e-3
 

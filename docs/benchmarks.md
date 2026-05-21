@@ -196,9 +196,9 @@ The win shrinks as `Nq · Lq / Ld → 1` and as `d_model` shrinks below
 
 Smaller encoder + bigger effective batch ⇒ bigger MaxSim slice ⇒ bigger
 end-to-end speedup. These numbers use `patch_pylate()`;
-`maxsim_from_hidden_train` adds another ~1–3 ms / step but isn't wired
-into PyLate's loss path because PyLate's `Dense` projection runs inside
-the encoder forward.
+`maxsim_from_hidden` (autograd path) adds another ~1–3 ms / step but
+isn't wired into PyLate's loss path because PyLate's `Dense` projection
+runs inside the encoder forward.
 
 ## Backward paths
 

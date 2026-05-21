@@ -136,7 +136,7 @@ Not sure which entry point fits your stack? The docs site ships an interactive d
 | `patch_pylate()` / `unpatch_pylate()` | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                 |
 | `MaxSimScorer(normalize=, backward=)` | Stateless `nn.Module`, autograd-aware.                                |
 | `retrieve(Q, D, top_k, chunk=)`       | Top-k retrieval, chunked for huge corpora.                            |
-| `maxsim` / `maxsim_inference`         | Core MaxSim, dense layout (autograd / forward-only).                  |
+| `maxsim`                              | Core MaxSim, dense layout. Autograd-aware; auto-skips argmax save when no input requires grad. |
 | `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
 | `maxsim_padded`                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 

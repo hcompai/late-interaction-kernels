@@ -6,7 +6,7 @@ import warnings
 import torch
 
 from late_interaction_kernels.backward import maxsim_backward, maxsim_backward_unified
-from late_interaction_kernels.forward import _run_forward, maxsim_forward
+from late_interaction_kernels.forward import _run_forward
 
 _BACKWARD_METHOD = "auto"  # module-level toggle, deprecated; prefer per-call `backward=`
 
@@ -218,7 +218,13 @@ def maxsim(
     q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
     d_mask_i8 = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
 
-    scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method)
+    # Skip the argmax save when neither input needs a backward — the fused
+    # kernel is otherwise identical. Same pattern as `maxsim_varlen` and
+    # `maxsim_residual`.
+    if Q.requires_grad or D.requires_grad:
+        scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method)
+    else:
+        scores, _ = _run_forward(Q, D, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())
@@ -237,24 +243,11 @@ def maxsim_inference(
     *,
     normalize: bool = False,
 ) -> torch.Tensor:
-    """Inference-only MaxSim — like :func:`maxsim` but no saved argmax."""
-    if Q.shape[-1] != D.shape[-1]:
-        raise ValueError(
-            f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "
-            f"vs D.shape[-1]={D.shape[-1]}."
-        )
-    if Q.device != D.device:
-        raise ValueError(
-            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
-        )
-    if not normalize:
-        _maybe_warn_unnormalized(Q)
-    scores, _ = maxsim_forward(
-        Q,
-        D,
-        q_mask=q_mask,
-        d_mask=d_mask,
-        save_argmax=False,
-        normalize=normalize,
+    """Deprecated alias for :func:`maxsim`."""
+    warnings.warn(
+        "`maxsim_inference` is deprecated; use `maxsim(...)`. "
+        "It auto-skips the argmax save when neither input has requires_grad.",
+        DeprecationWarning,
+        stacklevel=2,
     )
-    return scores
+    return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)

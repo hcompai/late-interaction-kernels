@@ -30,7 +30,7 @@ import sys
 
 import torch
 
-from late_interaction_kernels import maxsim, maxsim_inference
+from late_interaction_kernels import maxsim
 
 try:
     import flash_maxsim  # noqa: F401
@@ -105,11 +105,11 @@ def bench_forward_one(name, Nq, Nd, Lq, Ld, d, dtype, normalize: bool):
         Draw = D / torch.linalg.vector_norm(D, dim=-1, keepdim=True).clamp_min(1e-12)
 
         def _ours():
-            return maxsim_inference(Qraw, Draw, normalize=True)
+            return maxsim(Qraw, Draw, normalize=True)
     else:
 
         def _ours():
-            return maxsim_inference(Q, D)
+            return maxsim(Q, D)
 
     t, sd = cuda_time(_ours)
     m = peak_mem_mb(_ours)

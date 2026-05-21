@@ -107,10 +107,10 @@ def test_torch_compile_maxsim_smoke():
 
 
 def test_inference_mode_returns_correct_scores():
-    """Kernel must work inside `torch.inference_mode()` even when the
-    *reference path* would have captured argmax. `maxsim_inference` is
-    the canonical no-grad alias; this test pins both."""
-    from late_interaction_kernels import maxsim, maxsim_inference
+    """Kernel must work inside ``torch.inference_mode()`` even when the
+    *reference path* would have captured argmax. ``maxsim`` auto-skips
+    the argmax save when neither input has ``requires_grad=True``."""
+    from late_interaction_kernels import maxsim
     from late_interaction_kernels.reference import maxsim_reference
 
     Q = torch.randn(2, 16, 128, device="cuda", dtype=torch.float16)
@@ -118,12 +118,10 @@ def test_inference_mode_returns_correct_scores():
     ref = maxsim_reference(Q.float(), D.float())
 
     with torch.inference_mode():
-        s1 = maxsim(Q, D).float()
-        s2 = maxsim_inference(Q, D).float()
+        s = maxsim(Q, D).float()
 
     denom = max(1.0, ref.abs().max().item())
-    assert (s1 - ref).abs().max().item() / denom < 5e-3
-    assert (s2 - ref).abs().max().item() / denom < 5e-3
+    assert (s - ref).abs().max().item() / denom < 5e-3
 
 
 def test_no_grad_output_has_no_grad_fn():
@@ -193,7 +191,7 @@ def test_cuda_graph_capture_and_replay():
     must be capturable: no host-side allocator calls during the launch,
     no host syncs, deterministic grid. Capture once, mutate the inputs
     in place, replay, and check the scores match a fresh eager call."""
-    from late_interaction_kernels import maxsim_inference
+    from late_interaction_kernels import maxsim
 
     Q = torch.randn(4, 32, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(8, 128, 128, device="cuda", dtype=torch.float16)
@@ -203,13 +201,13 @@ def test_cuda_graph_capture_and_replay():
     s.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(s):
         for _ in range(3):
-            _ = maxsim_inference(Q, D)
+            _ = maxsim(Q, D)
     torch.cuda.current_stream().wait_stream(s)
 
     g = torch.cuda.CUDAGraph()
     try:
         with torch.cuda.graph(g):
-            captured = maxsim_inference(Q, D)
+            captured = maxsim(Q, D)
     except RuntimeError as e:  # pragma: no cover — Triton/torch version quirks
         pytest.skip(f"CUDAGraph capture unsupported here: {e}")
 
@@ -219,7 +217,7 @@ def test_cuda_graph_capture_and_replay():
     g.replay()
     torch.cuda.synchronize()
 
-    ref = maxsim_inference(Q, D)
+    ref = maxsim(Q, D)
     assert torch.equal(captured, ref), (
         "CUDAGraph replay produced stale / incorrect scores — check that the "
         "kernel has no host-side state captured by the graph."

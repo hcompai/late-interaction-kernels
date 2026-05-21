@@ -1,6 +1,6 @@
 """FP8 MaxSim vs bf16 MaxSim — reranking throughput on Hopper.
 
-We measure end-to-end ``maxsim_inference`` wall-clock for a realistic
+We measure end-to-end ``maxsim`` (no-grad) wall-clock for a realistic
 reranking workload:
 
 * Q: ``[Nq, Lq, d]`` (batch of query embeddings already in HBM)
@@ -22,7 +22,7 @@ import time
 
 import torch
 
-from late_interaction_kernels import maxsim_inference
+from late_interaction_kernels import maxsim
 from late_interaction_kernels.fp8 import maxsim_inference_fp8, quantize_fp8_per_token
 
 SHAPES = [
@@ -61,7 +61,7 @@ def main():
         Q_fp8, sQ = quantize_fp8_per_token(Q)
         D_fp8, sD = quantize_fp8_per_token(D)
 
-        t_bf16, _ = _time_ms(lambda: maxsim_inference(Q, D))
+        t_bf16, _ = _time_ms(lambda: maxsim(Q, D))
         t_fp8, _ = _time_ms(lambda: maxsim_inference_fp8(Q_fp8, D_fp8, scale_Q=sQ, scale_D=sD))
         shape_str = f"Nd={Nd} Lq={Lq} Ld={Ld} d={d}"
         print(f"{shape_str:<20} {t_bf16:>10.3f} {t_fp8:>10.3f} {t_bf16 / t_fp8:>9.2f}x  {label}")
