@@ -37,6 +37,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk on runner
+        # ubuntu-latest ships with ~14 GB free; the NVIDIA PyTorch base is ~9 GB
+        # and the buildx cache doubles it, so we need to evict Android/dotnet/etc.
+        # before the build. Frees ~25 GB.
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
