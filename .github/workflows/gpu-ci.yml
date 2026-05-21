@@ -91,7 +91,7 @@ jobs:
             paths: tests/regression/
             args: -m perf
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: GPU sanity check
         run: |
