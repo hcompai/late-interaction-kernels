@@ -607,7 +607,7 @@
 
       { key: 'maxsim', name: 'maxsim', category: 'core',
         color: C.slate,
-        stack: 'raw', phase: 'training', layout: 'dense', workload: 'maxsim',
+        stack: 'any', phase: 'training', layout: 'dense', workload: 'maxsim',
         blurb: 'Core fused MaxSim on dense [N, L, d] tensors with full autograd. backward="auto"|"unified"|"atomic"|"csr".',
         importLine: 'from late_interaction_kernels import maxsim' },
 
@@ -619,13 +619,13 @@
 
       { key: 'maxsim_varlen', name: 'maxsim_varlen', category: 'core',
         color: C.moss,
-        stack: 'raw', phase: 'any', layout: 'varlen', workload: 'maxsim',
+        stack: 'any', phase: 'any', layout: 'varlen', workload: 'maxsim',
         blurb: 'Packed (cu_seqlens) layout. Consumes [total_tokens, d] tensors with FlashAttention-style offsets. Autograd-aware.',
         importLine: 'from late_interaction_kernels import maxsim_varlen' },
 
       { key: 'score_pairs_packed', name: 'score_pairs_packed', category: 'score_pairs',
         color: C.clay,
-        stack: 'raw', phase: 'training', layout: 'varlen', workload: 'pairwise',
+        stack: 'any', phase: 'training', layout: 'varlen', workload: 'pairwise',
         blurb: 'One score per (q[i], d[i]) pair instead of the full NQ × ND grid — exactly what cached-contrastive losses need.',
         importLine: 'from late_interaction_kernels.score_pairs import score_pairs_packed' },
 
@@ -643,13 +643,13 @@
 
       { key: 'maxsim_residual', name: 'maxsim_residual', category: 'plaid',
         color: C.oxblood,
-        stack: 'raw', phase: 'any', layout: 'dense', workload: 'plaid',
+        stack: 'any', phase: 'any', layout: 'dense', workload: 'plaid',
         blurb: 'PLAID-compressed docs (centroid index + quantised residual). Decompresses in SRAM and runs MaxSim — no dense materialisation. Autograd-aware on Q; auto-skips the argmax save when Q.requires_grad=False.',
         importLine: 'from late_interaction_kernels.plaid import maxsim_residual' },
 
       { key: 'maxsim_residual_varlen', name: 'maxsim_residual_varlen', category: 'plaid',
         color: C.ochre,
-        stack: 'raw', phase: 'inference', layout: 'varlen', workload: 'plaid',
+        stack: 'any', phase: 'inference', layout: 'varlen', workload: 'plaid',
         blurb: 'PLAID inference on packed corpora — one kernel does decompress + L2-normalize + MaxSim with cu_seqlens_d offsets.',
         importLine: 'from late_interaction_kernels.plaid import maxsim_residual_varlen' },
 
@@ -680,10 +680,10 @@
             why: 'Drop-in for PyLate trainers and rerankers.',
             filter: eqOrAny('stack', 'pylate') },
           { label: 'My own training / inference code',
-            why: 'High-level nn.Module and retrieval helpers.',
+            why: 'High-level helpers plus the core MaxSim / packed / PLAID kernels.',
             filter: eqOrAny('stack', 'custom') },
           { label: 'Raw kernel functions',
-            why: 'Call the fused Triton entry points directly.',
+            why: 'All fused entry points, including specialised variants (fused projection, FP8, …).',
             filter: eqOrAny('stack', 'raw') },
         ],
       },

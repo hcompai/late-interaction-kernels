@@ -12,6 +12,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CUDA-marked tests on push to `main`, on PRs touching kernel-related files,
   on `workflow_dispatch`, or on PRs labelled `run-gpu-ci`.
 
+### Fixed
+
+- Interactive kernel picker (`docs/choose-a-kernel.html`) now surfaces
+  `maxsim`, `maxsim_varlen`, `score_pairs_packed`, `maxsim_residual`, and
+  `maxsim_residual_varlen` under the "My own training / inference code"
+  branch (in addition to "Raw kernel functions"). Previously the combo
+  *custom code + training + packed cu_seqlens* returned "No exact match".
+
 ### Changed
 
 - [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
