@@ -469,6 +469,28 @@
     border-color: var(--accent-2);
     background: color-mix(in oklch, var(--accent-2) 8%, transparent);
   }
+  .pick-kernel__winner--recipe {
+    border-style: dashed;
+  }
+  .pick-kernel__winner .import--block {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .pick-kernel__winner .import--block pre {
+    margin: 0;
+    overflow-x: auto;
+  }
+  .pick-kernel__winner .import--block pre code {
+    display: block;
+    white-space: pre;
+    font-size: 12px;
+    line-height: 1.6;
+    color: color-mix(in oklch, var(--accent) 70%, var(--ink));
+  }
+  .pick-kernel__winner .import--block .copy {
+    align-self: flex-end;
+  }
   .pick-kernel__reason {
     font-size: 12.5px;
     color: var(--ink-dim);
@@ -660,7 +682,22 @@
         importLine: 'from late_interaction_kernels.fp8 import maxsim_inference_fp8' },
     ];
 
-    // Helper: a step filter that respects 'any' on the kernel side.
+    // Compositions: filtered with the same step filters as KERNELS, but only
+    // surfaced when the kernel list is empty — they describe two-line recipes
+    // for combos no single fused kernel covers today.
+    const RECIPES = [
+      { key: 'maxsim_varlen_topk',
+        name: 'maxsim_varlen + torch.topk',
+        category: 'composition',
+        color: C.ochre,
+        stack: 'any', phase: 'any', layout: 'varlen', workload: 'topk',
+        blurb: 'No single fused kernel covers top-k retrieval on cu_seqlens-packed corpora. Score with maxsim_varlen, then call torch.topk on the [Nq, Nd] result — top-k itself is cheap relative to the scoring pass.',
+        code: `from late_interaction_kernels import maxsim_varlen
+
+scores = maxsim_varlen(Q, D_packed, cu_seqlens_d, max_seqlen_d=Ld_max)
+top_scores, top_indices = scores.topk(k, dim=-1)` },
+    ];
+
     const eqOrAny = (key, value) => (f) => f[key] === value || f[key] === 'any';
 
     const STEPS = [
@@ -740,6 +777,7 @@
     let stepIdx = 0;
     const path = [];
     let candidates = KERNELS.slice();
+    let recipeCandidates = RECIPES.slice();
 
     container.innerHTML = `
       <div class="pick-kernel__head" data-head></div>
@@ -758,6 +796,7 @@
         stepIdx = 0;
         path.length = 0;
         candidates = KERNELS.slice();
+        recipeCandidates = RECIPES.slice();
         renderAll();
       });
     };
@@ -782,10 +821,12 @@
           stepIdx = idx;
           // Rebuild candidates from scratch by re-applying earlier path.
           candidates = KERNELS.slice();
+          recipeCandidates = RECIPES.slice();
           path.forEach((p) => {
             const step = STEPS.find((s) => s.id === p.stepId);
             const choice = step.choices[p.choiceIdx];
             candidates = candidates.filter(choice.filter);
+            recipeCandidates = recipeCandidates.filter(choice.filter);
           });
           renderAll();
         });
@@ -832,6 +873,7 @@
           const idx = parseInt(btn.getAttribute('data-choice'), 10);
           const choice = step.choices[idx];
           candidates = candidates.filter(choice.filter);
+          recipeCandidates = recipeCandidates.filter(choice.filter);
           path.push({
             stepId: step.id,
             choiceIdx: idx,
@@ -847,6 +889,57 @@
     const renderResult = () => {
       const body = container.querySelector('[data-body]');
       if (candidates.length === 0) {
+        if (recipeCandidates.length > 0) {
+          const recipes = recipeCandidates.map((r) => `
+            <div class="pick-kernel__winner pick-kernel__winner--recipe" style="--cc:${r.color};">
+              <div class="name">
+                <span class="dot"></span>
+                <span>${r.name}</span>
+                <span class="category">${r.category}</span>
+              </div>
+              <div class="blurb">${r.blurb}</div>
+              <div class="import import--block">
+                <pre><code>${r.code}</code></pre>
+                <button type="button" class="copy" data-copy aria-label="Copy snippet">Copy</button>
+              </div>
+            </div>
+          `).join('');
+          const reasonBits = path.map((p) => p.answer.toLowerCase()).join(' · ');
+          body.innerHTML = `
+            <div class="pick-kernel__result">
+              <div class="head">No single kernel — try this composition</div>
+              <div class="pick-kernel__winners">${recipes}</div>
+              <div class="pick-kernel__reason">Based on: ${reasonBits || 'no filters yet'}.</div>
+            </div>
+          `;
+          body.querySelectorAll('[data-copy]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const codeEl = btn.parentElement.querySelector('code');
+              if (!codeEl) return;
+              const text = codeEl.textContent || '';
+              try {
+                await navigator.clipboard.writeText(text);
+              } catch (err) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (_) {}
+                document.body.removeChild(ta);
+              }
+              const prev = btn.textContent;
+              btn.textContent = 'Copied';
+              btn.classList.add('copied');
+              setTimeout(() => {
+                btn.textContent = prev;
+                btn.classList.remove('copied');
+              }, 1400);
+            });
+          });
+          return;
+        }
         body.innerHTML = `
           <div class="pick-kernel__result">
             <div class="head">No exact match</div>
