@@ -20,6 +20,9 @@
 
 </div>
 
+> [!NOTE]
+> Full algorithmic walkthrough, animations and benchmark plots live on the docs site: **[hcompai.github.io/late-interaction-kernels](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)**.
+
 ## Introduction
 
 `late-interaction-kernels` provides fused Triton kernels for **MaxSim**, the late-interaction scoring used by ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and come with three APIs:
@@ -104,6 +107,27 @@ scores = maxsim_residual_varlen(
 | End-to-end training of a 149M encoder              | 1.00-1.06x (free) |
 
 Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md).
+
+## Choose a kernel
+
+<table>
+<tr>
+<td width="55%" valign="middle">
+
+Not sure which entry point fits your stack? The docs site ships an interactive decision tree that narrows the public API down to the right function in four questions (stack · phase · layout · workload):
+
+**👉 [hcompai.github.io/late-interaction-kernels/choose-a-kernel.html](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel)**
+
+</td>
+<td width="45%" valign="middle" align="center">
+
+<a href="https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel">
+  <img src="assets/kernel_picker_widget_preview.webp" alt="Pick a kernel · interactive decision tree" width="420">
+</a>
+
+</td>
+</tr>
+</table>
 
 ## API
 
