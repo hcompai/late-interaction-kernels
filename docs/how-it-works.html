@@ -619,6 +619,78 @@
     background: color-mix(in oklch, var(--ink-dim) 55%, transparent);
   }
 
+  /* ===================== SCATTER CONTENTION FIGURE =====================
+     Tiny grid figure used in section 7 to show grad_D scatter
+     collisions. Reuses the animation channel tints so the source pairs
+     read as query-coloured and targets as document-coloured. */
+  .scatter-figure {
+    margin: 22px 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 22px;
+    background: var(--panel);
+  }
+  .scatter-grid {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: center;
+    gap: 22px;
+  }
+  .scatter-pairs,
+  .scatter-targets {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+  .scatter-pair {
+    padding: 5px 9px;
+    background: color-mix(in oklch, var(--q-active) 10%, var(--panel));
+    color: color-mix(in oklch, var(--q-active) 80%, var(--ink));
+    border-radius: 4px;
+    border: 1px solid color-mix(in oklch, var(--q-active) 20%, var(--line));
+  }
+  .scatter-arrows {
+    display: grid;
+    grid-template-rows: repeat(6, 1fr);
+    align-items: center;
+    height: 100%;
+  }
+  .scatter-arrows svg { display: block; }
+  .scatter-target {
+    padding: 5px 9px;
+    background: color-mix(in oklch, var(--d-active) 10%, var(--panel));
+    color: color-mix(in oklch, var(--d-active) 80%, var(--ink));
+    border-radius: 4px;
+    border: 1px solid color-mix(in oklch, var(--d-active) 20%, var(--line));
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .scatter-target .scatter-badge {
+    font-family: var(--font-display);
+    font-size: 10.5px;
+    color: var(--ink-dim);
+    align-self: center;
+  }
+  .scatter-target.hot {
+    background: color-mix(in oklch, var(--o-active) 14%, var(--panel));
+    color: color-mix(in oklch, var(--o-active) 85%, var(--ink));
+    border-color: color-mix(in oklch, var(--o-active) 30%, var(--line));
+  }
+  .scatter-target.hot .scatter-badge {
+    color: var(--accent-3);
+    font-weight: 600;
+  }
+  .scatter-caption {
+    font-size: 13.5px;
+    color: var(--ink-dim);
+    margin-top: 14px;
+    font-style: italic;
+    line-height: 1.45;
+  }
+
   /* responsive */
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px 80px; }
@@ -1244,10 +1316,58 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     an $[N_q \cdot N_d, L_q]$ int32 buffer of argmax indices (4 MB for a
     typical training batch). $\nabla_{\Qm}$ is then embarrassingly parallel:
     one program per $(i, s)$ gathers $\Dm_{j, \text{argmax}}$ across $j$ and
-    produces a single output row. $\nabla_{\Dm}$ is the hard one — many
-    $(i, s)$ pairs can land on the same $(j, t)$, and the collision
-    pattern is data-dependent on the argmax. The library offers three
-    reduction strategies:
+    produces a single output row.
+  </p>
+
+  <h3>Why $\nabla_{\Dm}$ is the hard one</h3>
+
+  <p>
+    Picture the scatter for a fixed doc-batch index $j$. Each
+    query-token pair $(i, s)$ contributes one row into
+    $\nabla_{\Dm}[j, \cdot]$ at row $\operatorname{argmax}[i, j, s]$.
+    Whether two pairs collide is a <em>runtime</em> property of the
+    argmax. The kernel cannot know it statically.
+  </p>
+
+  <div class="scatter-figure">
+    <div class="scatter-grid">
+      <div class="scatter-pairs">
+        <div class="scatter-pair">(i=0, s=0)</div>
+        <div class="scatter-pair">(i=0, s=1)</div>
+        <div class="scatter-pair">(i=0, s=2)</div>
+        <div class="scatter-pair">(i=1, s=0)</div>
+        <div class="scatter-pair">(i=1, s=1)</div>
+        <div class="scatter-pair">(i=1, s=2)</div>
+      </div>
+      <div class="scatter-arrows">
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="11" stroke="#888" stroke-width="1.2"/><polyline points="46,5 54,11 46,17" fill="none" stroke="#888" stroke-width="1.2"/></svg>
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="3"  stroke="#888" stroke-width="1.2"/><polyline points="46,1 54,3 47,9"  fill="none" stroke="#888" stroke-width="1.2"/></svg>
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="11" stroke="#888" stroke-width="1.2"/><polyline points="46,5 54,11 46,17" fill="none" stroke="#888" stroke-width="1.2"/></svg>
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="3"  stroke="#888" stroke-width="1.2"/><polyline points="46,1 54,3 47,9"  fill="none" stroke="#888" stroke-width="1.2"/></svg>
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="19" stroke="#888" stroke-width="1.2"/><polyline points="47,13 54,19 46,21" fill="none" stroke="#888" stroke-width="1.2"/></svg>
+        <svg width="60" height="22" viewBox="0 0 60 22"><line x1="2" y1="11" x2="52" y2="3"  stroke="#888" stroke-width="1.2"/><polyline points="46,1 54,3 47,9"  fill="none" stroke="#888" stroke-width="1.2"/></svg>
+      </div>
+      <div class="scatter-targets">
+        <div class="scatter-target hot"><span>grad_D[j, 5]</span><span class="scatter-badge">4 writers</span></div>
+        <div class="scatter-target"><span>grad_D[j, 12]</span><span class="scatter-badge">1 writer</span></div>
+        <div class="scatter-target"><span>grad_D[j, 18]</span><span class="scatter-badge">0 writers</span></div>
+        <div class="scatter-target"><span>grad_D[j, 23]</span><span class="scatter-badge">1 writer</span></div>
+        <div class="scatter-target"><span>…</span><span class="scatter-badge"></span></div>
+        <div class="scatter-target"><span>grad_D[j, L_d−1]</span><span class="scatter-badge">0 writers</span></div>
+      </div>
+    </div>
+    <div class="scatter-caption">
+      Six source pairs scattering into the <code>grad_D[j, ·]</code>
+      rows for one doc-batch. The bucket sizes are data-dependent: row
+      5 is a hot spot (4 source pairs land on it); most rows have 0
+      or 1. Both the per-row fan-in and the empty-row pattern matter
+      for which kernel wins.
+    </div>
+  </div>
+
+  <p>
+    The library offers three reduction strategies to handle this
+    contention:
   </p>
 
   <table class="tbl">
