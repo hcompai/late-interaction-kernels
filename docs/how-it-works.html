@@ -1203,12 +1203,17 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    Peak SRAM per program is
-    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ for the operand tiles plus
-    $\text{BLOCK\_Q} \cdot \text{BLOCK\_D}$ for the score tile, in low
-    precision, with a $[\text{BLOCK\_Q}]$ fp32 accumulator on top (roughly
-    40 KiB at typical block sizes), leaving room for four concurrent programs
-    per H100 SM.
+    Per program, SRAM holds only the operand tiles
+    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ in low precision —
+    Triton double-buffers them so the next $\Dm$ tile loads while the
+    current GEMM runs. The score tile $\Sm$ and the running max $\Mm$
+    live in fp32 <em>registers</em>, never in SRAM: <code>tl.dot</code>
+    returns its accumulator straight into the register file, and the
+    row-reduction happens there. At typical block sizes
+    ($\text{BLOCK\_Q} = \text{BLOCK\_D} = 64$, $d = 128$), SMEM use is
+    around 32 KiB per program, comfortably below the H100's 228 KiB per
+    SM, leaving room for multiple concurrent programs and the autotuner
+    to trade block size against occupancy.
   </p>
 
   <h3>Step through the algorithm</h3>
