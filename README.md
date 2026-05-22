@@ -15,6 +15,8 @@
 
 ---
 
+[[How it works]](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)
+[[Kernel picker]](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html)
 [[Benchmarks]](docs/benchmarks.md)
 [[Design]](docs/design.md)
 [[Supported models]](docs/supported_models.md)
@@ -46,9 +48,6 @@ pip install late-interaction-kernels
 | Linux + CUDA (sm_75+)          | Fused Triton kernels (autotuned, FP8 on Hopper).                              |
 | macOS (Apple Silicon, MPS)     | Fused Metal `simdgroup_matrix` for inference, `torch.compile` for training.   |
 | CPU / Windows                  | Autograd-aware pure-PyTorch reference.                                        |
-
-> [!NOTE]
-> The PyLate drop-in targets PyLate >= 1.3. The pure-PyTorch reference imports on every platform, so training and retrieval code is unit-testable on a laptop before you rent a GPU.
 
 ## Quickstart
 
