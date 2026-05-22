@@ -96,19 +96,26 @@ scores = maxsim_residual_varlen(
 
 ## Benchmarks
 
-1xH100, bf16/fp16, 50-iter median, vs the same op in plain PyTorch:
+1×H100 80GB SXM, bf16 inputs / fp32 accumulator, 50-iter median. All
+speedups are measured at **matched numerics** — every baseline runs the
+einsum with an fp32 accumulator (same as the fused kernel), and parity
+is asserted at `atol=1e-2` before timing.
 
-| Workload                                           | Speedup           |
-| -------------------------------------------------- | ----------------- |
-| Reranking / inference vs naive einsum              | 7-23x             |
-| Long-context (`Ld >= 8k`) reranking                | runs; naive OOMs  |
-| PyLate cached-contrastive MaxSim + backward        | up to 13.8x       |
-| PLAID rerank vs `fast_plaid.engine.search()`       | 19-30x            |
-| Fused D-side head (training)                       | 1.5-4.6x          |
-| FP8 MaxSim inference (Hopper)                      | up to 1.4x        |
-| End-to-end training of a 149M encoder              | 1.00-1.06x (free) |
+| Workload                                                    | Speedup            |
+| ----------------------------------------------------------- | ------------------ |
+| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 2-11×          |
+| Long-context (`Ld ≥ 8k`) reranking                          | runs; naive OOMs   |
+| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.0-5.5×           |
+| PLAID rerank vs `fast_plaid.engine.search()`                | 19-30×             |
+| Fused D-side head (training)                                | 1.2-4.2×           |
+| FP8 MaxSim inference (Hopper)                               | 1.9-2.5×           |
+| End-to-end training of a 149M encoder                       | 1.00-1.06× (free)  |
 
-Full tables and reproduction commands: [`docs/benchmarks.md`](docs/benchmarks.md).
+`torch.compile` is within ±5% of eager on every forward shape because
+Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity
+tensor before the `max(-1)` reduction — that materialisation *is* what
+the fused kernel exists to skip. Full tables and reproduction commands:
+[`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Choose a kernel
 
