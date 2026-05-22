@@ -1223,16 +1223,16 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    $$\nabla_{Q_{i, s}} \;=\; m^q_{i,s} \cdot \sum_{j} g_{i,j} \cdot D_{j,\; \operatorname{argmax}_t \langle Q_{i,s}, D_{j,t}\rangle},$$
-    $$\nabla_{D_{j, t}} \;=\; \sum_{(i, s)\, :\, \operatorname{argmax}[i, j, s] \,=\, t} m^q_{i,s} \cdot g_{i, j} \cdot Q_{i, s}.$$
+    $$\nabla_{\Qm_{i, s}} \;=\; m^q_{i,s} \cdot \sum_{j} g_{i,j} \cdot \Dm_{j,\; \operatorname{argmax}_t \langle \Qm_{i,s}, \Dm_{j,t}\rangle},$$
+    $$\nabla_{\Dm_{j, t}} \;=\; \sum_{(i, s)\, :\, \operatorname{argmax}[i, j, s] \,=\, t} m^q_{i,s} \cdot g_{i, j} \cdot \Qm_{i, s}.$$
   </p>
 
   <p>
     To avoid recomputing the forward, the forward kernel optionally writes
     an $[N_q \cdot N_d, L_q]$ int32 buffer of argmax indices (4 MB for a
-    typical training batch). $\nabla_Q$ is then embarrassingly parallel:
-    one program per $(i, s)$ gathers $D_{j, \text{argmax}}$ across $j$ and
-    produces a single output row. $\nabla_D$ is the hard one — many
+    typical training batch). $\nabla_{\Qm}$ is then embarrassingly parallel:
+    one program per $(i, s)$ gathers $\Dm_{j, \text{argmax}}$ across $j$ and
+    produces a single output row. $\nabla_{\Dm}$ is the hard one — many
     $(i, s)$ pairs can land on the same $(j, t)$, and the collision
     pattern is data-dependent on the argmax. The library offers three
     reduction strategies:
@@ -1244,7 +1244,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>unified</code></td>
         <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default. Single-pass fused $\nabla_Q + \nabla_D$. Hoists $Q_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_D$ writes use fp32 atomic add.</td>
+        <td>Default. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
       </tr>
       <tr>
         <td><code>csr</code></td>
@@ -1275,7 +1275,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     All three paths use Triton's stable <code>argmax</code> (lowest-index
-    tie-break) on the forward, so only the $\nabla_D$ reduction order
+    tie-break) on the forward, so only the $\nabla_{\Dm}$ reduction order
     distinguishes them numerically.
   </p>
 </section>
@@ -1469,9 +1469,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     Section <a href="#backward">7</a> quotes the closed forms for
-    $\nabla_Q$ and $\nabla_D$. They drop out of the forward formula in
-    three short steps: resolve the $\max$, apply the chain rule, then
-    read off the two cases.
+    $\nabla_{\Qm}$ and $\nabla_{\Dm}$. They drop out of the forward
+    formula in three short steps: resolve the $\max$, apply the chain
+    rule, then read off the two cases.
   </p>
 
   <h3>Resolving the max</h3>
@@ -1481,7 +1481,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    $$t^{\star}(i, j, s) \;=\; \arg\max_{t} \, \langle Q_{i, s},\, D_{j, t}\rangle.$$
+    $$t^{\star}(i, j, s) \;=\; \arg\max_{t} \, \langle \Qm_{i, s},\, \Dm_{j, t}\rangle.$$
   </p>
 
   <p>
@@ -1490,15 +1490,16 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    $$\text{score}(i, j) \;=\; \sum_{s} \langle Q_{i, s},\, D_{j,\, t^{\star}(i, j, s)}\rangle.$$
+    $$\text{score}(i, j) \;=\; \sum_{s} \langle \Qm_{i, s},\, \Dm_{j,\, t^{\star}(i, j, s)}\rangle.$$
   </p>
 
   <p>
     $\max$ is non-smooth, but at any non-tied point its subgradient
     equals the gradient of whichever term achieves the maximum. So
     locally — for a perturbation small enough that no argmax flips —
-    $\text{score}(i, j)$ is just a sum of bilinear terms in $Q$ and $D$,
-    and $t^{\star}$ is a constant we read out of the saved buffer.
+    $\text{score}(i, j)$ is just a sum of bilinear terms in $\Qm$ and
+    $\Dm$, and $t^{\star}$ is a constant we read out of the saved
+    buffer.
   </p>
 
   <h3>Chain rule</h3>
@@ -1512,40 +1513,40 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $$\frac{\partial L}{\partial X} \;=\; \sum_{i, j} g_{i, j} \cdot \frac{\partial\, \text{score}(i, j)}{\partial X}.$$
   </p>
 
-  <h3>Case 1 — $\partial / \partial Q_{i, s, k}$</h3>
+  <h3>Case 1 — $\partial / \partial \Qm_{i, s, k}$</h3>
 
   <p>
-    $\text{score}(i, j)$ depends on the row $Q_{i, s}$ only when both
+    $\text{score}(i, j)$ depends on the row $\Qm_{i, s}$ only when both
     indices match, and only the $s$-th term in the sum contains the
-    component $Q_{i, s, k}$. That term is
-    $\langle Q_{i, s},\, D_{j,\, t^{\star}(i, j, s)}\rangle$, so the
-    partial is the matching entry of $D$:
+    component $\Qm_{i, s, k}$. That term is
+    $\langle \Qm_{i, s},\, \Dm_{j,\, t^{\star}(i, j, s)}\rangle$, so the
+    partial is the matching entry of $\Dm$:
   </p>
 
   <p>
-    $$\frac{\partial\, \text{score}(i, j)}{\partial Q_{i, s, k}} \;=\; D_{j,\, t^{\star}(i, j, s),\, k}.$$
+    $$\frac{\partial\, \text{score}(i, j)}{\partial \Qm_{i, s, k}} \;=\; \Dm_{j,\, t^{\star}(i, j, s),\, k}.$$
   </p>
 
   <p>
-    Summing over $j$ — the only free index left in the chain rule — gives
-    $\nabla_{Q_{i, s}}$. Each $j$ picks exactly one row of $D$ out of
-    $L_d$, a pure gather with no collisions.
+    Summing over $j$ — the only free index left in the chain rule —
+    gives $\nabla_{\Qm_{i, s}}$. Each $j$ picks exactly one row of $\Dm$
+    out of $L_d$, a pure gather with no collisions.
   </p>
 
-  <h3>Case 2 — $\partial / \partial D_{j, t, k}$</h3>
+  <h3>Case 2 — $\partial / \partial \Dm_{j, t, k}$</h3>
 
   <p>
-    $\text{score}(i, j_0)$ depends on $D_{j_0, \cdot, \cdot}$ only when
-    the doc-batch indices match. Within
-    $\text{score}(i, j_0) = \sum_s \langle Q_{i, s},\, D_{j_0,\, t^{\star}(i, j_0, s)}\rangle$,
-    the entry $D_{j_0, t, k}$ appears in the $s$-th term <em>iff</em>
+    $\text{score}(i, j_0)$ depends on $\Dm_{j_0, \cdot, \cdot}$ only
+    when the doc-batch indices match. Within
+    $\text{score}(i, j_0) = \sum_s \langle \Qm_{i, s},\, \Dm_{j_0,\, t^{\star}(i, j_0, s)}\rangle$,
+    the entry $\Dm_{j_0, t, k}$ appears in the $s$-th term <em>iff</em>
     $t^{\star}(i, j_0, s) = t$. For each such $s$ the partial is
-    $Q_{i, s, k}$, and multiple $s$'s may collide on the same $t$ —
+    $\Qm_{i, s, k}$, and multiple $s$'s may collide on the same $t$ —
     they all add:
   </p>
 
   <p>
-    $$\frac{\partial\, \text{score}(i, j)}{\partial D_{j, t, k}} \;=\; \sum_{s\,:\, t^{\star}(i, j, s) \,=\, t} Q_{i, s, k}.$$
+    $$\frac{\partial\, \text{score}(i, j)}{\partial \Dm_{j, t, k}} \;=\; \sum_{s\,:\, t^{\star}(i, j, s) \,=\, t} \Qm_{i, s, k}.$$
   </p>
 
   <p>
@@ -1553,7 +1554,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    $$\frac{\partial L}{\partial D_{j, t, k}} \;=\; \sum_{(i, s)\,:\, t^{\star}(i, j, s) \,=\, t} g_{i, j} \cdot Q_{i, s, k}.$$
+    $$\frac{\partial L}{\partial \Dm_{j, t, k}} \;=\; \sum_{(i, s)\,:\, t^{\star}(i, j, s) \,=\, t} g_{i, j} \cdot \Qm_{i, s, k}.$$
   </p>
 
   <p>
