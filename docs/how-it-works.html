@@ -648,6 +648,7 @@
   <ol id="toc-appendix" class="toc-appendix">
     <li><a href="#hierarchy">GPU memory hierarchy</a></li>
     <li><a href="#intensity">Arithmetic intensity</a></li>
+    <li><a href="#derivation">Deriving the backward gradients</a></li>
   </ol>
 </aside>
 
@@ -1218,25 +1219,24 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     $\max$ is sub-differentiable: only the argmax position carries a gradient,
     so the backward pass is simpler than for softmax. With
-    $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score:
+    $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score,
+    a short chain-rule walk (Appendix <a href="#derivation">C</a>) gives:
   </p>
 
   <p>
-    $$\nabla_Q \, Q_{i, s} \;=\; q\text{-}\text{mask}_{i,s} \cdot \sum_{j} g_{i,j} \cdot D_{j,\; \operatorname{argmax}_t \langle Q_{i,s}, D_{j,t}\rangle}.$$
+    $$\nabla_{Q_{i, s}} \;=\; m^q_{i,s} \cdot \sum_{j} g_{i,j} \cdot D_{j,\; \operatorname{argmax}_t \langle Q_{i,s}, D_{j,t}\rangle},$$
+    $$\nabla_{D_{j, t}} \;=\; \sum_{(i, s)\, :\, \operatorname{argmax}[i, j, s] \,=\, t} m^q_{i,s} \cdot g_{i, j} \cdot Q_{i, s}.$$
   </p>
 
   <p>
-    $\nabla_D$ has the symmetric form, summed over the $(i, s)$ pairs whose
-    argmax falls on the same $(j, t)$. To avoid recomputing the forward, the
-    forward kernel optionally writes an $[N_q \cdot N_d, L_q]$ int32 buffer of
-    argmax indices (4 MB for a typical training batch).
-  </p>
-
-  <p>
-    $\nabla_Q$ is embarrassingly parallel: one program per $(i, s)$ gathers
-    $D_{j, \text{argmax}}$ across $j$ and produces a single output row.
-    $\nabla_D$ has output contention: many $(i, s)$ pairs can land on the
-    same $(j, t)$. The library offers three reduction strategies:
+    To avoid recomputing the forward, the forward kernel optionally writes
+    an $[N_q \cdot N_d, L_q]$ int32 buffer of argmax indices (4 MB for a
+    typical training batch). $\nabla_Q$ is then embarrassingly parallel:
+    one program per $(i, s)$ gathers $D_{j, \text{argmax}}$ across $j$ and
+    produces a single output row. $\nabla_D$ is the hard one — many
+    $(i, s)$ pairs can land on the same $(j, t)$, and the collision
+    pattern is data-dependent on the argmax. The library offers three
+    reduction strategies:
   </p>
 
   <table class="tbl">
@@ -1245,12 +1245,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>unified</code></td>
         <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default. Single-pass fused $\nabla_Q + \nabla_D$, fp32 atomic add.</td>
+        <td>Default. Single-pass fused $\nabla_Q + \nabla_D$. Hoists $Q_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_D$ writes use fp32 atomic add.</td>
       </tr>
       <tr>
         <td><code>csr</code></td>
         <td>yes</td>
-        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$). Radix-sorts $(i,s)$ by argmax into per-$j$ CSR buckets so each $(j, t)$ output is reduced in a single program.</td>
+        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$), or any time bitwise determinism matters.</td>
       </tr>
       <tr>
         <td><code>atomic</code></td>
@@ -1259,6 +1259,65 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       </tr>
     </tbody>
   </table>
+
+  <h3>The CSR path, in a little more depth</h3>
+
+  <p>
+    <strong>CSR</strong> stands for <em>Compressed Sparse Row</em>, the
+    classic sparse-matrix layout: a <code>row_ptr</code> array that
+    indexes into a flat <code>values</code> array sorted by row, so row
+    $r$'s entries live in the contiguous slice
+    <code>values[row_ptr[r] : row_ptr[r+1]]</code>. The other two backward
+    kernels live with the scatter pattern at runtime — they iterate over
+    source pairs and use atomic adds to resolve collisions on the
+    destination row. The CSR kernel instead <em>inverts</em> the mapping:
+    it sorts source pairs by their argmax target so that every output row
+    knows exactly which sources feed it, and the reduction becomes a plain
+    register accumulation followed by a single store.
+  </p>
+
+  <p>
+    The build runs on the PyTorch side and costs one batched radix-sort
+    plus one <code>searchsorted</code> (a few hundred microseconds on H100
+    for typical training shapes):
+  </p>
+
+  <pre><code>a = argmax.view(N_q, N_d, L_q).permute(1, 0, 2).contiguous().view(N_d, N_q * L_q)
+sorted_t, perm = a.sort(dim=1)         <span style="color:var(--ink-dim)"># perm[j, k] = original (i * L_q + s)</span>
+row_ptr = searchsorted(sorted_t, [0..L_d])  <span style="color:var(--ink-dim)"># per-j CSR row offsets</span></code></pre>
+
+  <p>
+    After the build, for every doc-batch $j$ and every output row $t$ the
+    slice <code>perm[j, row_ptr[j, t] : row_ptr[j, t+1]]</code> is exactly
+    the (flattened) list of $(i, s)$ pairs that scatter into
+    $\nabla_D[j, t]$. Empty buckets have $\texttt{row\_ptr}[j, t]$ equal
+    to $\texttt{row\_ptr}[j, t + 1]$ and the reduction loop has zero
+    iterations.
+  </p>
+
+  <p>
+    The reduce kernel launches one Triton program per $(j, t)$ output
+    row. Each program walks its private bucket, accumulates
+    $g_{i, j} \cdot Q_{i, s}$ into a register vector, and writes once.
+    No atomics. Because the sort fixes the reduction order, the output is
+    bitwise-identical across launches:
+  </p>
+
+  <pre><code>acc = 0
+for off in range(row_ptr[j, t], row_ptr[j, t + 1]):
+    flat = perm[j, off]
+    i, s = divmod(flat, L_q)
+    acc += g[i, j] * Q[i, s, :]            <span style="color:var(--ink-dim)"># in registers</span>
+grad_D[j, t, :] = acc                       <span style="color:var(--ink-dim)"># single store, no atomic</span></code></pre>
+
+  <p>
+    Trading a sort for the atomics only pays off when the atomics would
+    actually serialise — which is exactly the
+    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime that the dispatcher
+    flags. Big square batches with short query sequences crowd many
+    source pairs into few rows of $\nabla_D$, and the H100's L2-coalesced
+    fp32 atomics start losing to the radix-sort.
+  </p>
 
   <p>
     All three paths use Triton's stable <code>argmax</code> (lowest-index
@@ -1482,6 +1541,116 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     Fusing is not faster because the arithmetic is cheaper. It is the same
     matmul. It is faster because the matmul never has to wait for memory.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="derivation" class="appendix">
+  <h2><span class="num">C</span>Deriving the backward gradients</h2>
+
+  <p>
+    Section <a href="#backward">7</a> quotes the closed forms for
+    $\nabla_Q$ and $\nabla_D$. They drop out of the forward formula in
+    three short steps: resolve the $\max$, apply the chain rule, then
+    read off the two cases.
+  </p>
+
+  <h3>Resolving the max</h3>
+
+  <p>
+    Once the forward has run, define the winner for each query token:
+  </p>
+
+  <p>
+    $$t^{\star}(i, j, s) \;=\; \arg\max_{t} \, \langle Q_{i, s},\, D_{j, t}\rangle.$$
+  </p>
+
+  <p>
+    The score then collapses into a plain sum of inner products at the
+    winning slots — the $\max$ has been resolved into a concrete index:
+  </p>
+
+  <p>
+    $$\text{score}(i, j) \;=\; \sum_{s} \langle Q_{i, s},\, D_{j,\, t^{\star}(i, j, s)}\rangle.$$
+  </p>
+
+  <p>
+    $\max$ is non-smooth, but at any non-tied point its subgradient
+    equals the gradient of whichever term achieves the maximum. So
+    locally — for a perturbation small enough that no argmax flips —
+    $\text{score}(i, j)$ is just a sum of bilinear terms in $Q$ and $D$,
+    and $t^{\star}$ is a constant we read out of the saved buffer.
+  </p>
+
+  <h3>Chain rule</h3>
+
+  <p>
+    Let $g_{i, j} = \partial L / \partial \text{score}(i, j)$ be the
+    upstream gradient. For any parameter $X$:
+  </p>
+
+  <p>
+    $$\frac{\partial L}{\partial X} \;=\; \sum_{i, j} g_{i, j} \cdot \frac{\partial\, \text{score}(i, j)}{\partial X}.$$
+  </p>
+
+  <h3>Case 1 — $\partial / \partial Q_{i, s, k}$</h3>
+
+  <p>
+    $\text{score}(i, j)$ depends on the row $Q_{i, s}$ only when both
+    indices match, and only the $s$-th term in the sum contains the
+    component $Q_{i, s, k}$. That term is
+    $\langle Q_{i, s},\, D_{j,\, t^{\star}(i, j, s)}\rangle$, so the
+    partial is the matching entry of $D$:
+  </p>
+
+  <p>
+    $$\frac{\partial\, \text{score}(i, j)}{\partial Q_{i, s, k}} \;=\; D_{j,\, t^{\star}(i, j, s),\, k}.$$
+  </p>
+
+  <p>
+    Summing over $j$ — the only free index left in the chain rule — gives
+    $\nabla_{Q_{i, s}}$. Each $j$ picks exactly one row of $D$ out of
+    $L_d$, a pure gather with no collisions.
+  </p>
+
+  <h3>Case 2 — $\partial / \partial D_{j, t, k}$</h3>
+
+  <p>
+    $\text{score}(i, j_0)$ depends on $D_{j_0, \cdot, \cdot}$ only when
+    the doc-batch indices match. Within
+    $\text{score}(i, j_0) = \sum_s \langle Q_{i, s},\, D_{j_0,\, t^{\star}(i, j_0, s)}\rangle$,
+    the entry $D_{j_0, t, k}$ appears in the $s$-th term <em>iff</em>
+    $t^{\star}(i, j_0, s) = t$. For each such $s$ the partial is
+    $Q_{i, s, k}$, and multiple $s$'s may collide on the same $t$ —
+    they all add:
+  </p>
+
+  <p>
+    $$\frac{\partial\, \text{score}(i, j)}{\partial D_{j, t, k}} \;=\; \sum_{s\,:\, t^{\star}(i, j, s) \,=\, t} Q_{i, s, k}.$$
+  </p>
+
+  <p>
+    Chaining over $i$ with $j$ fixed folds the two sums into one set:
+  </p>
+
+  <p>
+    $$\frac{\partial L}{\partial D_{j, t, k}} \;=\; \sum_{(i, s)\,:\, t^{\star}(i, j, s) \,=\, t} g_{i, j} \cdot Q_{i, s, k}.$$
+  </p>
+
+  <p>
+    That set $\{(i, s) : t^{\star}(i, j, s) = t\}$ is exactly the bucket
+    the <code>csr</code> kernel sorts pairs into, and the same contention
+    pattern the <code>unified</code> and <code>atomic</code> paths
+    resolve with <code>atomic_add</code>.
+  </p>
+
+  <h3>The mask falls out for free</h3>
+
+  <p>
+    The forward gates masked query tokens out of the outer sum, so
+    masked positions contribute nothing to the score and their partials
+    are zero on both sides. The $m^q_{i, s}$ factor in the closed-form
+    expressions is just that gating carried through.
   </p>
 </section>
 
