@@ -6,36 +6,43 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-21
+
 ### Added
 
 - Self-hosted GPU CI workflow (`.github/workflows/gpu-ci.yml`) that runs the
   CUDA-marked tests on push to `main`, on PRs touching kernel-related files,
-  on `workflow_dispatch`, or on PRs labelled `run-gpu-ci`.
-
-### Changed
-
-- Cleaned the H100 autotune pool (`_autotune.py::_small_d_hopper`). Dropped
-  the two `warp_spec=True` configs that have been silent no-ops since
-  Triton 3.5 removed the `num_consumer_groups` / `num_buffers_warp_spec`
-  kwargs (the API moved to compiler-driven warp specialization — without
-  the kwargs, those entries duplicated other configs in the pool and
-  occasionally won the autotune sample on noise alone). Also resized
-  `BLOCK_Q=32, BLOCK_D=128` from `num_warps=8` to `num_warps=4` so it
-  matches the WGMMA warp-group size we actually want, and added the
-  matching `BLOCK_Q=64, BLOCK_D=128, num_warps=4, num_stages=3` row.
-
-### Fixed
-
-- Interactive kernel picker (`docs/choose-a-kernel.html`) now surfaces
-  `maxsim`, `maxsim_varlen`, `score_pairs_packed`, `maxsim_residual`, and
-  `maxsim_residual_varlen` under the "My own training / inference code"
-  branch (in addition to "Raw kernel functions"). Previously the combo
-  *custom code + training + packed cu_seqlens* returned "No exact match".
-- Kernel picker shows a composition recipe when the combo
-  *varlen + top-k retrieval* is selected (no single fused kernel covers
-  that today — the answer is `maxsim_varlen` followed by `torch.topk`).
-  The picker still falls back to the generic "No exact match" message
-  for combinations no recipe covers.
+  on `workflow_dispatch`, or on PRs labelled `run-gpu-ci`. CPU-only CI was
+  split into `.github/workflows/cpu-ci.yml`; both workflows now trigger only
+  when their path filters match.
+- Interactive kernel picker (`docs/choose-a-kernel.html`) and HTML playbook
+  (`docs/how-it-works.html`) to help pick the right kernel for a workload.
+- **`patch_colpali_engine()` / `unpatch_colpali_engine()`** — colpali_engine
+  drop-in mirroring `patch_pylate`. Monkey-patches
+  `BaseVisualRetrieverProcessor.score_multi_vector` and the three in-batch
+  loss heads (`ColbertLoss`, `ColbertPairwiseCELoss`, `ColbertSigmoidLoss`)
+  to route their `einsum("bnd,csd->bcns") + amax(-1) + sum(-2)` through the
+  fused kernel. Negative-mining siblings (`ColbertNegativeCELoss`,
+  `ColbertPairwiseNegativeCELoss`) inherit the in-batch term through their
+  `self.inner_loss` reference. Falls back to the original implementation
+  for `use_smooth_max=True`, `LIK_DISABLE=1`, sub-Ampere CUDA, CPU
+  tensors, and `d < 8`.
+- **`maxsim_padded`** — padded-input reranking helper (inspired by
+  https://github.com/ErikKaum/maxsim). Takes `[B, Lq, d]` / `[B, C, Ld, d]`
+  tensors with per-row lengths, returns `[B, C]` fp32. Autograd-aware on
+  every device: CUDA dispatches to the fused pair-list scatter kernel
+  (forward + backward), CPU / MPS fall back to the pure-PyTorch reference.
+  The underlying `pack_padded(...)` building block (which converts to the
+  packed `cu_seqlens` layout with a single combined `max_seqlen_q` /
+  `max_seqlen_d` device→host sync) is available from
+  `late_interaction_kernels.padded`.
+- Fused backward for `score_pairs_packed`. The pair-list scatter kernel
+  now saves a `[num_pairs, max_lq]` argmax buffer when either input has
+  `requires_grad=True` and produces `grad_Q` / `grad_D` directly on the
+  packed layout via two atomic-add scatter kernels. Pair-list training is
+  now `O(num_pairs · max_lq · d)` on both passes; no `[Nq, Nd]`
+  materialisation, no varlen-style off-diagonal compute. Pure inference
+  pays no overhead (`save_argmax=False`).
 
 ### Changed
 
@@ -50,6 +57,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - [breaking] Bumped minimum PyTorch from `2.1` to `2.5`. Older releases
   are no longer tested and the `torch._assert_async` bounds check in
   `pack_padded` now assumes the symbol is present unconditionally.
+- Replaced the unconditional CPU-only `torch` pin with explicit
+  `torch-cpu` / `torch-cuda` optional extras so CUDA installs no longer
+  pull a CPU wheel by default.
+- Cleaned the H100 autotune pool (`_autotune.py::_small_d_hopper`). Dropped
+  the two `warp_spec=True` configs that have been silent no-ops since
+  Triton 3.5 removed the `num_consumer_groups` / `num_buffers_warp_spec`
+  kwargs (the API moved to compiler-driven warp specialization — without
+  the kwargs, those entries duplicated other configs in the pool and
+  occasionally won the autotune sample on noise alone). Also resized
+  `BLOCK_Q=32, BLOCK_D=128` from `num_warps=8` to `num_warps=4` so it
+  matches the WGMMA warp-group size we actually want, and added the
+  matching `BLOCK_Q=64, BLOCK_D=128, num_warps=4, num_stages=3` row.
 
 ### Deprecated
 
@@ -105,37 +124,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pre-0.2.0 release or compose `maxsim` with a `topk + sum` on the
   output. The companion test (`tests/test_xtr.py`) is gone too.
 
-### Added
-
-- **`patch_colpali_engine()` / `unpatch_colpali_engine()`** — colpali_engine
-  drop-in mirroring `patch_pylate`. Monkey-patches
-  `BaseVisualRetrieverProcessor.score_multi_vector` and the three in-batch
-  loss heads (`ColbertLoss`, `ColbertPairwiseCELoss`, `ColbertSigmoidLoss`)
-  to route their `einsum("bnd,csd->bcns") + amax(-1) + sum(-2)` through the
-  fused kernel. Negative-mining siblings (`ColbertNegativeCELoss`,
-  `ColbertPairwiseNegativeCELoss`) inherit the in-batch term through their
-  `self.inner_loss` reference. Falls back to the original implementation
-  for `use_smooth_max=True`, `LIK_DISABLE=1`, sub-Ampere CUDA, CPU
-  tensors, and `d < 8`.
-- **`maxsim_padded`** — padded-input reranking helper (inspired by
-  https://github.com/ErikKaum/maxsim). Takes `[B, Lq, d]` / `[B, C, Ld, d]`
-  tensors with per-row lengths, returns `[B, C]` fp32. Autograd-aware on
-  every device: CUDA dispatches to the fused pair-list scatter kernel
-  (forward + backward), CPU / MPS fall back to the pure-PyTorch reference.
-  The underlying `pack_padded(...)` building block (which converts to the
-  packed `cu_seqlens` layout with a single combined `max_seqlen_q` /
-  `max_seqlen_d` device→host sync) is available from
-  `late_interaction_kernels.padded`.
-- Fused backward for `score_pairs_packed`. The pair-list scatter kernel
-  now saves a `[num_pairs, max_lq]` argmax buffer when either input has
-  `requires_grad=True` and produces `grad_Q` / `grad_D` directly on the
-  packed layout via two atomic-add scatter kernels. Pair-list training is
-  now `O(num_pairs · max_lq · d)` on both passes; no `[Nq, Nd]`
-  materialisation, no varlen-style off-diagonal compute. Pure inference
-  pays no overhead (`save_argmax=False`).
-
 ### Fixed
 
+- Interactive kernel picker (`docs/choose-a-kernel.html`) now surfaces
+  `maxsim`, `maxsim_varlen`, `score_pairs_packed`, `maxsim_residual`, and
+  `maxsim_residual_varlen` under the "My own training / inference code"
+  branch (in addition to "Raw kernel functions"). Previously the combo
+  *custom code + training + packed cu_seqlens* returned "No exact match".
+- Kernel picker shows a composition recipe when the combo
+  *varlen + top-k retrieval* is selected (no single fused kernel covers
+  that today — the answer is `maxsim_varlen` followed by `torch.topk`).
+  The picker still falls back to the generic "No exact match" message
+  for combinations no recipe covers.
 - `late_interaction_kernels.backward.atomic` referenced
   `late_interaction_kernels.backward.backward_csr` — a stale path from the
   submodule rename that would have raised `ModuleNotFoundError` the first
@@ -156,6 +156,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   side: Inductor still has to materialize the `[Nq · Nd · Lq · Ld]`
   similarity tensor before `max(-1)`, which is exactly the HBM round-trip
   the fused kernel exists to avoid.
+- README banner, usage-context clarifications, and a restructured
+  how-it-works walkthrough.
 
 ## [0.1.0] - 2026-05-06
 
