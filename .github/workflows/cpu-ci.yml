@@ -1,0 +1,54 @@
+name: CPU CI
+
+permissions:
+  contents: read
+
+# Runs CPU-safe tests across supported Python versions. Triggered:
+#   - on pushes to main that touch CPU-relevant code;
+#   - on PRs that touch CPU-relevant code;
+#   - manually via workflow_dispatch (e.g. to force a run on a docs-only PR).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/cpu-ci.yml"
+  pull_request:
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/cpu-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-smoke:
+    name: CPU smoke (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          prune-cache: false
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra torch-cpu --python ${{ matrix.python-version }}
+      - name: Import check
+        run: |
+          uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
+          uv run --python ${{ matrix.python-version }} python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
+      - name: Run CPU-safe tests (CUDA tests auto-skip)
+        run: uv run --python ${{ matrix.python-version }} pytest -q

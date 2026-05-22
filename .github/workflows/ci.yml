@@ -3,14 +3,10 @@ name: CI
 permissions:
   contents: read
 
+# Lint + typecheck are cheap and always run on every PR and push to main.
+# Path-gated test workflows live in cpu-ci.yml (CPU smoke) and gpu-ci.yml.
 on:
   pull_request:
-    paths:
-      - "late_interaction_kernels/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci.yml"
   push:
     branches: [main]
   workflow_dispatch:
@@ -52,28 +48,11 @@ jobs:
       - name: Run ty type checker
         run: uv run ty check --output-format github
 
-  cpu-smoke:
-    name: CPU smoke (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          prune-cache: false
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev --extra torch-cpu --python ${{ matrix.python-version }}
-      - name: Import check
-        run: |
-          uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
-          uv run --python ${{ matrix.python-version }} python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
-      - name: Run CPU-safe tests (CUDA tests auto-skip)
-        run: uv run --python ${{ matrix.python-version }} pytest -q
-
+  # CPU smoke tests run via cpu-ci.yml — on PRs and pushes to main, gated
+  # to changes under late_interaction_kernels/**, tests/**, pyproject.toml,
+  # uv.lock, or the workflow itself.
+  #
   # GPU tests run on a GitHub-hosted GPU larger runner via gpu-ci.yml —
-  # on every push to main, or on PRs carrying the `run-gpu-tests` label.
+  # on pushes to main or PRs carrying the `run-gpu-tests` label, gated to
+  # changes under late_interaction_kernels/**, torch-ext/**, tests/**,
+  # pyproject.toml, uv.lock, or the workflow itself.

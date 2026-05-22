@@ -4,13 +4,30 @@ permissions:
   contents: read
 
 # Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
-#   - on every commit to main;
-#   - on PRs carrying the `run-gpu-tests` label (label apply requires triage+).
+#   - on commits to main that touch GPU-relevant code;
+#   - on PRs carrying the `run-gpu-tests` label, when GPU-relevant code changed
+#     (label apply requires triage+);
+#   - manually via workflow_dispatch (e.g. to force a run on a docs-only PR).
 on:
   push:
     branches: [main]
+    paths:
+      - "late_interaction_kernels/**"
+      - "torch-ext/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "late_interaction_kernels/**"
+      - "torch-ext/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/gpu-ci.yml"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
