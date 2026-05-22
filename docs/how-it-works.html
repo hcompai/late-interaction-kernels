@@ -78,7 +78,7 @@
     /* dedicated math-glyph colors — pushed near sRGB gamut limits so
        thin serif KaTeX glyphs actually read on warm paper */
     --math-q:    oklch(42% 0.28 260);   /* deep cobalt blue — Q  */
-    --math-d:    oklch(38% 0.18 148);   /* dark forest green — D */
+    --math-d:    #a5be00;               /* lime — D              */
     --math-m:    oklch(56% 0.20 60);    /* amber — running max   */
     --math-s:    oklch(48% 0.22 26);    /* clay-red — S          */
   }
@@ -106,7 +106,7 @@
     --done:      oklch(32% 0.055 150);
 
     --math-q:    oklch(76% 0.22 260);
-    --math-d:    oklch(80% 0.18 152);
+    --math-d:    #a5be00;
     --math-m:    oklch(82% 0.18 60);
     --math-s:    oklch(78% 0.19 26);
   }
@@ -602,12 +602,7 @@
   /* ===================== MATH SYMBOL COLORS =====================
      Used selectively in the defining equations only — not every
      inline $Q$. Uses dedicated --math-* tokens (higher chroma than
-     the animation channels) so thin serif glyphs read on paper.
-     Bold weight maps to KaTeX_Math-BoldItalic so the color lands. */
-  .katex .lik-q,
-  .katex .lik-d,
-  .katex .lik-m,
-  .katex .lik-s { font-weight: 700; }
+     the animation channels) so thin serif glyphs read on paper. */
   .katex .lik-q { color: var(--math-q); }
   .katex .lik-d { color: var(--math-d); }
   .katex .lik-m { color: var(--math-m); }
