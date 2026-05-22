@@ -641,7 +641,6 @@
     <li><a href="#fused">Fused forward: tile, stream, accumulate</a></li>
     <li><a href="#online-max">The online-max recurrence</a></li>
     <li><a href="#backward">Backward: argmax-only gradients</a></li>
-    <li><a href="#perf">Performance summary</a></li>
     <li><a href="#variants">Variants in the library</a></li>
   </ol>
   <div class="toc-appendix-label">Appendix</div>
@@ -1260,64 +1259,19 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     </tbody>
   </table>
 
-  <h3>The CSR path, in a little more depth</h3>
-
-  <p>
-    <strong>CSR</strong> stands for <em>Compressed Sparse Row</em>, the
-    classic sparse-matrix layout: a <code>row_ptr</code> array that
-    indexes into a flat <code>values</code> array sorted by row, so row
-    $r$'s entries live in the contiguous slice
-    <code>values[row_ptr[r] : row_ptr[r+1]]</code>. The other two backward
-    kernels live with the scatter pattern at runtime — they iterate over
-    source pairs and use atomic adds to resolve collisions on the
-    destination row. The CSR kernel instead <em>inverts</em> the mapping:
-    it sorts source pairs by their argmax target so that every output row
-    knows exactly which sources feed it, and the reduction becomes a plain
-    register accumulation followed by a single store.
-  </p>
-
-  <p>
-    The build runs on the PyTorch side and costs one batched radix-sort
-    plus one <code>searchsorted</code> (a few hundred microseconds on H100
-    for typical training shapes):
-  </p>
-
-  <pre><code>a = argmax.view(N_q, N_d, L_q).permute(1, 0, 2).contiguous().view(N_d, N_q * L_q)
-sorted_t, perm = a.sort(dim=1)         <span style="color:var(--ink-dim)"># perm[j, k] = original (i * L_q + s)</span>
-row_ptr = searchsorted(sorted_t, [0..L_d])  <span style="color:var(--ink-dim)"># per-j CSR row offsets</span></code></pre>
-
-  <p>
-    After the build, for every doc-batch $j$ and every output row $t$ the
-    slice <code>perm[j, row_ptr[j, t] : row_ptr[j, t+1]]</code> is exactly
-    the (flattened) list of $(i, s)$ pairs that scatter into
-    $\nabla_D[j, t]$. Empty buckets have $\texttt{row\_ptr}[j, t]$ equal
-    to $\texttt{row\_ptr}[j, t + 1]$ and the reduction loop has zero
-    iterations.
-  </p>
-
-  <p>
-    The reduce kernel launches one Triton program per $(j, t)$ output
-    row. Each program walks its private bucket, accumulates
-    $g_{i, j} \cdot Q_{i, s}$ into a register vector, and writes once.
-    No atomics. Because the sort fixes the reduction order, the output is
-    bitwise-identical across launches:
-  </p>
-
-  <pre><code>acc = 0
-for off in range(row_ptr[j, t], row_ptr[j, t + 1]):
-    flat = perm[j, off]
-    i, s = divmod(flat, L_q)
-    acc += g[i, j] * Q[i, s, :]            <span style="color:var(--ink-dim)"># in registers</span>
-grad_D[j, t, :] = acc                       <span style="color:var(--ink-dim)"># single store, no atomic</span></code></pre>
-
-  <p>
-    Trading a sort for the atomics only pays off when the atomics would
-    actually serialise — which is exactly the
-    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime that the dispatcher
-    flags. Big square batches with short query sequences crowd many
-    source pairs into few rows of $\nabla_D$, and the H100's L2-coalesced
-    fp32 atomics start losing to the radix-sort.
-  </p>
+  <div class="note">
+    <strong>What CSR is doing here.</strong>
+    <em>CSR</em> is the classic Compressed Sparse Row layout — a
+    <code>row_ptr</code> index plus a flat array sorted by row. The
+    other two paths live with the scatter pattern at runtime and use
+    atomic adds; the CSR path <em>inverts</em> it. A one-shot batched
+    radix-sort of $(i, s)$ by argmax (plus a <code>searchsorted</code>)
+    builds per-$j$ buckets, then one Triton program per $(j, t)$ output
+    row reduces its private bucket in registers and writes once — no
+    atomics, bitwise-stable across launches. The sort only pays off
+    when atomics would actually serialise, which is exactly the
+    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime the dispatcher flags.
+  </div>
 
   <p>
     All three paths use Triton's stable <code>argmax</code> (lowest-index
@@ -1327,43 +1281,8 @@ grad_D[j, t, :] = acc                       <span style="color:var(--ink-dim)">#
 </section>
 
 <!-- ============================================================ -->
-<section id="perf">
-  <h2><span class="num">8</span>Performance summary</h2>
-
-  <p>
-    Measured on a single H100 80 GB SXM with bf16/fp16 inputs and fp32
-    accumulators, 50-iteration median; baselines are the same operation in
-    plain PyTorch. Full shapes and reproduction commands are in
-    <a href="benchmarks.md">docs/benchmarks.md</a>.
-  </p>
-
-  <table class="tbl">
-    <thead>
-      <tr><th>Workload</th><th>Speedup vs PyTorch</th></tr>
-    </thead>
-    <tbody>
-      <tr><td>Reranking / inference (small to medium)</td>           <td class="num">7 – 23×</td></tr>
-      <tr><td>Long-context ($L_d \geq 8\text{k}$) reranking</td>     <td class="num">runs · naive OOMs</td></tr>
-      <tr><td>PyLate cached-contrastive MaxSim + backward</td>       <td class="num">up to 13.8×</td></tr>
-      <tr><td>PLAID rerank vs <code>fast_plaid.engine.search()</code></td><td class="num">19 – 30×</td></tr>
-      <tr><td>Fused $D$-side head (training)</td>                    <td class="num">1.5 – 4.6×</td></tr>
-      <tr><td>FP8 MaxSim inference (Hopper)</td>                     <td class="num">up to 1.4×</td></tr>
-      <tr><td>End-to-end ModernColBERT training (149 M params)</td>  <td class="num">1.0 – 1.06× (free swap)</td></tr>
-    </tbody>
-  </table>
-
-  <p>
-    On full encoder training the MaxSim step is dominated by the transformer
-    forward/backward, so the kernel is effectively a free drop-in. Everywhere
-    MaxSim is not negligible (inference, reranking, long documents, knowledge
-    distillation, compressed indices, small encoders), the fused path
-    dominates.
-  </p>
-</section>
-
-<!-- ============================================================ -->
 <section id="variants">
-  <h2><span class="num">9</span>Variants in the library</h2>
+  <h2><span class="num">8</span>Variants in the library</h2>
 
   <p>
     The streaming-and-never-storing structure is the entire optimisation. The
