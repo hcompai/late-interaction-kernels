@@ -405,9 +405,7 @@ def main():
     ]
     for r in results:
         Nq, Nd, Lq, Ld, d = r["shape"]
-        md.append(
-            f"## {r['name']} — `Nq={Nq} Nd={Nd} Lq={Lq} Ld={Ld} d={d}`"
-        )
+        md.append(f"## {r['name']} — `Nq={Nq} Nd={Nd} Lq={Lq} Ld={Ld} d={d}`")
         md.append("")
         md.append("| impl | time (ms) | peak mem (MB) | speedup vs LIK |")
         md.append("| --- | --- | --- | --- |")
