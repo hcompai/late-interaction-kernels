@@ -13,6 +13,12 @@ on:
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
+    paths:
+      - "late_interaction_kernels/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 concurrency:
