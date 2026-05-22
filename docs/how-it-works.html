@@ -1508,7 +1508,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     $\max$ is non-smooth, but at any non-tied point its subgradient
     equals the gradient of whichever term achieves the maximum. So
-    locally — for a perturbation small enough that no argmax flips —
+    locally, for a perturbation small enough that no argmax flips,
     $\text{score}(i, j)$ is just a sum of bilinear terms in $\Qm$ and
     $\Dm$, and $t^{\star}$ is a constant we read out of the saved
     buffer.
@@ -1525,7 +1525,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $$\frac{\partial L}{\partial X} \;=\; \sum_{i, j} g_{i, j} \cdot \frac{\partial\, \text{score}(i, j)}{\partial X}.$$
   </p>
 
-  <h3>Case 1 — $\partial / \partial \Qm_{i, s, k}$</h3>
+  <h3>Case 1: $\partial / \partial \Qm_{i, s, k}$</h3>
 
   <p>
     $\text{score}(i, j)$ depends on the row $\Qm_{i, s}$ only when both
@@ -1540,12 +1540,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    Summing over $j$ — the only free index left in the chain rule —
+    Summing over $j$, the only free index left in the chain rule,
     gives $\nabla_{\Qm_{i, s}}$. Each $j$ picks exactly one row of $\Dm$
     out of $L_d$, a pure gather with no collisions.
   </p>
 
-  <h3>Case 2 — $\partial / \partial \Dm_{j, t, k}$</h3>
+  <h3>Case 2: $\partial / \partial \Dm_{j, t, k}$</h3>
 
   <p>
     $\text{score}(i, j_0)$ depends on $\Dm_{j_0, \cdot, \cdot}$ only
