@@ -1,0 +1,77 @@
+# Three-way MaxSim forward bench on a freshly-provisioned H100.
+#
+# Drops onto a brand-new pod (no Triton autotune cache, no cuBLAS plan
+# cache, no warmed L2 from prior runs) so the numbers reflect "first
+# real call", and uses warmup=20 / iters=100 to leave nothing to chance.
+#
+#   sky launch -c lik-3way scripts/sky_three_way_bench.yaml -y
+#   sky logs lik-3way
+#   sky down lik-3way -y
+#
+# Run a second time with a different cluster name to land on a different
+# physical H100 node and quantify intra-cluster variance:
+#   sky launch -c lik-3way-b scripts/sky_three_way_bench.yaml -y
+
+name: lik-3way
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        priorityClassName: low
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+
+  # NGC image is Debian-managed (PEP 668) — every install needs --break-system-packages.
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+
+  # 1. our kernel from source (current tree)
+  pip install -e ".[dev]" --no-deps --break-system-packages
+
+  # 2. flash-maxsim (Triton reference)
+  pip install "flash-maxsim==0.2.0" --no-deps --break-system-packages || true
+
+  # 3. HF kernels-hub client + Erik's kernel (will be fetched on first call)
+  pip install "kernels>=0.6" --break-system-packages
+
+  # Extras pulled by the parity/eager path
+  pip install numpy einops --break-system-packages
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+
+  echo "=== node identity ==="
+  hostname
+  cat /etc/hostname
+  nvidia-smi -L
+  nvidia-smi --query-gpu=uuid,serial --format=csv
+
+  echo "=== GPU clock state at start (idle) ==="
+  nvidia-smi --query-gpu=name,driver_version,clocks.current.sm,clocks.current.memory,power.draw,power.limit,pstate --format=csv
+
+  mkdir -p /tmp/bench
+
+  echo "=== three-way bench (bf16) ==="
+  python benchmarks/bench_three_way.py --outdir /tmp/bench --dtype bf16 2>&1 | tee /tmp/bench/three_way_bf16.log
+
+  echo "=== three-way bench (fp16) ==="
+  python benchmarks/bench_three_way.py --outdir /tmp/bench --dtype fp16 2>&1 | tee /tmp/bench/three_way_fp16.log
+
+  echo "=== second bf16 pass — sanity-check intra-pod variance ==="
+  python benchmarks/bench_three_way.py --outdir /tmp/bench --dtype bf16 2>&1 | tee /tmp/bench/three_way_bf16_pass2.log
+
+  echo "=== bench output files ==="
+  ls -la /tmp/bench
+  echo "----- three_way bf16 (pass 1) -----"
+  cat /tmp/bench/three_way_*bf16.md || true

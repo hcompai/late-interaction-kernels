@@ -1,0 +1,79 @@
+# Three-way MaxSim forward bench on a node where Erik's CUDA kernel
+# is actually loadable. Erik publishes pre-built wheels for torch
+# 2.10+/cu126+ only, which the NGC 25.06 image (torch 2.8 / cu12.9)
+# doesn't satisfy — so we use the official dockerhub PyTorch image.
+#
+# Note: this is a *different* software stack from sky_three_way_bench.yaml
+# (different torch, different Triton, different CUDA), so absolute
+# numbers will differ from the NGC 25.06 run. The point is to put all
+# three kernels on the same hardware + software stack so the *relative*
+# comparison is fair.
+#
+#   sky launch -c lik-3way-erik scripts/sky_three_way_erik.yaml -y
+#   sky logs lik-3way-erik
+#   sky down lik-3way-erik -y
+
+name: lik-3way-erik
+
+resources:
+  infra: kubernetes
+  image_id: docker:pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        priorityClassName: low
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+  apt-get update -y || true
+  apt-get install -y git || true
+
+  # PEP 668 — the pytorch/pytorch image's Python is Debian-managed.
+  PIP_FLAGS="--break-system-packages"
+
+  # Local LIK (current tree)
+  pip install -e ".[dev]" --no-deps $PIP_FLAGS
+
+  # flash-maxsim
+  pip install "flash-maxsim==0.2.0" --no-deps $PIP_FLAGS || true
+
+  # HF kernels-hub client
+  pip install "kernels>=0.6" $PIP_FLAGS
+
+  pip install numpy einops $PIP_FLAGS
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+
+  echo "=== node identity ==="
+  hostname
+  nvidia-smi -L
+  nvidia-smi --query-gpu=uuid,serial --format=csv
+  nvidia-smi --query-gpu=name,driver_version,clocks.current.sm,clocks.current.memory,power.draw,power.limit,pstate --format=csv
+
+  python -c "import torch; print('torch:', torch.__version__); print('cuda:', torch.version.cuda); import triton; print('triton:', triton.__version__)"
+
+  mkdir -p /tmp/bench
+
+  echo "=== three-way bench (bf16) ==="
+  python benchmarks/bench_three_way.py --outdir /tmp/bench --dtype bf16 2>&1 | tee /tmp/bench/three_way_bf16.log
+
+  echo "=== three-way bench (fp16) ==="
+  python benchmarks/bench_three_way.py --outdir /tmp/bench --dtype fp16 2>&1 | tee /tmp/bench/three_way_fp16.log
+
+  echo "=== bench output files ==="
+  ls -la /tmp/bench
+  echo "----- three_way bf16 -----"
+  cat /tmp/bench/three_way_*bf16.md || true
+  echo "----- three_way fp16 -----"
+  cat /tmp/bench/three_way_*fp16.md || true
