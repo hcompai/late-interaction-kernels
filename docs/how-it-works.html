@@ -74,6 +74,13 @@
     --s-idle:    oklch(93% 0.018 30);   --s-active:    oklch(55% 0.07 30);   /* warm clay — ephemeral S */
     --o-idle:    oklch(93% 0.030 65);   --o-active:    oklch(52% 0.14 65);   /* ochre — running max */
     --done:      oklch(90% 0.045 150);
+
+    /* dedicated math-glyph colors — higher chroma than the animation
+       channels so thin serif glyphs read on warm paper */
+    --math-q:    oklch(42% 0.20 255);   /* blue — Q  */
+    --math-d:    oklch(42% 0.15 150);   /* green — D */
+    --math-m:    oklch(48% 0.18 65);    /* ochre — running max */
+    --math-s:    oklch(46% 0.17 30);    /* clay — S */
   }
   html[data-theme="dark"] {
     --bg:        oklch(15% 0.014 65);
@@ -97,6 +104,11 @@
     --s-idle:    oklch(28% 0.030 30);   --s-active:    oklch(64% 0.08 30);
     --o-idle:    oklch(28% 0.045 65);   --o-active:    oklch(60% 0.15 65);
     --done:      oklch(32% 0.055 150);
+
+    --math-q:    oklch(74% 0.17 255);
+    --math-d:    oklch(74% 0.14 150);
+    --math-m:    oklch(78% 0.15 65);
+    --math-s:    oklch(76% 0.15 30);
   }
 
   /* ===================== BASE ===================== */
@@ -589,12 +601,12 @@
 
   /* ===================== MATH SYMBOL COLORS =====================
      Used selectively in the defining equations only — not every
-     inline $Q$. Mirrors the animation palette so prose, formulas,
-     and the SVG tile-walker speak the same color language. */
-  .katex .lik-q { color: var(--q-active); }
-  .katex .lik-d { color: var(--d-active); }
-  .katex .lik-m { color: var(--o-active); }
-  .katex .lik-s { color: var(--s-active); }
+     inline $Q$. Uses dedicated --math-* tokens (higher chroma than
+     the animation channels) so thin serif glyphs read on paper. */
+  .katex .lik-q { color: var(--math-q); }
+  .katex .lik-d { color: var(--math-d); }
+  .katex .lik-m { color: var(--math-m); }
+  .katex .lik-s { color: var(--math-s); }
 
   /* Scrollbar — quiet, in-palette */
   .anim-log::-webkit-scrollbar { width: 8px; }
@@ -935,11 +947,11 @@
   </div>
 
   <p>
-    Each inner-loop iteration loads a fresh $D$ tile, multiplies it against the
-    resident $Q$ tile on the tensor cores, takes the row-wise max of the
-    resulting $S$ tile, and merges it into $m$. After the inner loop finishes,
-    $m$ holds the true per-row maximum over the full $L_d$ axis, and the
-    program adds $\sum m$ to its scalar accumulator. After the outer loop
+    Each inner-loop iteration loads a fresh $\Dm$ tile, multiplies it against the
+    resident $\Qm$ tile on the tensor cores, takes the row-wise max of the
+    resulting $\Sm$ tile, and merges it into $\Mm$. After the inner loop finishes,
+    $\Mm$ holds the true per-row maximum over the full $L_d$ axis, and the
+    program adds $\sum \Mm$ to its scalar accumulator. After the outer loop
     finishes, that accumulator is written to HBM. One pair, one scalar, one
     store.
   </p>
@@ -968,12 +980,12 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 </code></pre>
 
   <p>
-    The full similarity tensor $S$ is written to HBM, then read back to take
+    The full similarity tensor $\Sm$ is written to HBM, then read back to take
     the row-wise max, then read again for the sum. Its memory footprint is
   </p>
 
   <p>
-    $$\text{bytes}(S) \;=\; N_q \cdot N_d \cdot L_q \cdot L_d \cdot \text{sizeof(float)}.$$
+    $$\text{bytes}(\Sm) \;=\; N_q \cdot N_d \cdot L_q \cdot L_d \cdot \text{sizeof(float)}.$$
   </p>
 
   <p>
@@ -1049,7 +1061,7 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Beyond the memory pressure, the naive version is bandwidth-bound: each
-    element of $S$ is written to HBM once and read twice for a single
+    element of $\Sm$ is written to HBM once and read twice for a single
     multiply-add per element. The arithmetic intensity is far below the H100
     ridge point, so the SMs spend most of their time waiting on memory.
     Appendix <a href="#intensity">B</a> works the FLOP-per-byte numbers out
@@ -1065,7 +1077,7 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
     Spelling out the loop nest sketched in section <a href="#inside">3</a>: one
     Triton program per $(q\text{-batch}, d\text{-batch})$ pair, document tiles
     of $\text{BLOCK\_D}$ rows nested inside query tiles of $\text{BLOCK\_Q}$
-    rows. The full similarity tensor $S$ never exists in HBM. Only the
+    rows. The full similarity tensor $\Sm$ never exists in HBM. Only the
     $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in SRAM
     for the duration of one tile-matmul.
   </p>
@@ -1163,7 +1175,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     To eliminate the score tile entirely, the inner loop replaces every value
-    of $S$ with its contribution to the per-row maximum, which we update
+    of $\Sm$ with its contribution to the per-row maximum, which we update
     incrementally. After consuming the $k$-th tile, the running max obeys
   </p>
 
@@ -1172,8 +1184,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    with $m^{(0)} = -\infty$. After all tiles are consumed, $m$ is the true
-    per-row maximum and $\sum_s m_s$ is the score contribution for the current
+    with $\Mm^{(0)} = -\infty$. After all tiles are consumed, $\Mm$ is the true
+    per-row maximum and $\sum_s \Mm_s$ is the score contribution for the current
     $\text{BLOCK\_Q}$. Both quantities are computed in fp32 in registers; the
     GEMM uses bf16/fp16 operands with fp32 accumulation, matching the
     tensor-core native path.
@@ -1181,9 +1193,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <div class="note">
     <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
-    softmax has to track $m$ <em>and</em> the running sum of exponentials
+    softmax has to track $\Mm$ <em>and</em> the running sum of exponentials
     $\ell$, and rescale both whenever the running max changes: the rescalers
-    are the $\exp(m^{(k-1)} - m^{(k)})$ factors in FA-1. Online max has no such
+    are the $\exp(\Mm^{(k-1)} - \Mm^{(k)})$ factors in FA-1. Online max has no such
     rescaler: $\max$ is idempotent, so the update is just an elementwise max
     and the result is identical to the offline computation.
   </div>
@@ -1193,7 +1205,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <table class="tbl">
     <thead>
-      <tr><th>Tile</th><th>$S$ row (values seen this tile)</th><th>tile max</th><th>running max after tile</th><th>argmax (global $t$)</th></tr>
+      <tr><th>Tile</th><th>$\Sm$ row (values seen this tile)</th><th>tile max</th><th>running max after tile</th><th>argmax (global $t$)</th></tr>
     </thead>
     <tbody>
       <tr><td>0</td><td><span class="mono">[0.42, 0.11, 0.30, 0.18]</span></td><td class="num">0.42</td><td class="num">0.42</td><td class="num">0</td></tr>
@@ -1381,9 +1393,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    Scoring one $(Q, D)$ pair is $2 L_q L_d \, d$ FLOPs of matmul plus a few
+    Scoring one $(\Qm, \Dm)$ pair is $2 L_q L_d \, d$ FLOPs of matmul plus a few
     cheap reductions. The two implementations differ only in what they push
-    through HBM. The naive form materialises the score tile $S$, so its
+    through HBM. The naive form materialises the score tile $\Sm$, so its
     traffic is dominated by the $L_q \times L_d$ surface (read + write,
     fp16):
   </p>
@@ -1394,8 +1406,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    The fused form never writes $S$; the only HBM traffic is the operand
-    reads $Q$ and $D$:
+    The fused form never writes $\Sm$; the only HBM traffic is the operand
+    reads $\Qm$ and $\Dm$:
   </p>
 
   <p>
