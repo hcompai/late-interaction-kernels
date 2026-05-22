@@ -71,6 +71,7 @@ def _small_d_hopper():
         _cfg({"BLOCK_Q": 64, "BLOCK_D": 128}, num_warps=8, num_stages=3),
         _cfg({"BLOCK_Q": 128, "BLOCK_D": 64}, num_warps=8, num_stages=2),
         _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=2),
+        _cfg({"BLOCK_Q": 128, "BLOCK_D": 128}, num_warps=8, num_stages=3),
     ]
 
 

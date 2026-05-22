@@ -1,0 +1,63 @@
+# Targeted A/B for the `rerank-colpali` shape (Nq=1, Nd=500, Lq=Ld=1024,
+# d=128). Goal: confirm the new `BLOCK_Q=128, BLOCK_D=128, num_warps=8,
+# num_stages=3` autotune candidate closes the gap vs flash-maxsim 0.2.0.
+#
+#   sky launch -c lik-colpali-tune scripts/sky_bench_colpali_autotune.yaml -y
+#   sky logs lik-colpali-tune
+#   sky down lik-colpali-tune -y
+
+name: lik-colpali-tune
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.1
+  pip install -e ".[dev]" --no-deps --break-system-packages
+  pip install "flash-maxsim==0.2.0" --break-system-packages
+  python -c "import torch, triton, flash_maxsim; print('torch', torch.__version__, '| triton', triton.__version__, '| flash_maxsim', flash_maxsim.__version__)"
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.1
+  mkdir -p /tmp/bench
+
+  nvidia-smi --query-gpu=name,driver_version,clocks.current.sm,clocks.current.memory --format=csv | tee /tmp/bench/gpu.txt
+
+  # Wipe the autotune cache so the new 128x128 s3 config is actually considered.
+  rm -rf ~/.triton/cache || true
+
+  echo "=== bench_flash_maxsim (bf16) — all shapes, full report ==="
+  python benchmarks/bench_flash_maxsim.py --dtype bf16 2>&1 | tee /tmp/bench/fm_bf16.log
+
+  echo "=== which autotune config won on rerank-colpali? ==="
+  python - <<'PY'
+  import torch
+  from late_interaction_kernels import maxsim
+  from late_interaction_kernels.forward import _maxsim_fwd_kernel as _maxsim_kernel
+
+  torch.manual_seed(0)
+  Nq, Nd, Lq, Ld, d = 1, 500, 1024, 1024, 128
+  Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
+  D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.bfloat16)
+  for _ in range(3):
+      maxsim(Q, D)
+  torch.cuda.synchronize()
+  best = getattr(_maxsim_kernel, "best_config", None)
+  cache = getattr(_maxsim_kernel, "cache", None)
+  print("rerank-colpali best_config:", best)
+  if cache:
+      for k, v in cache.items():
+          print("cache key:", k, "->", v)
+  PY
+
+  ls -la /tmp/bench
+  cat /tmp/bench/fm_bf16.log | tail -80
