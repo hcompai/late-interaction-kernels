@@ -104,12 +104,12 @@ is asserted at `atol=1e-2` before timing.
 | Workload                                                    | Speedup            |
 | ----------------------------------------------------------- | ------------------ |
 | Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 2-11×          |
-| Long-context (`Ld ≥ 8k`) reranking                          | runs; naive OOMs   |
+| Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
 | PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.0-5.5×           |
-| PLAID rerank vs `fast_plaid.engine.search()`                | 19-30×             |
+| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 19-32×             |
 | Fused D-side head (training)                                | 1.2-4.2×           |
 | FP8 MaxSim inference (Hopper)                               | 1.9-2.5×           |
-| End-to-end training of a 149M encoder                       | 1.00-1.06× (free)  |
+| LateOn-Code-edge training (real MS MARCO triplets)          | 1.05-1.27× e2e     |
 
 `torch.compile` is within ±5% of eager on every forward shape because
 Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity

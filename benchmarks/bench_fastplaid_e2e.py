@@ -223,10 +223,13 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
     )
 
     Q = torch.nn.functional.normalize(torch.randn(1, LQ, D_MODEL, device="cuda"), dim=-1).to(torch.bfloat16)
+    TOP_K = 10
 
-    # --- Full corpus rerank (all docs) ---
+    # --- Full corpus rerank (all docs) + top-k argmax ---
+    # ``engine.search()`` always finishes with a top-k. To stay
+    # apples-to-apples we fold the same ``torch.topk`` into the LIK timer.
     def _lik_full():
-        _ = maxsim_residual_varlen(
+        scores = maxsim_residual_varlen(
             Q,
             idx["codes_flat"],
             idx["residuals_flat"],
@@ -236,9 +239,10 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
             idx["nbits"],
             normalize=True,
         )
+        return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
-    lik_full_ms = time_cuda(_lik_full, warmup=args.warmup, iters=args.iters)
-    print(f"  lik varlen (all docs)  : {lik_full_ms:.2f} ms/query")
+    lik_full_ms = time_cuda(lambda: _lik_full(), warmup=args.warmup, iters=args.iters)
+    print(f"  lik varlen (all docs + top-k)  : {lik_full_ms:.2f} ms/query")
 
     # --- Partial rerank (n_full_scores random docs — fast-plaid shape) ---
     n_cand = min(args.n_full_scores, idx["n_docs"])
@@ -262,7 +266,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
     cu_cand[1:] = doc_lengths_cand.to(torch.int32).cumsum(0)
 
     def _lik_partial():
-        _ = maxsim_residual_varlen(
+        scores = maxsim_residual_varlen(
             Q,
             codes_cand,
             resid_cand,
@@ -272,9 +276,10 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
             idx["nbits"],
             normalize=True,
         )
+        return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
-    lik_partial_ms = time_cuda(_lik_partial, warmup=args.warmup, iters=args.iters)
-    print(f"  lik varlen ({n_cand} cands)  : {lik_partial_ms:.2f} ms/query")
+    lik_partial_ms = time_cuda(lambda: _lik_partial(), warmup=args.warmup, iters=args.iters)
+    print(f"  lik varlen ({n_cand} cands + top-k)  : {lik_partial_ms:.2f} ms/query")
 
     if e2e_ms_per_q is not None:
         speedup_full = e2e_ms_per_q / lik_full_ms

@@ -1,0 +1,91 @@
+# Real-data PyLate training e2e: MS MARCO triplets + small LateOn-Code-edge.
+#
+#   sky launch scripts/sky_pylate_realdata.yaml -c lik-pylate-realdata -y
+#
+# Compares vanilla PyLate vs patch_pylate() on actual query/passage text
+# (not synthetic random strings). Two recipes:
+#   * contrastive  — encoder-heavy baseline
+#   * reason       — CachedContrastive (where LIK usually wins more)
+
+name: lik-pylate-realdata
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Match sky_lateon_edge.yaml — do not reinstall transformers; the NGC
+  # pytorch:25.06 image already ships a ModernBERT-compatible stack.
+  pip install --no-cache-dir --break-system-packages -e ".[dev,pylate]" --force-reinstall --no-deps
+  pip install --no-cache-dir --break-system-packages --no-deps "pylate==1.3.4"
+  # Minimal runtime stack for ``models.ColBERT`` + ``losses.*`` (skip fast-plaid /
+  # voyager — not needed for the training-step bench).
+  pip install --no-cache-dir --break-system-packages \
+      "sentence-transformers==5.1.1" \
+      "transformers>=4.41,<=4.56.2" \
+      "accelerate>=0.31" \
+      "datasets>=2.14,<4" \
+      "pandas>=2.2.1,<4" \
+      "tokenizers>=0.19"
+  python -c "
+  import torch, pylate, datasets
+  from pylate import models
+  print('gpu', torch.cuda.get_device_name())
+  print('pylate', pylate.__version__)
+  m = models.ColBERT('lightonai/LateOn-Code-edge', document_length=256, query_length=32)
+  print('model ok', type(m))
+  "
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export LIK_SUPPRESS_NORM_WARN=1
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  ART=/tmp/pylate_realdata_${STAMP}
+  mkdir -p "${ART}"
+
+  MODEL="lightonai/LateOn-Code-edge"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO triplets — contrastive bs=16 Lq=32 Ld=256"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${MODEL}" \
+      --recipe contrastive \
+      --batch-size 16 --Lq 32 --Ld 256 \
+      --max-samples 512 --steps 25 --warmup 3 \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/contrastive_bs16_ld256.log"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — CachedContrastive bs=64 mini=16 Ld=300"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${MODEL}" \
+      --recipe reason \
+      --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 300 \
+      --max-samples 512 --steps 20 --warmup 3 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs64_ld300.log"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — CachedContrastive bs=128 mini=16 Ld=512"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${MODEL}" \
+      --recipe reason \
+      --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 512 \
+      --max-samples 768 --steps 15 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs128_ld512.log"
+
+  echo "Artifacts: ${ART}"
+  ls -la "${ART}"

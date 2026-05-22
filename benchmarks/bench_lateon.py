@@ -60,7 +60,31 @@ D_MODEL = 128
 
 
 def _naive_score(Q, D):
-    return torch.einsum("ild,jtd->ijlt", Q, D).max(-1).values.sum(-1)
+    """fp32-accumulator reference — matches LIK's numerical contract.
+
+    Inputs are fp16; we upcast to fp32 in registers before the einsum so
+    the accumulator type is fp32 (same as the fused kernel). The full
+    ``[Nq, Nd, Lq, Ld]`` similarity is then materialised in HBM, which
+    is the round-trip the fused kernel exists to skip.
+    """
+    return torch.einsum("ild,jtd->ijlt", Q.float(), D.float()).max(-1).values.sum(-1)
+
+
+def _assert_parity(name, Q, D):
+    """Confirm LIK matches the fp32-accumulator naive reference before timing.
+
+    Tolerance ``atol=1e-2`` is loose enough not to false-positive on
+    fp16-input numerics drift but tight enough to catch structural bugs.
+    """
+    with torch.no_grad():
+        ref = _naive_score(Q.detach().float(), D.detach().float())
+        out = maxsim(Q.detach(), D.detach()).float()
+    if not torch.allclose(out, ref, atol=1e-2, rtol=1e-2):
+        diff = (out - ref).abs()
+        raise AssertionError(
+            f"[{name}] LIK disagrees with fp32-acc naive: "
+            f"max abs diff {diff.max().item():.3g}"
+        )
 
 
 def _bench(fn, warmup=3, iters=10):
@@ -116,12 +140,18 @@ def main():
         huge_corpus = Nd >= 1024
         pick = "csr" if (big or long_seq or huge_corpus) else "atom"
 
+        if run_naive:
+            try:
+                _assert_parity(name, Q, D)
+            except torch.cuda.OutOfMemoryError:
+                pass
+
         # ---- Forward (inference, no autograd) ----
         def fwd_fast():
             maxsim(Q.detach(), D.detach())
 
         def fwd_naive():
-            _naive_score(Q.detach().float(), D.detach().float())
+            _naive_score(Q.detach(), D.detach())
 
         t_fwd_fast = _bench(fwd_fast, iters=args.iters)
         try:
@@ -145,7 +175,7 @@ def main():
             if Q.grad is not None:
                 Q.grad = None
                 D.grad = None
-            _naive_score(Q.float(), D.float()).sum().backward()
+            _naive_score(Q, D).sum().backward()
 
         t_bwd_atom = _bench(_make_bwd_step("atomic"), iters=args.iters)
         t_bwd_csr = _bench(_make_bwd_step("csr"), iters=args.iters)
