@@ -7,21 +7,12 @@ name: Generate perf baselines
 # `benchmarks/baselines/{GPU}.json` is committed back to the branch this
 # workflow is dispatched from.
 #
-# Trigger:
-#   - automatic push trigger on `generate-t4-baselines-for-ci-tests` so the
-#     workflow runs the first time the branch is pushed (workflow_dispatch
-#     alone won't work here — GitHub only exposes dispatch for workflows
-#     present on the default branch);
-#   - the bot's follow-up commit includes `[skip ci]` to prevent a re-run
-#     loop after the baseline is pushed back.
-# Once the baseline lands on main, this workflow can be re-triggered via the
-# Actions tab for future regenerations.
+# Trigger from the Actions tab (or `gh workflow run generate-perf-baselines.yml
+# --ref <branch>`). The workflow must exist on the default branch for dispatch
+# to be available — once landed on main, it can be re-run against any branch.
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - generate-t4-baselines-for-ci-tests
 
 permissions:
   contents: write
@@ -79,6 +70,5 @@ jobs:
             exit 0
           fi
           git add benchmarks/baselines/
-          # [skip ci] prevents this workflow's own push trigger from looping.
-          git commit -m "ci: regenerate perf baselines on $(python -c 'import torch; print(torch.cuda.get_device_name(0))') [skip ci]"
+          git commit -m "ci: regenerate perf baselines on $(python -c 'import torch; print(torch.cuda.get_device_name(0))')"
           git push origin HEAD:${{ github.ref_name }}
