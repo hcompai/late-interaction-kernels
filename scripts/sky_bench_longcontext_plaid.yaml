@@ -1,0 +1,60 @@
+# Re-verify long-context (Ld up to 16k) and PLAID end-to-end numbers
+# with the v0.2.x kernel + the fp32-accumulator parity check.
+#
+#   sky launch -c lik-bench-lc scripts/sky_bench_longcontext_plaid.yaml -y
+#   sky logs lik-bench-lc
+#   sky down lik-bench-lc -y
+#
+# Uses the stock pytorch:2.8.0 image because fast-plaid's wheel doesn't
+# link against the NGC pre-release torch ABI (same as sky_fastplaid_e2e.yaml).
+
+name: lik-bench-lc
+
+resources:
+  infra: kubernetes
+  image_id: docker:pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+  accelerators: H100:1
+  cpus: 8+
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        priorityClassName: low
+
+workdir: .
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Sky doesn't upload .git, so setuptools_scm can't infer the version.
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+  pip install --no-cache-dir triton
+  pip install --no-cache-dir -e ".[dev]"
+  pip install --no-cache-dir fast-plaid==1.4.6.280
+  python -c "import torch, triton, fast_plaid, late_interaction_kernels; print('torch', torch.__version__, 'triton', triton.__version__)"
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+  python -c "import fast_plaid, triton, late_interaction_kernels" 2>/dev/null || {
+    pip install --no-cache-dir triton
+    pip install --no-cache-dir -e ".[dev]"
+    pip install --no-cache-dir fast-plaid==1.4.6.280
+  }
+
+  mkdir -p /tmp/bench
+
+  python -c "import torch; print('GPU:', torch.cuda.get_device_name()); print('torch:', torch.__version__)"
+
+  echo "=== bench_lateon (long-context Ld ∈ {300, 2k, 4k, 8k, 16k}) ==="
+  python benchmarks/bench_lateon.py --outdir /tmp/bench 2>&1 | tee /tmp/bench/lateon.log
+
+  echo "=== bench_fastplaid_e2e (engine.search vs LIK varlen + top-k) ==="
+  python benchmarks/bench_fastplaid_e2e.py --outdir /tmp/bench --small 2>&1 | tee /tmp/bench/plaid.log
+
+  echo "=== artifacts ==="
+  ls -la /tmp/bench
+  cat /tmp/bench/lateon_*.json | python -m json.tool || true
+  cat /tmp/bench/fastplaid_e2e_*.json | python -m json.tool || true

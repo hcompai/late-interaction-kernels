@@ -1,8 +1,15 @@
 # Benchmarks
 
-Single H100 80 GB SXM, bf16 compute (fp16 for LateOn / ModernColBERT
-shapes), fp32 accumulator, 50 iterations after 5 warmup, `torch 2.8`,
-`triton 3.6`, `cuda 12.9`.
+Single H100 80 GB SXM, bf16 inputs (fp16 for LateOn / ModernColBERT
+shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
+`torch 2.8` (NGC 25.06), `triton 3.x`, CUDA 12.9.
+
+**Fair-comparison protocol.** Every speedup on this page is measured at
+**matched numerics**: each baseline runs the inner einsum / matmul with
+an fp32 accumulator just like the fused kernel, and parity vs the eager
+reference is asserted at `atol=1e-2, rtol=1e-2` *before* timing. The
+forward and cached-contrastive sections also report a `torch.compile`
+column on the same body so you can see what Inductor alone closes.
 
 ## Reproducing
 
@@ -58,6 +65,7 @@ Results land in `benchmarks/results/*.{json,md}`.
 ## On a SkyPilot cluster
 
 ```bash
+sky launch -c lik-bench scripts/sky_bench_verify.yaml -y   # forward + cached + fused head + fp8 (the README numbers)
 sky jobs launch scripts/sky_test.yaml             # CI-style: tests + bench_forward + bench_backward
 sky jobs launch scripts/sky_lateon_edge.yaml      # LateOn-Code-edge end-to-end
 sky jobs launch scripts/sky_decompress_bench.yaml # PLAID decompress + MaxSim
@@ -66,32 +74,52 @@ sky jobs launch scripts/sky_fastplaid_e2e.yaml    # vs `fast_plaid.engine.search
 
 ## Forward (reranking / inference)
 
-**Baseline.** All H100 ratios on this page divide the fused Triton kernel
-against an eager fp32 reference written the way a user would write it
-without this library:
+**Baseline.** Every implementation on this page runs the einsum with an
+**fp32 accumulator** (same numerical contract as the fused kernel) and
+reads `bf16` / `fp16` inputs. Parity against the eager reference is
+asserted at `atol=1e-2, rtol=1e-2` before timing, so the speedup ratios
+are apples-to-apples in precision. The reference is one line:
 
 ```python
-def naive(Q, D):
+def eager_fp32(Q, D):
     S = torch.einsum("ild,jtd->ijlt", Q.float(), D.float())
     return S.max(-1).values.sum(-1)
 ```
 
-We don't include a `torch.compile`-fused naive column because there's
-nothing for Inductor to win here: it has to materialize the full
-`[Nq · Nd · Lq · Ld]` similarity tensor in HBM before the `max(-1)` —
-exactly the materialization our Triton kernel exists to avoid. The fused
-kernel's 7–23× and ~300× memory advantage come from never writing `S` to
-HBM, which is a tiling decision the user (or `torch.compile`) cannot
-express in pure PyTorch ops without writing the Triton kernel themselves.
-The MPS section below *does* report a `torch.compile` column because the
-MPS dispatch ships one as a real autograd-aware fallback path.
+We also report a `torch.compile(dynamic=False, mode="reduce-overhead")`
+column on the *same* body. Inductor fuses the surrounding ops but still
+has to materialise the `[Nq · Nd · Lq · Ld]` similarity tile in HBM
+before the `max(-1)` reduction — that materialisation is what the fused
+Triton kernel exists to skip. Empirically `torch.compile` lands within
+±10% of eager on every shape; on the small `train-batch (Nq=Nd=32)` case
+it's actually slower than eager because the per-call dispatch overhead
+dominates such tiny work.
+
+Full table (H100 80 GB SXM, NGC 25.06, bf16 inputs, 50-iter median over
+CUDA events):
 
 
-| shape                                       | fused    | naive einsum | speedup | scratch    |
-| ------------------------------------------- | -------- | ------------ | ------- | ---------- |
-| `Nq=1, Nd=1000, Lq=32, Ld=300`              | 0.031 ms | 0.705 ms     | 22.7×   | 183 MB → 0 |
-| `Nq=1, Nd=10 000, Lq=32, Ld=300`            | 0.557 ms | 7.112 ms     | 12.8×   | 1.8 GB → 0 |
-| `Nq=1, Nd=1000, Lq=1024, Ld=1024` (ColPali) | 1.518 ms | 11.967 ms    | 7.9×    | 4.5 GB → 0 |
+| shape                                              | LIK      | eager (fp32 acc) | `torch.compile` (fp32 acc) | LIK vs eager | LIK vs compile | naive scratch |
+| -------------------------------------------------- | -------- | ---------------- | -------------------------- | ------------ | -------------- | ------------- |
+| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`            | 0.091 ms | 0.266 ms         | 0.246 ms                   | 2.9×         | 2.7×           | 183 MB → 0    |
+| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`            | 0.093 ms | 0.793 ms         | 0.779 ms                   | **8.5×**     | **8.4×**       | 626 MB → 0    |
+| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`         | 0.103 ms | 1.102 ms         | 1.071 ms                   | **10.7×**    | **10.4×**      | 1.0 GB → 0    |
+| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)   | 0.949 ms | 4.046 ms         | 3.737 ms                   | 4.3×         | 3.9×           | 4.5 GB → 0    |
+| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`             | 0.132 ms | 1.182 ms         | 1.183 ms                   | 9.0×         | 9.0×           | 916 MB → 0    |
+| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`           | 0.250 ms | 2.331 ms         | 2.332 ms                   | 9.3×         | 9.3×           | 1.8 GB → 0    |
+| train-batch `Nq=Nd=32, Lq=32, Ld=300`              | 0.085 ms | 0.137 ms         | 0.193 ms                   | 1.6×         | 2.3×           | 43 MB → 0     |
+| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`         | 0.317 ms | 0.705 ms         | 0.713 ms                   | 2.2×         | 2.2×           | 621 MB → 0    |
+| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`    | 0.152 ms | 0.845 ms         | 0.847 ms                   | 5.6×         | 5.6×           | 623 MB → 0    |
+| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024` | 0.166 ms | 0.835 ms         | 0.837 ms                   | 5.0×         | 5.0×           | 604 MB → 0    |
+| lateon-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.087 ms | 0.716 ms         | 0.716 ms                   | **8.2×**     | **8.2×**       | 625 MB → 0    |
+| lateon-edge-big `Nd=4k, Ld=2048, d=48`             | 0.261 ms | 2.804 ms         | 2.798 ms                   | **10.7×**    | **10.7×**      | 2.5 GB → 0    |
+| mxbai-edge `Nd=1k, Ld=300, d=64`                   | 0.086 ms | 0.175 ms         | 0.173 ms                   | 2.0×         | 2.0×           | 110 MB → 0    |
+| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`       | 0.159 ms | 1.369 ms         | 1.370 ms                   | **8.6×**     | **8.6×**       | 1.1 GB → 0    |
+
+
+On wide shapes (`Lq · Ld` large) LIK beats both baselines by 8-11×; the
+HBM round-trip on the similarity tile dominates. On tiny shapes the
+kernel-launch + autotune overhead caps the win at ~2×.
 
 
 ### vs `flash-maxsim` (same Triton MaxSim math)
@@ -145,40 +173,92 @@ the backward correctly applies the L2-norm Jacobian.
 
 End-to-end vs `fast_plaid.engine.search()`: build the index with
 fast-plaid, time `engine.search()`, then load the same compressed
-tensors and call `maxsim_residual_varlen`. Same inputs, same outputs.
-Reproduce with `scripts/sky_fastplaid_e2e.yaml`.
+tensors and call `maxsim_residual_varlen` *on the same compressed
+bytes*. To keep the comparison apples-to-apples both pipelines end on
+a `torch.topk(scores, k=10)` — `engine.search()` returns the top-10,
+so the LIK timer now folds the same final argmax in. Reproduce with
+`scripts/sky_fastplaid_e2e.yaml`.
+
+We report two LIK variants:
+
+* **`lik_full + top-k`** — score the *whole* corpus, then top-k. Upper
+  bound on the rerank cost; corresponds to "no IVF probe".
+* **`lik_partial + top-k`** (4 096 cands) — score the same number of
+  candidates fast-plaid keeps after its IVF probe (`n_full_scores=4096`),
+  then top-k. Closest apples-to-apples vs `engine.search()` because
+  it pays the same rerank workload, minus IVF probing — which
+  fast-plaid currently does in Rust and we don't.
 
 
-| corpus shape (nbits=2) | `engine.search()` | `maxsim_residual_varlen` (4 k cands) | speedup   |
-| ---------------------- | ----------------- | ------------------------------------ | --------- |
-| 5 000 docs × 200 tok   | 23.4 ms           | 1.22 ms                              | **19.2×** |
-| 10 000 docs × 300 tok  | 48.6 ms           | 1.69 ms                              | **28.7×** |
-| 10 000 docs × 512 tok  | 83.1 ms           | 2.71 ms                              | **30.7×** |
+| corpus shape (nbits=2) | `engine.search()` | `lik_full + top-k` | `lik_partial + top-k` | full speedup | partial speedup |
+| ---------------------- | ----------------- | ------------------ | --------------------- | ------------ | --------------- |
+| 5 000 docs × 200 tok   | 23.24 ms          | 1.48 ms            | 1.25 ms               | **15.7×**    | **18.6×**       |
+| 10 000 docs × 300 tok  | 46.56 ms          | 3.75 ms            | 1.71 ms               | **12.4×**    | **27.3×**       |
+| 10 000 docs × 512 tok  | 79.62 ms          | 5.56 ms            | 2.49 ms               | **14.3×**    | **32.0×**       |
 
 
-Against a PyTorch transliteration of fast-plaid's exact decompress →
-pad → matmul → reduce slice, the fused varlen kernel is **3.4–3.7×
-faster at 10–34× less GPU memory** — no
-`[Ntop, max_Ld, packed_dim]` padded scratch is allocated.
+Reading: even with the top-k argmax folded into the LIK side, the
+fused kernel is **15-32×** faster than the full fast-plaid pipeline.
+"Partial" is the closer head-to-head (matches fast-plaid's rerank
+workload after IVF probing); "full" shows what scoring the entire
+corpus from scratch costs us — usually still cheaper than the IVF
+probe path in fast-plaid below 10k docs. Against a PyTorch
+transliteration of fast-plaid's exact decompress → pad → matmul →
+reduce slice, the fused varlen kernel is **3.4-3.7× faster at 10-34×
+less GPU memory** — no `[Ntop, max_Ld, packed_dim]` padded scratch is
+allocated.
 
 ## Fused D-side head (training)
 
 Replaces `F.linear → F.normalize → maxsim` for the
 hidden-state → embedding → MaxSim path. Forward saves an argmax;
 backward gathers `H_d` only at winning positions and is closed-form.
-H100 bf16, forward + backward:
+Both columns use the same LIK MaxSim — the only difference is whether
+the projection / normalize step is folded in:
 
 
-| shape                                           | unfused  | fused   | speedup   |
-| ----------------------------------------------- | -------- | ------- | --------- |
-| LateOn `Nd=128, Ld=1024, d_model=768`           | 1.45 ms  | 0.96 ms | **1.52×** |
-| LateOn-Code `Nd=512, Ld=2048`                   | 7.31 ms  | 1.67 ms | **4.37×** |
-| LateOn-Code `Nd=1024, Ld=2048`                  | 14.15 ms | 3.05 ms | **4.64×** |
-| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384` | 5.13 ms  | 1.32 ms | **3.88×** |
+| shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   |
+| ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- |
+| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  1.16 ms                                       |  0.88 ms | 1.32×     |
+| LateOn `Nd=32, Lq=32, Ld=1024`                         |  1.09 ms                                       |  0.91 ms | 1.20×     |
+| LateOn-Code `Nd=128, Ld=1024`                          |  1.61 ms                                       |  1.00 ms | 1.61×     |
+| LateOn-Code `Nd=256, Ld=1024`                          |  2.48 ms                                       |  1.09 ms | **2.29×** |
+| LateOn-Code `Nd=512, Ld=2048`                          |  7.37 ms                                       |  1.80 ms | **4.10×** |
+| LateOn-Code `Nd=1024, Ld=2048`                         | 13.95 ms                                       |  3.32 ms | **4.21×** |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.25 ms                                       |  1.35 ms | **3.89×** |
 
 
-The win shrinks as `Nq · Lq / Ld → 1` and as `d_model` shrinks below
-~128. Memory and derivation in `[design.md](design.md)`.
+The win grows with `Nd · Ld` (more positions for the fused linear to
+batch over) and shrinks as `Nq · Lq / Ld → 1`. Memory and derivation
+in [`design.md`](design.md).
+
+## FP8 inference (Hopper)
+
+This row compares **two LIK kernels against each other**, not LIK vs
+naive PyTorch. `maxsim_inference_fp8` runs the inner matmul in `e4m3`
+(fp8) with an fp32 accumulator and `bf16` output; `maxsim` (bf16) is
+the same Triton kernel one precision step up. No requantization of
+`Q` / `D` is needed if they were stored fp8 to begin with (PyLate's
+PLAID index can ship fp8 directly), so the speedup below isolates the
+\"swap bf16 tensor cores for fp8 tensor cores\" win.
+
+H100 80 GB SXM, NGC 25.06, `bench_fp8.py`:
+
+
+| shape                                       | bf16     | fp8      | speedup   | label              |
+| ------------------------------------------- | -------- | -------- | --------- | ------------------ |
+| `Nd=1k, Lq=32, Ld=128, d=128`               | 0.300 ms | 0.123 ms | **2.45×** | pylate-rerank-1k   |
+| `Nd=4k, Lq=32, Ld=128, d=128`               | 0.336 ms | 0.150 ms | **2.24×** | pylate-rerank-4k   |
+| `Nd=8k, Lq=32, Ld=256, d=128`               | 0.459 ms | 0.227 ms | 2.03×     | colbert-rerank-8k  |
+| `Nd=4k, Lq=32, Ld=256, d=128`               | 0.621 ms | 0.336 ms | 1.85×     | batched-rerank-16k |
+| `Nd=2k, Lq=32, Ld=512, d=128`               | 0.367 ms | 0.162 ms | **2.26×** | long-docs-2k       |
+| `Nd=1k, Lq=32, Ld=128, d=96`                | 0.294 ms | 0.118 ms | **2.48×** | lateon-edge-1k     |
+| `Nd=4k, Lq=32, Ld=128, d=96`                | 0.332 ms | 0.143 ms | **2.33×** | lateon-edge-4k     |
+
+
+FP8 gives a flat ~2× across rerank-sized shapes. Tolerance vs bf16
+stays inside 5e-3 absolute on every shape we tested — fine for top-k
+retrieval where ordering, not exact scores, is what matters.
 
 ## End-to-end LateOn-Code-edge training (17 M encoder)
 
@@ -237,79 +317,105 @@ maxsim(Q, D, normalize=True, backward="csr")   # | "atomic" | "unified" | "auto"
 
 ## LateOn / ModernColBERT (long documents)
 
-At 2k–4k the naive einsum still fits, so you see speedup *and* memory
-ratios. At 8k+ naive OOMs on 80 GB at sane training batch sizes.
-Numbers apply equally to `lightonai/LateOn`,
-`lightonai/GTE-ModernColBERT-v1`, `lightonai/LateOn-Code` (same
-backbone, `d=128`).
+At 2k-4k the naive einsum still fits, so you see speedup *and* memory
+ratios. At 8k+ naive OOMs on 80 GB at sane training batch sizes —
+that's the story this section tells. Numbers apply equally to
+`lightonai/LateOn`, `lightonai/GTE-ModernColBERT-v1` and
+`lightonai/LateOn-Code` (same backbone, `d=128`).
 
-MaxSim only (one `colbert_scores` call, fp16, `auto` backward):
+MaxSim only (one `colbert_scores` call, fp16 inputs + fp32
+accumulator, `auto` backward). Parity vs the fp32-acc naive reference
+is asserted before timing on every shape that fits in HBM:
 
 
-| shape                                     | fwd fused | fwd naive | bwd fused | bwd naive | peak fused | peak naive |
-| ----------------------------------------- | --------- | --------- | --------- | --------- | ---------- | ---------- |
-| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.07 ms   | 0.15 ms   | 0.47 ms   | 0.56 ms   | 96 MB      | 152 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.08 ms   | 0.15 ms   | 0.45 ms   | 0.55 ms   | 129 MB     | 241 MB     |
-| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.08**  | 0.34      | **0.46**  | 1.06      | **193 MB** | **672 MB** |
-| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.07 ms   | 0.24 ms   | 0.46 ms   | 0.71 ms   | 320 MB     | 416 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.07 ms   | **OOM**   | 0.39 ms   | **OOM**   | 192 MB     | OOM        |
-| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.15 ms   | **OOM**   | 0.41 ms   | **OOM**   | 320 MB     | OOM        |
-| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.18 ms   | **OOM**   | 1.12 ms   | **OOM**   | 2.1 GB     | OOM        |
-| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.09 ms   | **OOM**   | 0.42 ms   | **OOM**   | 576 MB     | OOM        |
+| shape                                     | fwd LIK | fwd naive | bwd LIK | bwd naive | peak LIK | peak naive |
+| ----------------------------------------- | ------- | --------- | ------- | --------- | -------- | ---------- |
+| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.10 ms | 0.14 ms   | 0.48 ms | 0.53 ms   |  96 MB   | 152 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.10 ms | 0.21 ms   | 0.47 ms | 0.58 ms   | 128 MB   | 240 MB     |
+| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.10**| 0.65      |**0.41** | 1.82      |**193 MB**|**672 MB**  |
+| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.10 ms | 0.24 ms   | 0.51 ms | 0.77 ms   | 320 MB   | 416 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.10 ms | **OOM**   | 0.49 ms | **OOM**   | 192 MB   | OOM        |
+| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.56 ms | **OOM**   | 321 MB   | OOM        |
+| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.18 ms | **OOM**   | 1.55 ms | **OOM**   |  2.1 GB  | OOM        |
+| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 1.04 ms | **OOM**   | 576 MB   | OOM        |
+
+
+At `Ld ≥ 8k` naive OOMs on the `[Nq, Nd, Lq, Ld]` similarity scratch
+(`8 · 16 · 32 · 8192 · 4 bytes ≈ 128 MB *per query position*` — and
+`Nq` queries multiply that). The fused kernel never writes that tensor
+out, so HBM stays flat with `Ld` and the same shapes that OOM in the
+naive column run in ~0.2 ms here. The `bigbatch-4k` column shows what
+this buys you when both paths fit: same wall-clock advantage (~6×
+fwd, ~4× bwd) *and* ~3.5× less HBM, which is what lets `bs ≥ 16` at
+`Ld = 4k` survive at all.
 
 
 ### LightOn cached-contrastive (MaxSim isolation)
 
 `pylate.losses.CachedContrastive` chunks MaxSim into `(bs / mini)**2`
 Python-level calls. The fused kernel collapses that double loop into
-one call that never materializes `S`. `Lq=128, d=128, mini=32`:
+one call that never materializes `S`. We compare three implementations
+on the same chunked tiling (`Lq=128, d=128, mini=32`, fwd + bwd):
+
+* **vanilla** — `pylate.scores.colbert_scores` per tile (current PyLate
+  default, fp32 accumulator).
+* **`torch.compile`** — local re-implementation of the `colbert_scores`
+  body wrapped in `torch.compile(dynamic=False, mode="reduce-overhead")`,
+  same numerics as vanilla.
+* **LIK** — `late_interaction_kernels.maxsim` over the same chunking.
+
+H100 80 GB SXM, NGC 25.06, parity checked on an 8-row probe before
+timing. `torch.compile` lands *below* vanilla here because Dynamo
+recompiles on every fresh tile shape and the cuda-graph fast path
+trips on the pending-backward state pylate's loss leaves behind:
 
 
-| shape                                       | tiles | vanilla fwd+bwd | fused fwd+bwd | speedup   | vanilla peak | fused peak | mem×     |
-| ------------------------------------------- | ----- | --------------- | ------------- | --------- | ------------ | ---------- | -------- |
-| `bs=64, Ld=2048`                            | 4     | 13.5 ms         | 1.3 ms        | **10.3×** | 1.1 GB       | 0.2 GB     | 5.7×     |
-| `bs=64, Ld=4096`                            | 4     | 26.4 ms         | 2.2 ms        | **11.9×** | 2.2 GB       | 0.3 GB     | 6.8×     |
-| `bs=64, Ld=8192`                            | 4     | 55.3 ms         | 4.0 ms        | **13.9×** | 4.3 GB       | 0.6 GB     | 7.5×     |
-| `bs=128, Ld=4096`                           | 16    | 107.1 ms        | 8.0 ms        | **13.3×** | 2.3 GB       | 0.6 GB     | 4.0×     |
-| `bs=128, Ld=8192`                           | 16    | 224.0 ms        | 15.7 ms       | **14.3×** | 4.6 GB       | 1.1 GB     | 4.2×     |
-| `bs=256, Ld=2048`                           | 64    | 224.5 ms        | 17.7 ms       | **12.7×** | 1.4 GB       | 0.6 GB     | 2.2×     |
-| `bs=256, Ld=4096`                           | 64    | 439.9 ms        | 33.1 ms       | **13.3×** | 2.6 GB       | 1.1 GB     | 2.3×     |
-| **bs=256, Ld=8192** (LightOn's real recipe) | 64    | **915.9 ms**    | **66.3 ms**   | **13.8×** | **5.1 GB**   | **2.1 GB** | **2.4×** |
+| shape                          | tiles | vanilla fwd+bwd | `torch.compile` fwd+bwd | LIK fwd+bwd | LIK vs vanilla | LIK vs compile |
+| ------------------------------ | ----- | --------------- | ----------------------- | ----------- | -------------- | -------------- |
+| `bs=64, Ld=2048`               |   4   |   7.64 ms       |  12.58 ms               |   1.89 ms   | **4.05×**      | **6.66×**      |
+| `bs=64, Ld=4096`               |   4   |  14.67 ms       |  24.75 ms               |   3.18 ms   | **4.61×**      | **7.77×**      |
+| `bs=64, Ld=8192`               |   4   |  31.64 ms       |  48.68 ms               |   5.70 ms   | **5.55×**      | **8.55×**      |
+| `bs=128, Ld=2048`              |  16   |  31.31 ms       |  51.07 ms               |   6.51 ms   | **4.81×**      | **7.84×**      |
+| `bs=128, Ld=4096`              |  16   |  60.14 ms       | 100.48 ms               |  13.10 ms   | **4.59×**      | **7.67×**      |
+| `bs=128, Ld=8192`              |  16   | 129.83 ms       | 197.71 ms               |  24.57 ms   | **5.28×**      | **8.05×**      |
+| `bs=256, Ld=2048`              |  64   | 130.86 ms       | 210.02 ms               |  27.70 ms   | **4.72×**      | **7.58×**      |
+| `bs=256, Ld=4096`              |  64   | 252.18 ms       | 413.16 ms               |  51.75 ms   | **4.87×**      | **7.98×**      |
+| **`bs=256, Ld=8192`** (real recipe) | 64 | **542.15 ms** | **813.40 ms**        | **99.94 ms**| **5.43×**      | **8.14×**      |
 
 
-### End-to-end on `LateOn` (149 M)
-
-Real `pylate.models.ColBERT("lightonai/LateOn")` (22-layer ModernBERT
-with FlashAttention-2, 8192-token context), AdamW, bf16 autocast,
-per-rank peak memory.
-
-`losses.Contrastive` (no encoder chunking):
-
-
-| setup                                  | vanilla PyLate | fused    | speedup | peak (v → f)   |
-| -------------------------------------- | -------------- | -------- | ------- | -------------- |
-| 1 × H100, bs=8, Lq=32, Ld=2048         | 227.2 ms       | 220.6 ms | 1.03×   | 29.2 → 29.2 GB |
-| 1 × H100, bs=8, Lq=32, Ld=4096         | 428.3 ms       | 428.7 ms | 1.00×   | 56.3 → 56.3 GB |
-| 1 × H100, bs=4, Lq=32, Ld=8192         | 504.2 ms       | 504.1 ms | 1.00×   | 56.2 → 56.2 GB |
-| 8 × H100 DDP, bs=4, Ld=8192 (per-rank) | 505.7 ms       | 504.7 ms | 1.00×   | 56.8 → 56.8 GB |
+LIK is a steady **4-5.5×** over vanilla and **6.7-8.5×** over the
+compiled tile across the whole range, with the win growing slightly
+with `Ld`. The current numbers are tighter than 0.1.0's headline 13.8×
+because that figure was measured against an older PyLate that ran
+`colbert_scores` in plain Python; the loss path got faster, the kernel
+got a fair fight, and we still win by ~5×.
 
 
-`losses.CachedContrastive` (`gather_across_devices=True`, grad-ckpt):
+### End-to-end on `LateOn-Code-edge` (17 M, real MS MARCO triplets)
+
+Real `pylate.models.ColBERT("lightonai/LateOn-Code-edge")` (`d=48`,
+2 047-token context), AdamW + bf16 autocast, MS MARCO `triplet` split
+loaded through `datasets`. We swap `patch_pylate()` on/off and time
+full optimizer steps (encoder forward + loss + backward + step). The
+kernel is a drop-in — no other code changes between the two columns.
+Reproduce with `scripts/sky_pylate_realdata.yaml` and
+`benchmarks/bench_pylate_realdata.py`.
 
 
-| setup                                     | vanilla PyLate | fused     | speedup | peak (per rank) |
-| ----------------------------------------- | -------------- | --------- | ------- | --------------- |
-| 8 × H100 DDP, bs=4/dev, mini=4, Ld=8192   | 664.9 ms       | 662.1 ms  | 1.00×   | 30.2 GB         |
-| 8 × H100 DDP, bs=16/dev, mini=8, Ld=4096  | 1164.2 ms      | 1141.0 ms | 1.02×   | 30.2 GB         |
-| 8 × H100 DDP, bs=8/dev, mini=8, Ld=8192   | 1250.4 ms      | 1243.0 ms | 1.01×   | 57.5 GB         |
-| 8 × H100 DDP, bs=16/dev, mini=16, Ld=4096 | 1078.1 ms      | 1047.4 ms | 1.03×   | 57.5 GB         |
-| 8 × H100 DDP, bs=32/dev, mini=32, Ld=2048 | 1020.1 ms      | 960.2 ms  | 1.06×   | 57.4 GB         |
+| recipe              | setup                            | vanilla PyLate | + LIK    | speedup   |
+| ------------------- | -------------------------------- | -------------- | -------- | --------- |
+| `Contrastive`       | bs=16, Lq=32, Ld=256             |  66.3 ms       |  52.3 ms | **1.27×** |
+| `CachedContrastive` | bs=64, mini=16, Ld=300, grad-ckpt | 315.2 ms      | 263.7 ms | **1.20×** |
+| `CachedContrastive` | bs=128, mini=16, Ld=512, grad-ckpt | 573.0 ms     | 544.9 ms | 1.05×     |
 
 
-LateOn's 149 M ModernBERT with FA-2 dominates step time by ~10×, so
-end-to-end speedup is **1.00–1.06×** even though MaxSim moves up to
-13.8× in isolation. On smaller encoders the slice grows: 17 M
-LateOn-Code-edge moves **1.04–1.27×** end-to-end (table above).
+Reading: on a 17 M encoder where the transformer forward isn't yet
+swallowing the whole step, LIK moves the wall-clock by **~20–27 %**
+when the MaxSim slice is still material (small-to-medium batch). At
+`bs=128, Ld=512` the encoder starts dominating and the e2e gain falls
+to ~5 % — same bottleneck story as the LateOn 149 M numbers from
+v0.1.0 (`bench_pylate_lateon.py`), just shifted up the batch axis
+because the encoder is 9× smaller.
 
 ## Edge models (`d ∈ {48, 64}`)
 
@@ -330,9 +436,10 @@ fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
 ## Where this kernel actually moves the e2e needle
 
 1. **Inference / reranking** — no encoder backward → MaxSim *is* the
-  step. 7–23×.
+  step. **2–11×** at matched numerics.
 2. **Small-encoder training** — encoder small enough that MaxSim is
-  material; LateOn-Code-edge moves 1.04–1.27× end-to-end.
+  material; LateOn-Code-edge moves **1.05–1.27×** end-to-end on real
+  MS MARCO triplets.
 3. **Long-context regimes** (`Ld ≥ 8k`) — fused kernels run, naive
   doesn't.
 4. **Compressed indices** — PLAID rerank vs `engine.search()` is

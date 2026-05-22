@@ -78,7 +78,13 @@ def _timed(closure, iters=50, warmup=5):
 
 
 def _chunked_vanilla(Q, D, d_mask, mini_batch_size: int):
-    """Exact shape of pylate.losses.CachedContrastive's double loop over colbert_scores."""
+    """Exact shape of pylate.losses.CachedContrastive's double loop over colbert_scores.
+
+    We always benchmark with an all-ones mask (the cached-contrastive loss
+    chunks *whole* sequences, never partial ones), so we don't pass it
+    explicitly — that also dodges signature differences between pylate
+    versions where the third positional arg has changed name.
+    """
     from pylate.scores import colbert_scores  # vanilla import, not patched
 
     bs = Q.shape[0]
@@ -88,13 +94,48 @@ def _chunked_vanilla(Q, D, d_mask, mini_batch_size: int):
         tiles = []
         for g_start in range(0, bs, mini_batch_size):
             g_end = min(g_start + mini_batch_size, bs)
-            tiles.append(
-                colbert_scores(
-                    Q[begin:end],
-                    D[g_start:g_end],
-                    d_mask[g_start:g_end],
-                )
-            )
+            tiles.append(colbert_scores(Q[begin:end], D[g_start:g_end]))
+        rows.append(torch.cat(tiles, dim=1))
+    return torch.cat(rows, dim=0)
+
+
+def _colbert_scores_tile(Q_tile, D_tile):
+    """Local re-implementation of ``pylate.scores.colbert_scores`` body.
+
+    Same einsum + ``max(-1).sum(-1)``, fp32 accumulator. Wrapping pylate's
+    actual function in ``torch.compile`` is fragile (it does Python-level
+    dispatch on tensor attributes); a local re-implementation gives
+    Inductor a clean graph while preserving the numerical contract.
+    Mask handling is dropped because the cached-contrastive bench always
+    uses all-ones masks — same simplification as ``_chunked_vanilla``.
+    """
+    S = torch.einsum("bld,ctd->bclt", Q_tile.float(), D_tile.float())
+    return S.max(-1).values.sum(-1)
+
+
+# Single global compiled tile, cached across calls. Dynamo recompiles per
+# (B, C, Lq, Ld) tuple but the bench reuses the same shape across iters
+# inside one row, so the recompile cost amortises across warmup.
+_COMPILED_TILE = torch.compile(_colbert_scores_tile, dynamic=False, mode="reduce-overhead")
+
+
+def _chunked_compile(Q, D, d_mask, mini_batch_size: int):
+    """Same chunked tiling as vanilla pylate, but tiles go through ``torch.compile``.
+
+    Inductor can fuse the tile-local ``max(-1)`` reduction but still has to
+    materialise the ``[B, C, Lq, Ld]`` similarity intermediate in HBM. This
+    baseline measures the slice of the speedup that compile alone closes.
+    ``d_mask`` is accepted for signature symmetry but unused — all-ones.
+    """
+    del d_mask
+    bs = Q.shape[0]
+    rows = []
+    for begin in range(0, bs, mini_batch_size):
+        end = min(begin + mini_batch_size, bs)
+        tiles = []
+        for g_start in range(0, bs, mini_batch_size):
+            g_end = min(g_start + mini_batch_size, bs)
+            tiles.append(_COMPILED_TILE(Q[begin:end], D[g_start:g_end]))
         rows.append(torch.cat(tiles, dim=1))
     return torch.cat(rows, dim=0)
 
@@ -105,7 +146,60 @@ def _flash_one_call(Q, D, d_mask):
     return maxsim(Q, D, d_mask=d_mask.bool() if d_mask is not None else None)
 
 
+def _parity_check(batch, Lq, Ld, variants):
+    """Confirm vanilla pylate, torch.compile and LIK agree on the same input.
+
+    Runs on a downsampled ``(bs=min(8, batch))`` probe so the similarity
+    tensor for the vanilla path always fits in HBM regardless of how big
+    the timing run is going to be. Uses ``no_grad``. Tolerances are loose
+    (``atol=2e-2``) because pylate's ``colbert_scores`` does the final
+    ``sum(-1)`` in input dtype (fp16) while LIK accumulates in fp32 —
+    bf16/fp16 accumulator drift is real and known. The threshold catches
+    any *structural* bug (wrong shape, missing mask, off-by-one chunking)
+    without false-positive on legitimate accumulator-precision drift.
+    """
+    probe_bs = min(8, batch)
+    Q = _synth(probe_bs, Lq, D_MODEL, "cuda").detach()
+    D_ = _synth(probe_bs, Ld, D_MODEL, "cuda").detach()
+    d_mask = torch.ones(probe_bs, Ld, device="cuda", dtype=torch.float16)
+
+    outputs = {}
+    try:
+        with torch.no_grad():
+            if "vanilla" in variants:
+                outputs["vanilla"] = _chunked_vanilla(Q, D_, d_mask, probe_bs).float()
+            if "compile" in variants:
+                outputs["compile"] = _chunked_compile(Q, D_, d_mask, probe_bs).float()
+            if "flash" in variants:
+                outputs["flash"] = _flash_one_call(Q, D_, d_mask).float()
+    except torch.cuda.OutOfMemoryError:
+        print(f"  [warn] parity probe OOM at bs={probe_bs} Ld={Ld}, skipping")
+        del Q, D_, d_mask
+        gc.collect()
+        torch.cuda.empty_cache()
+        return
+
+    labels = list(outputs)
+    if len(labels) >= 2:
+        ref_label = "vanilla" if "vanilla" in outputs else labels[0]
+        ref = outputs[ref_label]
+        for label, out in outputs.items():
+            if label == ref_label:
+                continue
+            if not torch.allclose(out, ref, atol=2e-2, rtol=2e-2):
+                diff = (out - ref).abs()
+                raise AssertionError(
+                    f"[parity bs={probe_bs} Ld={Ld}] {label} disagrees with {ref_label}: "
+                    f"max abs diff {diff.max().item():.3g}"
+                )
+    del Q, D_, d_mask, outputs
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
 def run_shape(name, batch, mini, Lq, Ld, variants, iters, warmup):
+    _parity_check(batch, Lq, Ld, variants)
+
     row = {"shape": name, "batch": batch, "mini": mini, "Lq": Lq, "Ld": Ld}
 
     for variant in variants:
@@ -116,21 +210,20 @@ def run_shape(name, batch, mini, Lq, Ld, variants, iters, warmup):
         D_ = _synth(batch, Ld, D_MODEL, "cuda")
         d_mask = torch.ones(batch, Ld, device="cuda", dtype=torch.float16)
 
-        def _fwd():
+        def _run_variant():
             if variant == "vanilla":
-                out = _chunked_vanilla(Q, D_, d_mask, mini)
-            else:
-                out = _flash_one_call(Q, D_, d_mask)
-            out.sum()
+                return _chunked_vanilla(Q, D_, d_mask, mini)
+            if variant == "compile":
+                return _chunked_compile(Q, D_, d_mask, mini)
+            return _flash_one_call(Q, D_, d_mask)
+
+        def _fwd():
+            _run_variant().sum()
 
         def _fwdbwd():
             Q.grad = None
             D_.grad = None
-            if variant == "vanilla":
-                out = _chunked_vanilla(Q, D_, d_mask, mini)
-            else:
-                out = _flash_one_call(Q, D_, d_mask)
-            out.sum().backward()
+            _run_variant().sum().backward()
 
         try:
             fwd_ms = _timed(_fwd, iters=iters, warmup=warmup)
@@ -163,45 +256,40 @@ def main():
     ap.add_argument("--outdir", default="benchmarks/results")
     ap.add_argument("--iters", type=int, default=50)
     ap.add_argument("--warmup", type=int, default=5)
-    ap.add_argument("--only", choices=["both", "vanilla", "flash"], default="both")
+    ap.add_argument(
+        "--only",
+        choices=["all", "vanilla", "compile", "flash"],
+        default="all",
+        help="Which baselines to run. `all` runs vanilla pylate + torch.compile + LIK.",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
 
-    variants = ["vanilla", "flash"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "compile", "flash"] if args.only == "all" else [args.only]
 
     print(
-        f"{'shape':<20} {'tiles':>5} "
-        f"{'v_fwd':>8} {'v_bwd':>8} {'v_peak_GB':>10} "
-        f"{'f_fwd':>8} {'f_bwd':>8} {'f_peak_GB':>10} "
-        f"{'fwd_x':>6} {'bwd_x':>6} {'mem_x':>6}"
+        f"{'shape':<20} {'tiles':>5} {'v_bwd':>8} {'c_bwd':>8} {'f_bwd':>8}  {'v/f':>6} {'c/f':>6} {'v/c':>6}"
     )
     rows = []
     for name, batch, mini, Lq, Ld in SHAPES:
         row = run_shape(name, batch, mini, Lq, Ld, variants, iters=args.iters, warmup=args.warmup)
         rows.append(row)
 
-        v_fwd = row.get("vanilla_fwd", float("nan"))
         v_bwd = row.get("vanilla_fwdbwd", float("nan"))
-        v_peak = row.get("vanilla_peak", float("nan"))
-        f_fwd = row.get("flash_fwd", float("nan"))
+        c_bwd = row.get("compile_fwdbwd", float("nan"))
         f_bwd = row.get("flash_fwdbwd", float("nan"))
-        f_peak = row.get("flash_peak", float("nan"))
 
         def ratio(a, b):
             if a != a or b != b or b == 0:
                 return float("nan")
             return a / b
 
-        fwd_x = ratio(v_fwd, f_fwd)
-        bwd_x = ratio(v_bwd, f_bwd)
-        mem_x = ratio(v_peak, f_peak)
         print(
             f"{name:<20} {row['tiles']:>5} "
-            f"{fmt(v_fwd)} {fmt(v_bwd)} {fmt(v_peak)} "
-            f"{fmt(f_fwd)} {fmt(f_bwd)} {fmt(f_peak)} "
-            f"{fmt(fwd_x)} {fmt(bwd_x)} {fmt(mem_x)}"
+            f"{fmt(v_bwd)} {fmt(c_bwd)} {fmt(f_bwd)}  "
+            f"{fmt(ratio(v_bwd, f_bwd))} {fmt(ratio(c_bwd, f_bwd))} {fmt(ratio(v_bwd, c_bwd))}"
         )
 
     fn = os.path.join(args.outdir, f"cached_maxsim_{gpu}.json")

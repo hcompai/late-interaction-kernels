@@ -1,0 +1,103 @@
+# Real MS MARCO triplets — long-document regime (Ld up to 2048–4096).
+#
+#   sky launch scripts/sky_pylate_realdata_long.yaml -c lik-pylate-long -y
+#
+# Same stack as sky_pylate_realdata.yaml; only the shapes change so we
+# can see LIK win when MaxSim is a larger slice of the training step.
+
+name: lik-pylate-realdata-long
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  pip install --no-cache-dir --break-system-packages -e ".[dev,pylate]" --force-reinstall --no-deps
+  pip install --no-cache-dir --break-system-packages --no-deps "pylate==1.3.4"
+  pip install --no-cache-dir --break-system-packages \
+      "sentence-transformers==5.1.1" \
+      "transformers>=4.41,<=4.56.2" \
+      "accelerate>=0.31" \
+      "datasets>=2.14,<4" \
+      "pandas>=2.2.1,<4" \
+      "tokenizers>=0.19"
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export LIK_SUPPRESS_NORM_WARN=1
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  ART=/tmp/pylate_realdata_long_${STAMP}
+  mkdir -p "${ART}"
+
+  EDGE="lightonai/LateOn-Code-edge"
+  CODE="lightonai/LateOn-Code"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — contrastive bs=8 Lq=32 Ld=2048 (edge max)"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${EDGE}" \
+      --recipe contrastive \
+      --batch-size 8 --Lq 32 --Ld 2048 \
+      --max-samples 256 --steps 12 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/contrastive_bs8_ld2048.log"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — cached bs=64 mini=16 Lq=32 Ld=2048"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${EDGE}" \
+      --recipe reason \
+      --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+      --max-samples 384 --steps 10 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs64_ld2048.log"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — cached bs=128 mini=16 Lq=32 Ld=2048"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${EDGE}" \
+      --recipe reason \
+      --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+      --max-samples 512 --steps 8 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs128_ld2048.log"
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — cached bs=64 mini=8 Lq=128 Ld=2048 (long Q+doc)"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${EDGE}" \
+      --recipe reason \
+      --batch-size 64 --mini-batch-size 8 --Lq 128 --Ld 2048 \
+      --max-samples 256 --steps 8 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs64_lq128_ld2048.log" || true
+
+  echo "=============================================================="
+  echo "  Real MS MARCO — cached bs=32 mini=16 Ld=4096 (LateOn-Code)"
+  echo "=============================================================="
+  python benchmarks/bench_pylate_realdata.py \
+      --model "${CODE}" \
+      --recipe reason \
+      --batch-size 32 --mini-batch-size 16 --Lq 32 --Ld 4096 \
+      --max-samples 256 --steps 6 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/cached_bs32_ld4096_lateon_code.log" || true
+
+  echo "Artifacts: ${ART}"
+  ls -la "${ART}"
