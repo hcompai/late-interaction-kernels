@@ -1,0 +1,65 @@
+# Reproduce v0.1.0 forward numbers on the current H100 stack to
+# disentangle:
+#   (a) "upstream torch got faster" → baseline (naive) went down
+#   (b) "our autotune pool got smaller" → LIK regressed on tiny shapes
+#
+# Installs late-interaction-kernels==0.1.0 from PyPI, runs the headline
+# shapes, then upgrades to the local source tree (current HEAD) and
+# re-runs. Same torch / triton / GPU between the two runs.
+#
+#   sky launch -c lik-regress scripts/sky_bench_regression_check.yaml -y
+#   sky logs lik-regress
+#   sky down lik-regress -y
+
+name: lik-regress
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 8+
+
+workdir: .
+
+setup: |
+  set -eux
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+  pip install --no-cache-dir --break-system-packages "late-interaction-kernels==0.1.0"
+  python -c "import torch, triton, late_interaction_kernels as lik; print('torch', torch.__version__); print('triton', triton.__version__); print('lik', lik.__version__)"
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.0
+  mkdir -p /tmp/regress
+
+  python -c "import torch; print('GPU:', torch.cuda.get_device_name())"
+
+  echo "============================================================"
+  echo "  Phase 1 — late-interaction-kernels==0.1.0 (from PyPI)"
+  echo "============================================================"
+  python scripts/_regress_bench.py --label v0.1.0 --out /tmp/regress/v010.json
+
+  echo "============================================================"
+  echo "  Phase 2 — current HEAD (this PR)"
+  echo "============================================================"
+  pip uninstall -y --break-system-packages late-interaction-kernels
+  pip install --no-cache-dir --break-system-packages -e ".[dev]" --no-deps
+  python scripts/_regress_bench.py --label HEAD --out /tmp/regress/head.json
+
+  echo "============================================================"
+  echo "  Side-by-side"
+  echo "============================================================"
+  python - <<'PY'
+  import json
+  v = json.load(open("/tmp/regress/v010.json"))["results"]
+  h = json.load(open("/tmp/regress/head.json"))["results"]
+  print(f"{'shape':<22} {'v0.1.0 LIK':>10} {'HEAD LIK':>10} {'Δ%':>7}   "
+        f"{'v0.1.0 naive':>13} {'HEAD naive':>11} {'v0.1.0 ratio':>13} {'HEAD ratio':>11}")
+  for a, b in zip(v, h):
+      dl = (b["lik_ms"] - a["lik_ms"]) / a["lik_ms"] * 100
+      ra = a["naive_ms"] / a["lik_ms"] if a["naive_ms"] == a["naive_ms"] else float("nan")
+      rb = b["naive_ms"] / b["lik_ms"] if b["naive_ms"] == b["naive_ms"] else float("nan")
+      print(f"{a['name']:<22} {a['lik_ms']:10.4f} {b['lik_ms']:10.4f} {dl:+7.1f}%   "
+            f"{a['naive_ms']:13.4f} {b['naive_ms']:11.4f} {ra:13.2f}x {rb:11.2f}x")
+  PY
