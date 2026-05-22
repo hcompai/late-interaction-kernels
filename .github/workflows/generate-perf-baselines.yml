@@ -1,0 +1,73 @@
+name: Generate perf baselines
+
+# One-shot, manually-triggered workflow that regenerates the perf-regression
+# baseline for the runner's GPU class. Runs the same suite as the `perf`
+# bucket in gpu-ci.yml but with `--update-perf-baseline`, which makes
+# `check_regression` record timings instead of asserting. The resulting
+# `benchmarks/baselines/{GPU}.json` is committed back to the branch this
+# workflow is dispatched from.
+#
+# Trigger from the Actions tab (or `gh workflow run generate-perf-baselines.yml
+# --ref <branch>`), then open a PR from that branch to land the baseline.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate baselines on ${{ matrix.runner }}
+    # Same GPU runner + container as gpu-ci.yml so the baseline timings come
+    # from the exact hardware that will later enforce them.
+    runs-on: late-interaction-kernels-runner
+    container:
+      image: nvcr.io/nvidia/pytorch:25.06-py3
+      options: --gpus all --ipc=host
+    env:
+      LIK_SUPPRESS_NORM_WARN: "1"
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: GPU sanity check
+        run: |
+          nvidia-smi
+          python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+      - name: Install package
+        run: pip install --no-cache-dir -e ".[dev]"
+
+      - name: Generate baselines
+        # `check_regression` flips into record-mode under --update-perf-baseline
+        # and `pytest_sessionfinish` writes benchmarks/baselines/{GPU}.json.
+        run: pytest tests/regression/ -v -m perf --update-perf-baseline
+
+      - name: Show generated baseline
+        run: |
+          ls -la benchmarks/baselines/
+          for f in benchmarks/baselines/*.json; do
+            echo "--- $f ---"
+            cat "$f"
+          done
+
+      - name: Commit and push baseline
+        run: |
+          # Containerized git refuses to operate on a workspace owned by a
+          # different uid without this.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- benchmarks/baselines/ && \
+             [ -z "$(git ls-files --others --exclude-standard benchmarks/baselines/)" ]; then
+            echo "No baseline changes — nothing to commit."
+            exit 0
+          fi
+          git add benchmarks/baselines/
+          git commit -m "ci: regenerate perf baselines on $(python -c 'import torch; print(torch.cuda.get_device_name(0))')"
+          git push origin HEAD:${{ github.ref_name }}
