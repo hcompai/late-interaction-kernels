@@ -45,7 +45,7 @@ import argparse
 import json
 import os
 import subprocess
-from typing import Callable
+from collections.abc import Callable
 
 # Silence LIK's "Q is not unit-norm" warning — the bench uses ``randn`` Q/D
 # (not real encoder outputs) and the parity check anchors against the same
