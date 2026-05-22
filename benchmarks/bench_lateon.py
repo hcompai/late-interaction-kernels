@@ -32,6 +32,7 @@ is itself the story.
 """
 
 import argparse
+import gc
 import json
 import os
 
@@ -143,7 +144,8 @@ def main():
             try:
                 _assert_parity(name, Q, D)
             except torch.cuda.OutOfMemoryError:
-                pass
+                gc.collect()
+                torch.cuda.empty_cache()
 
         # ---- Forward (inference, no autograd) ----
         def fwd_fast():
