@@ -115,7 +115,7 @@ Empty sequences contribute zero, same as the padded path. The fused
 backward writes per-pair argmax into the packed gradient layout via fp32
 `atomic_add`.
 
-`maxsim_inference_scatter` is the same forward but for arbitrary
+`score_pairs_packed` is the same forward but for arbitrary
 `(query_index, doc_index)` pairs from the packed batches — output is
 `[num_pairs]` rather than `[Nq, Nd]`. Use it when the pair list is
 sparse relative to `Nq · Nd` (typical reranker scheduling, e.g. inside
