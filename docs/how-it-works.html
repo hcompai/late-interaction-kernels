@@ -644,7 +644,7 @@
     Late-interaction retrieval models compare every query token to every
     document token. A direct implementation builds a four-dimensional similarity
     tensor that overflows GPU memory at modern context lengths. The kernels in
-    this library compute the same result without ever storing that tensor — by
+    this library compute the same result without ever storing that tensor, by
     streaming tiles through on-chip memory and folding the reductions into the
     same pass.
   </p>
@@ -655,10 +655,22 @@
   <h2><span class="num">1</span>The MaxSim score</h2>
 
   <p>
-    For a batch of queries $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ and
-    documents $\Dm \in \mathbb{R}^{N_d \times L_d \times d}$ — token-level
-    embeddings, where $L_q$ and $L_d$ are token counts per item and $d$ is the
-    embedding dimension — MaxSim scores every (query, document) pair as:
+    MaxSim is the scoring function ColBERT-style late-interaction models use.
+    The inputs are two batches of token-level embeddings:
+  </p>
+
+  <ul>
+    <li>
+      $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$: $N_q$ queries, each
+      with $L_q$ token vectors of dimension $d$.
+    </li>
+    <li>
+      $\Dm \in \mathbb{R}^{N_d \times L_d \times d}$: same shape, for documents.
+    </li>
+  </ul>
+
+  <p>
+    For every (query $i$, document $j$) pair, the score is:
   </p>
 
   <p>
@@ -666,19 +678,21 @@
   </p>
 
   <p>
-    In words: for each query token, take the largest inner product against any
-    document token, and sum across the query. The output is a matrix of scores
-    in $\mathbb{R}^{N_q \times N_d}$. Optional boolean masks drop padding
-    tokens from the sum and from the inner max.
+    For each query token, find the document token it matches best (highest
+    inner product), then sum those best matches across all query tokens.
+    The result is a score matrix in $\mathbb{R}^{N_q \times N_d}$. Optional
+    boolean masks drop padding tokens from the sum and from the inner max.
   </p>
 
   <div class="note">
-    <strong>Why this is hard.</strong> Computing one score touches every
-    $(s, t)$ pair, i.e. $L_q \cdot L_d$ inner products. At ColPali scale
-    ($L_q = L_d = 1024$) that is over a million dot products <em>per
-    query–document pair</em>. The interesting question is not how many
-    operations to do — the GPU can do them — but how to do them without
-    spilling intermediate results to off-chip memory.
+    <strong>The problem to solve.</strong>
+    Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
+    tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, batch
+    of 64 pairs) that tensor is 8 GB in fp16. Each element is written once
+    and read twice, so the GPU spends most of its time on HBM traffic, not
+    compute. The kernels in this library compute the same result without ever
+    materialising that tensor, by streaming $B_q \times B_d$ tiles through
+    on-chip memory and folding the reductions into the same pass.
   </div>
 </section>
 
@@ -1068,8 +1082,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     Peak SRAM per program is
     $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ for the operand tiles plus
     $\text{BLOCK\_Q} \cdot \text{BLOCK\_D}$ for the score tile, in low
-    precision, with a $[\text{BLOCK\_Q}]$ fp32 accumulator on top — roughly
-    40 KiB at typical block sizes, leaving room for four concurrent programs
+    precision, with a $[\text{BLOCK\_Q}]$ fp32 accumulator on top (roughly
+    40 KiB at typical block sizes), leaving room for four concurrent programs
     per H100 SM.
   </p>
 
@@ -1154,7 +1168,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <div class="note">
     <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
     softmax has to track $m$ <em>and</em> the running sum of exponentials
-    $\ell$, and rescale both whenever the running max changes — the rescalers
+    $\ell$, and rescale both whenever the running max changes: the rescalers
     are the $\exp(m^{(k-1)} - m^{(k)})$ factors in FA-1. Online max has no such
     rescaler: $\max$ is idempotent, so the update is just an elementwise max
     and the result is identical to the offline computation.
@@ -1188,8 +1202,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h2><span class="num">7</span>Backward: argmax-only gradients</h2>
 
   <p>
-    Because $\max$ is sub-differentiable — only the argmax position carries a
-    gradient — the backward pass is simpler than for softmax. With
+    $\max$ is sub-differentiable: only the argmax position carries a gradient,
+    so the backward pass is simpler than for softmax. With
     $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score:
   </p>
 
@@ -1201,14 +1215,14 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $\nabla_D$ has the symmetric form, summed over the $(i, s)$ pairs whose
     argmax falls on the same $(j, t)$. To avoid recomputing the forward, the
     forward kernel optionally writes an $[N_q \cdot N_d, L_q]$ int32 buffer of
-    argmax indices — 4 MB for a typical training batch.
+    argmax indices (4 MB for a typical training batch).
   </p>
 
   <p>
     $\nabla_Q$ is embarrassingly parallel: one program per $(i, s)$ gathers
     $D_{j, \text{argmax}}$ across $j$ and produces a single output row.
-    $\nabla_D$ has output contention — many $(i, s)$ pairs can land on the
-    same $(j, t)$ — and the library offers three reduction strategies:
+    $\nabla_D$ has output contention: many $(i, s)$ pairs can land on the
+    same $(j, t)$. The library offers three reduction strategies:
   </p>
 
   <table class="tbl">
@@ -1268,8 +1282,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     On full encoder training the MaxSim step is dominated by the transformer
     forward/backward, so the kernel is effectively a free drop-in. Everywhere
-    MaxSim is not negligible — inference, reranking, long documents, knowledge
-    distillation, compressed indices, small encoders — the fused path
+    MaxSim is not negligible (inference, reranking, long documents, knowledge
+    distillation, compressed indices, small encoders), the fused path
     dominates.
   </p>
 </section>
@@ -1306,7 +1320,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       The doc embeddings live on disk as
       $(\text{centroid index}, \text{quantised residual})$. The kernel
       decompresses on the fly in SRAM, optionally L2-normalises, and runs
-      MaxSim — all in one program, with no dense decompressed tensor ever
+      MaxSim, all in one program with no dense decompressed tensor ever
       materialised.
     </li>
     <li>
