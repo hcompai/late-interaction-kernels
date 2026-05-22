@@ -74,6 +74,13 @@
     --s-idle:    oklch(93% 0.018 30);   --s-active:    oklch(55% 0.07 30);   /* warm clay — ephemeral S */
     --o-idle:    oklch(93% 0.030 65);   --o-active:    oklch(52% 0.14 65);   /* ochre — running max */
     --done:      oklch(90% 0.045 150);
+
+    /* dedicated math-glyph colors — pushed near sRGB gamut limits so
+       thin serif KaTeX glyphs actually read on warm paper */
+    --math-q:    oklch(42% 0.28 260);   /* deep cobalt blue — Q  */
+    --math-d:    #a5be00;               /* lime — D              */
+    --math-m:    oklch(56% 0.20 60);    /* amber — running max   */
+    --math-s:    oklch(48% 0.22 26);    /* clay-red — S          */
   }
   html[data-theme="dark"] {
     --bg:        oklch(15% 0.014 65);
@@ -97,6 +104,11 @@
     --s-idle:    oklch(28% 0.030 30);   --s-active:    oklch(64% 0.08 30);
     --o-idle:    oklch(28% 0.045 65);   --o-active:    oklch(60% 0.15 65);
     --done:      oklch(32% 0.055 150);
+
+    --math-q:    oklch(76% 0.22 260);
+    --math-d:    #a5be00;
+    --math-m:    oklch(82% 0.18 60);
+    --math-s:    oklch(78% 0.19 26);
   }
 
   /* ===================== BASE ===================== */
@@ -589,12 +601,12 @@
 
   /* ===================== MATH SYMBOL COLORS =====================
      Used selectively in the defining equations only — not every
-     inline $Q$. Mirrors the animation palette so prose, formulas,
-     and the SVG tile-walker speak the same color language. */
-  .katex .lik-q { color: var(--q-active); }
-  .katex .lik-d { color: var(--d-active); }
-  .katex .lik-m { color: var(--o-active); }
-  .katex .lik-s { color: var(--s-active); }
+     inline $Q$. Uses dedicated --math-* tokens (higher chroma than
+     the animation channels) so thin serif glyphs read on paper. */
+  .katex .lik-q { color: var(--math-q); }
+  .katex .lik-d { color: var(--math-d); }
+  .katex .lik-m { color: var(--math-m); }
+  .katex .lik-s { color: var(--math-s); }
 
   /* Scrollbar — quiet, in-palette */
   .anim-log::-webkit-scrollbar { width: 8px; }
@@ -641,13 +653,13 @@
     <li><a href="#fused">Fused forward: tile, stream, accumulate</a></li>
     <li><a href="#online-max">The online-max recurrence</a></li>
     <li><a href="#backward">Backward: argmax-only gradients</a></li>
-    <li><a href="#perf">Performance summary</a></li>
     <li><a href="#variants">Variants in the library</a></li>
   </ol>
   <div class="toc-appendix-label">Appendix</div>
   <ol id="toc-appendix" class="toc-appendix">
     <li><a href="#hierarchy">GPU memory hierarchy</a></li>
     <li><a href="#intensity">Arithmetic intensity</a></li>
+    <li><a href="#derivation">Deriving the backward gradients</a></li>
   </ol>
 </aside>
 
@@ -935,11 +947,11 @@
   </div>
 
   <p>
-    Each inner-loop iteration loads a fresh $D$ tile, multiplies it against the
-    resident $Q$ tile on the tensor cores, takes the row-wise max of the
-    resulting $S$ tile, and merges it into $m$. After the inner loop finishes,
-    $m$ holds the true per-row maximum over the full $L_d$ axis, and the
-    program adds $\sum m$ to its scalar accumulator. After the outer loop
+    Each inner-loop iteration loads a fresh $\Dm$ tile, multiplies it against the
+    resident $\Qm$ tile on the tensor cores, takes the row-wise max of the
+    resulting $\Sm$ tile, and merges it into $\Mm$. After the inner loop finishes,
+    $\Mm$ holds the true per-row maximum over the full $L_d$ axis, and the
+    program adds $\sum \Mm$ to its scalar accumulator. After the outer loop
     finishes, that accumulator is written to HBM. One pair, one scalar, one
     store.
   </p>
@@ -968,12 +980,12 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 </code></pre>
 
   <p>
-    The full similarity tensor $S$ is written to HBM, then read back to take
+    The full similarity tensor $\Sm$ is written to HBM, then read back to take
     the row-wise max, then read again for the sum. Its memory footprint is
   </p>
 
   <p>
-    $$\text{bytes}(S) \;=\; N_q \cdot N_d \cdot L_q \cdot L_d \cdot \text{sizeof(float)}.$$
+    $$\text{bytes}(\Sm) \;=\; N_q \cdot N_d \cdot L_q \cdot L_d \cdot \text{sizeof(float)}.$$
   </p>
 
   <p>
@@ -1049,7 +1061,7 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Beyond the memory pressure, the naive version is bandwidth-bound: each
-    element of $S$ is written to HBM once and read twice for a single
+    element of $\Sm$ is written to HBM once and read twice for a single
     multiply-add per element. The arithmetic intensity is far below the H100
     ridge point, so the SMs spend most of their time waiting on memory.
     Appendix <a href="#intensity">B</a> works the FLOP-per-byte numbers out
@@ -1065,7 +1077,7 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
     Spelling out the loop nest sketched in section <a href="#inside">3</a>: one
     Triton program per $(q\text{-batch}, d\text{-batch})$ pair, document tiles
     of $\text{BLOCK\_D}$ rows nested inside query tiles of $\text{BLOCK\_Q}$
-    rows. The full similarity tensor $S$ never exists in HBM. Only the
+    rows. The full similarity tensor $\Sm$ never exists in HBM. Only the
     $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in SRAM
     for the duration of one tile-matmul.
   </p>
@@ -1163,7 +1175,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     To eliminate the score tile entirely, the inner loop replaces every value
-    of $S$ with its contribution to the per-row maximum, which we update
+    of $\Sm$ with its contribution to the per-row maximum, which we update
     incrementally. After consuming the $k$-th tile, the running max obeys
   </p>
 
@@ -1172,8 +1184,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    with $m^{(0)} = -\infty$. After all tiles are consumed, $m$ is the true
-    per-row maximum and $\sum_s m_s$ is the score contribution for the current
+    with $\Mm^{(0)} = -\infty$. After all tiles are consumed, $\Mm$ is the true
+    per-row maximum and $\sum_s \Mm_s$ is the score contribution for the current
     $\text{BLOCK\_Q}$. Both quantities are computed in fp32 in registers; the
     GEMM uses bf16/fp16 operands with fp32 accumulation, matching the
     tensor-core native path.
@@ -1181,9 +1193,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <div class="note">
     <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
-    softmax has to track $m$ <em>and</em> the running sum of exponentials
+    softmax has to track $\Mm$ <em>and</em> the running sum of exponentials
     $\ell$, and rescale both whenever the running max changes: the rescalers
-    are the $\exp(m^{(k-1)} - m^{(k)})$ factors in FA-1. Online max has no such
+    are the $\exp(\Mm^{(k-1)} - \Mm^{(k)})$ factors in FA-1. Online max has no such
     rescaler: $\max$ is idempotent, so the update is just an elementwise max
     and the result is identical to the offline computation.
   </div>
@@ -1193,7 +1205,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <table class="tbl">
     <thead>
-      <tr><th>Tile</th><th>$S$ row (values seen this tile)</th><th>tile max</th><th>running max after tile</th><th>argmax (global $t$)</th></tr>
+      <tr><th>Tile</th><th>$\Sm$ row (values seen this tile)</th><th>tile max</th><th>running max after tile</th><th>argmax (global $t$)</th></tr>
     </thead>
     <tbody>
       <tr><td>0</td><td><span class="mono">[0.42, 0.11, 0.30, 0.18]</span></td><td class="num">0.42</td><td class="num">0.42</td><td class="num">0</td></tr>
@@ -1218,25 +1230,24 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     $\max$ is sub-differentiable: only the argmax position carries a gradient,
     so the backward pass is simpler than for softmax. With
-    $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score:
+    $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score,
+    a short chain-rule walk (Appendix <a href="#derivation">C</a>) gives:
   </p>
 
   <p>
-    $$\nabla_Q \, Q_{i, s} \;=\; q\text{-}\text{mask}_{i,s} \cdot \sum_{j} g_{i,j} \cdot D_{j,\; \operatorname{argmax}_t \langle Q_{i,s}, D_{j,t}\rangle}.$$
+    $$\nabla_{\Qm_{i, s}} \;=\; m^q_{i,s} \cdot \sum_{j} g_{i,j} \cdot \Dm_{j,\; \operatorname{argmax}_t \langle \Qm_{i,s}, \Dm_{j,t}\rangle},$$
+    $$\nabla_{\Dm_{j, t}} \;=\; \sum_{(i, s)\, :\, \operatorname{argmax}[i, j, s] \,=\, t} m^q_{i,s} \cdot g_{i, j} \cdot \Qm_{i, s}.$$
   </p>
 
   <p>
-    $\nabla_D$ has the symmetric form, summed over the $(i, s)$ pairs whose
-    argmax falls on the same $(j, t)$. To avoid recomputing the forward, the
-    forward kernel optionally writes an $[N_q \cdot N_d, L_q]$ int32 buffer of
-    argmax indices (4 MB for a typical training batch).
-  </p>
-
-  <p>
-    $\nabla_Q$ is embarrassingly parallel: one program per $(i, s)$ gathers
-    $D_{j, \text{argmax}}$ across $j$ and produces a single output row.
-    $\nabla_D$ has output contention: many $(i, s)$ pairs can land on the
-    same $(j, t)$. The library offers three reduction strategies:
+    To avoid recomputing the forward, the forward kernel optionally writes
+    an $[N_q \cdot N_d, L_q]$ int32 buffer of argmax indices (4 MB for a
+    typical training batch). $\nabla_{\Qm}$ is then embarrassingly parallel:
+    one program per $(i, s)$ gathers $\Dm_{j, \text{argmax}}$ across $j$ and
+    produces a single output row. $\nabla_{\Dm}$ is the hard one — many
+    $(i, s)$ pairs can land on the same $(j, t)$, and the collision
+    pattern is data-dependent on the argmax. The library offers three
+    reduction strategies:
   </p>
 
   <table class="tbl">
@@ -1245,12 +1256,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>unified</code></td>
         <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default. Single-pass fused $\nabla_Q + \nabla_D$, fp32 atomic add.</td>
+        <td>Default. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
       </tr>
       <tr>
         <td><code>csr</code></td>
         <td>yes</td>
-        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$). Radix-sorts $(i,s)$ by argmax into per-$j$ CSR buckets so each $(j, t)$ output is reduced in a single program.</td>
+        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$), or any time bitwise determinism matters.</td>
       </tr>
       <tr>
         <td><code>atomic</code></td>
@@ -1260,51 +1271,30 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     </tbody>
   </table>
 
+  <div class="note">
+    <strong>What CSR is doing here.</strong>
+    <em>CSR</em> is the classic Compressed Sparse Row layout — a
+    <code>row_ptr</code> index plus a flat array sorted by row. The
+    other two paths live with the scatter pattern at runtime and use
+    atomic adds; the CSR path <em>inverts</em> it. A one-shot batched
+    radix-sort of $(i, s)$ by argmax (plus a <code>searchsorted</code>)
+    builds per-$j$ buckets, then one Triton program per $(j, t)$ output
+    row reduces its private bucket in registers and writes once — no
+    atomics, bitwise-stable across launches. The sort only pays off
+    when atomics would actually serialise, which is exactly the
+    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime the dispatcher flags.
+  </div>
+
   <p>
     All three paths use Triton's stable <code>argmax</code> (lowest-index
-    tie-break) on the forward, so only the $\nabla_D$ reduction order
+    tie-break) on the forward, so only the $\nabla_{\Dm}$ reduction order
     distinguishes them numerically.
   </p>
 </section>
 
 <!-- ============================================================ -->
-<section id="perf">
-  <h2><span class="num">8</span>Performance summary</h2>
-
-  <p>
-    Measured on a single H100 80 GB SXM with bf16/fp16 inputs and fp32
-    accumulators, 50-iteration median; baselines are the same operation in
-    plain PyTorch. Full shapes and reproduction commands are in
-    <a href="benchmarks.md">docs/benchmarks.md</a>.
-  </p>
-
-  <table class="tbl">
-    <thead>
-      <tr><th>Workload</th><th>Speedup vs PyTorch</th></tr>
-    </thead>
-    <tbody>
-      <tr><td>Reranking / inference (small to medium)</td>           <td class="num">7 – 23×</td></tr>
-      <tr><td>Long-context ($L_d \geq 8\text{k}$) reranking</td>     <td class="num">runs · naive OOMs</td></tr>
-      <tr><td>PyLate cached-contrastive MaxSim + backward</td>       <td class="num">up to 13.8×</td></tr>
-      <tr><td>PLAID rerank vs <code>fast_plaid.engine.search()</code></td><td class="num">19 – 30×</td></tr>
-      <tr><td>Fused $D$-side head (training)</td>                    <td class="num">1.5 – 4.6×</td></tr>
-      <tr><td>FP8 MaxSim inference (Hopper)</td>                     <td class="num">up to 1.4×</td></tr>
-      <tr><td>End-to-end ModernColBERT training (149 M params)</td>  <td class="num">1.0 – 1.06× (free swap)</td></tr>
-    </tbody>
-  </table>
-
-  <p>
-    On full encoder training the MaxSim step is dominated by the transformer
-    forward/backward, so the kernel is effectively a free drop-in. Everywhere
-    MaxSim is not negligible (inference, reranking, long documents, knowledge
-    distillation, compressed indices, small encoders), the fused path
-    dominates.
-  </p>
-</section>
-
-<!-- ============================================================ -->
 <section id="variants">
-  <h2><span class="num">9</span>Variants in the library</h2>
+  <h2><span class="num">8</span>Variants in the library</h2>
 
   <p>
     The streaming-and-never-storing structure is the entire optimisation. The
@@ -1403,9 +1393,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    Scoring one $(Q, D)$ pair is $2 L_q L_d \, d$ FLOPs of matmul plus a few
+    Scoring one $(\Qm, \Dm)$ pair is $2 L_q L_d \, d$ FLOPs of matmul plus a few
     cheap reductions. The two implementations differ only in what they push
-    through HBM. The naive form materialises the score tile $S$, so its
+    through HBM. The naive form materialises the score tile $\Sm$, so its
     traffic is dominated by the $L_q \times L_d$ surface (read + write,
     fp16):
   </p>
@@ -1416,8 +1406,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    The fused form never writes $S$; the only HBM traffic is the operand
-    reads $Q$ and $D$:
+    The fused form never writes $\Sm$; the only HBM traffic is the operand
+    reads $\Qm$ and $\Dm$:
   </p>
 
   <p>
@@ -1482,6 +1472,117 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     Fusing is not faster because the arithmetic is cheaper. It is the same
     matmul. It is faster because the matmul never has to wait for memory.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section id="derivation" class="appendix">
+  <h2><span class="num">C</span>Deriving the backward gradients</h2>
+
+  <p>
+    Section <a href="#backward">7</a> quotes the closed forms for
+    $\nabla_{\Qm}$ and $\nabla_{\Dm}$. They drop out of the forward
+    formula in three short steps: resolve the $\max$, apply the chain
+    rule, then read off the two cases.
+  </p>
+
+  <h3>Resolving the max</h3>
+
+  <p>
+    Once the forward has run, define the winner for each query token:
+  </p>
+
+  <p>
+    $$t^{\star}(i, j, s) \;=\; \arg\max_{t} \, \langle \Qm_{i, s},\, \Dm_{j, t}\rangle.$$
+  </p>
+
+  <p>
+    The score then collapses into a plain sum of inner products at the
+    winning slots — the $\max$ has been resolved into a concrete index:
+  </p>
+
+  <p>
+    $$\text{score}(i, j) \;=\; \sum_{s} \langle \Qm_{i, s},\, \Dm_{j,\, t^{\star}(i, j, s)}\rangle.$$
+  </p>
+
+  <p>
+    $\max$ is non-smooth, but at any non-tied point its subgradient
+    equals the gradient of whichever term achieves the maximum. So
+    locally, for a perturbation small enough that no argmax flips,
+    $\text{score}(i, j)$ is just a sum of bilinear terms in $\Qm$ and
+    $\Dm$, and $t^{\star}$ is a constant we read out of the saved
+    buffer.
+  </p>
+
+  <h3>Chain rule</h3>
+
+  <p>
+    Let $g_{i, j} = \partial L / \partial \text{score}(i, j)$ be the
+    upstream gradient. For any parameter $X$:
+  </p>
+
+  <p>
+    $$\frac{\partial L}{\partial X} \;=\; \sum_{i, j} g_{i, j} \cdot \frac{\partial\, \text{score}(i, j)}{\partial X}.$$
+  </p>
+
+  <h3>Case 1: $\partial / \partial \Qm_{i, s, k}$</h3>
+
+  <p>
+    $\text{score}(i, j)$ depends on the row $\Qm_{i, s}$ only when both
+    indices match, and only the $s$-th term in the sum contains the
+    component $\Qm_{i, s, k}$. That term is
+    $\langle \Qm_{i, s},\, \Dm_{j,\, t^{\star}(i, j, s)}\rangle$, so the
+    partial is the matching entry of $\Dm$:
+  </p>
+
+  <p>
+    $$\frac{\partial\, \text{score}(i, j)}{\partial \Qm_{i, s, k}} \;=\; \Dm_{j,\, t^{\star}(i, j, s),\, k}.$$
+  </p>
+
+  <p>
+    Summing over $j$, the only free index left in the chain rule,
+    gives $\nabla_{\Qm_{i, s}}$. Each $j$ picks exactly one row of $\Dm$
+    out of $L_d$, a pure gather with no collisions.
+  </p>
+
+  <h3>Case 2: $\partial / \partial \Dm_{j, t, k}$</h3>
+
+  <p>
+    $\text{score}(i, j_0)$ depends on $\Dm_{j_0, \cdot, \cdot}$ only
+    when the doc-batch indices match. Within
+    $\text{score}(i, j_0) = \sum_s \langle \Qm_{i, s},\, \Dm_{j_0,\, t^{\star}(i, j_0, s)}\rangle$,
+    the entry $\Dm_{j_0, t, k}$ appears in the $s$-th term <em>iff</em>
+    $t^{\star}(i, j_0, s) = t$. For each such $s$ the partial is
+    $\Qm_{i, s, k}$, and multiple $s$'s may collide on the same $t$ —
+    they all add:
+  </p>
+
+  <p>
+    $$\frac{\partial\, \text{score}(i, j)}{\partial \Dm_{j, t, k}} \;=\; \sum_{s\,:\, t^{\star}(i, j, s) \,=\, t} \Qm_{i, s, k}.$$
+  </p>
+
+  <p>
+    Chaining over $i$ with $j$ fixed folds the two sums into one set:
+  </p>
+
+  <p>
+    $$\frac{\partial L}{\partial \Dm_{j, t, k}} \;=\; \sum_{(i, s)\,:\, t^{\star}(i, j, s) \,=\, t} g_{i, j} \cdot \Qm_{i, s, k}.$$
+  </p>
+
+  <p>
+    That set $\{(i, s) : t^{\star}(i, j, s) = t\}$ is exactly the bucket
+    the <code>csr</code> kernel sorts pairs into, and the same contention
+    pattern the <code>unified</code> and <code>atomic</code> paths
+    resolve with <code>atomic_add</code>.
+  </p>
+
+  <h3>The mask falls out for free</h3>
+
+  <p>
+    The forward gates masked query tokens out of the outer sum, so
+    masked positions contribute nothing to the score and their partials
+    are zero on both sides. The $m^q_{i, s}$ factor in the closed-form
+    expressions is just that gating carried through.
   </p>
 </section>
 
