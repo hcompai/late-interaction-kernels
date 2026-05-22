@@ -17,7 +17,6 @@ real tokenizer lengths, real backward through the encoder.
 
 Requires: ``pip install pylate datasets`` (see ``.[dev,pylate]`` extra).
 """
-# ruff: noqa: F821  -- closures over ``loss_fn`` / ``optim`` confuse ruff
 
 from __future__ import annotations
 
