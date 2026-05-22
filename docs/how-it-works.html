@@ -444,6 +444,22 @@
     width: 20px; height: 1px;
     background: var(--accent);
   }
+  .byline {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-dim);
+    letter-spacing: 0.04em;
+    margin: 4px 0 22px;
+  }
+  .byline a {
+    color: var(--ink-mid);
+    border-bottom-color: color-mix(in oklch, var(--ink-mid) 25%, transparent);
+  }
+  .byline a:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .byline .sep { color: var(--ink-dim); padding: 0 6px; opacity: 0.7; }
 
   /* ===================== MEMORY HIERARCHY ===================== */
   .mem-bar {
@@ -640,6 +656,12 @@
 <header>
   <div class="eyebrow">how it works</div>
   <h1>Scoring every query–document token pair without materialising the table</h1>
+  <p class="byline">
+    by
+    <a href="https://github.com/uminaty">Aurélien Lac</a>
+    <span class="sep">·</span>
+    <a href="https://github.com/tonywu71">Tony Wu</a>
+  </p>
   <p class="lede">
     Late-interaction retrieval models compare every query token to every
     document token. A direct implementation builds a four-dimensional similarity
@@ -787,14 +809,6 @@
     </div>
   </div>
 
-  <p>
-    Triton is a Python-embedded DSL that compiles each program down to PTX. It
-    hides the per-thread bookkeeping CUDA exposes: code is written as if a
-    program operates on whole tiles of values, and the compiler maps those tile
-    operations onto warps and tensor cores. The fused MaxSim forward kernel
-    (<a href="../late_interaction_kernels/forward.py">forward.py</a>) is about
-    130 lines of Triton.
-  </p>
 </section>
 
 <!-- ============================================================ -->
