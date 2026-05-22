@@ -241,7 +241,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         )
         return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
-    lik_full_ms = time_cuda(lambda: _lik_full(), warmup=args.warmup, iters=args.iters)
+    lik_full_ms = time_cuda(_lik_full, warmup=args.warmup, iters=args.iters)
     print(f"  lik varlen (all docs + top-k)  : {lik_full_ms:.2f} ms/query")
 
     # --- Partial rerank (n_full_scores random docs — fast-plaid shape) ---
@@ -278,7 +278,7 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         )
         return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
-    lik_partial_ms = time_cuda(lambda: _lik_partial(), warmup=args.warmup, iters=args.iters)
+    lik_partial_ms = time_cuda(_lik_partial, warmup=args.warmup, iters=args.iters)
     print(f"  lik varlen ({n_cand} cands + top-k)  : {lik_partial_ms:.2f} ms/query")
 
     if e2e_ms_per_q is not None:
