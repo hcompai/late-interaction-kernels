@@ -183,9 +183,7 @@ def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
             m = _peak_mem(lambda: flash_maxsim_batched(Q, D, shared_docs=True))
             rows.append(("flash-maxsim", t, m))
         except Exception as e:
-            rows.append(
-                (f"flash-maxsim (err: {type(e).__name__})", float("nan"), float("nan"))
-            )
+            rows.append((f"flash-maxsim (err: {type(e).__name__})", float("nan"), float("nan")))
 
     return name, dtype, rows
 

@@ -108,7 +108,7 @@ is asserted at `atol=1e-2` before timing.
 | PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.0-5.5×           |
 | PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 19-32×             |
 | Fused D-side head (training)                                | 1.2-4.2×           |
-| FP8 MaxSim inference (Hopper)                               | 1.9-2.5×           |
+| FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.9-2.5×           |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.05-1.27× e2e     |
 
 `torch.compile` is within ±5% of eager on every forward shape because

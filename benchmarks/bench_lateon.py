@@ -82,8 +82,7 @@ def _assert_parity(name, Q, D):
     if not torch.allclose(out, ref, atol=1e-2, rtol=1e-2):
         diff = (out - ref).abs()
         raise AssertionError(
-            f"[{name}] LIK disagrees with fp32-acc naive: "
-            f"max abs diff {diff.max().item():.3g}"
+            f"[{name}] LIK disagrees with fp32-acc naive: max abs diff {diff.max().item():.3g}"
         )
 
 

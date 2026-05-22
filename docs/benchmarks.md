@@ -234,10 +234,13 @@ in [`design.md`](design.md).
 
 ## FP8 inference (Hopper)
 
-`maxsim_inference_fp8` runs the inner matmul in `e4m3` (fp8) with an
-fp32 accumulator and `bf16` output, vs the regular `maxsim(bf16)`
-kernel. No requantization of `Q` / `D` is needed if they were stored
-fp8 to begin with (PyLate's PLAID index can ship fp8 directly).
+This row compares **two LIK kernels against each other**, not LIK vs
+naive PyTorch. `maxsim_inference_fp8` runs the inner matmul in `e4m3`
+(fp8) with an fp32 accumulator and `bf16` output; `maxsim` (bf16) is
+the same Triton kernel one precision step up. No requantization of
+`Q` / `D` is needed if they were stored fp8 to begin with (PyLate's
+PLAID index can ship fp8 directly), so the speedup below isolates the
+\"swap bf16 tensor cores for fp8 tensor cores\" win.
 
 H100 80 GB SXM, NGC 25.06, `bench_fp8.py`:
 

@@ -270,9 +270,7 @@ def main():
     variants = ["vanilla", "compile", "flash"] if args.only == "all" else [args.only]
 
     print(
-        f"{'shape':<20} {'tiles':>5} "
-        f"{'v_bwd':>8} {'c_bwd':>8} {'f_bwd':>8}  "
-        f"{'v/f':>6} {'c/f':>6} {'v/c':>6}"
+        f"{'shape':<20} {'tiles':>5} {'v_bwd':>8} {'c_bwd':>8} {'f_bwd':>8}  {'v/f':>6} {'c/f':>6} {'v/c':>6}"
     )
     rows = []
     for name, batch, mini, Lq, Ld in SHAPES:
