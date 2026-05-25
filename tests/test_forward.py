@@ -142,6 +142,24 @@ def test_non_pow2_lq_parity(lq):
     torch.testing.assert_close(fast, ref, rtol=5e-3, atol=5e-3)
 
 
+def test_lq_above_ceil_passes_through(rel):
+    """Lq above the bucket ceiling falls back to the per-Lq autotune path.
+
+    Long-context callers should use ``maxsim_varlen``, but ``maxsim`` must
+    still return correct scores when handed a large Lq directly.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Q = torch.randn(1, 1100, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(2, 256, 128, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D).float()
+    ref = maxsim_reference(Q.float(), D.float())
+    assert fast.shape == (1, 2)
+    assert rel(fast, ref) < 5e-3
+
+
 def test_non_pow2_lq_gradient_shape():
     """``Q.grad`` must come back at the user's Lq, not the bucketed one.
 

@@ -14,6 +14,13 @@ from late_interaction_kernels.forward import _run_forward
 # would be pruned to a fallback config anyway. Use 16 as the bucket floor.
 _LQ_BUCKET_FLOOR = 16
 
+# Above this we stop bucketing and pass Lq through. The static_range unroll
+# scales with Lq/BLOCK_Q, so a bucket of 2048 would unroll 16+ iters per
+# config — compile time grows fast and autotune sweeps stall. Past 1024 the
+# workload is long-context anyway and the caller should be reaching for
+# ``maxsim_varlen`` (which buckets via ``max_lq`` on its own).
+_LQ_BUCKET_CEIL = 1024
+
 
 def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Round Lq up to the next power of two so Triton's autotune cache reuses
@@ -21,15 +28,21 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
 
     Without this, every distinct ``Lq`` (e.g. 7, 9, 12, 17, ...) re-triggers
     the full autotune sweep — variable-length training paid up to ~21 s of
-    pure overhead per new value. Bucketing to {16, 32, 64, 128, 256, ...}
-    caps the cache at a handful of entries while keeping ``Lq`` constexpr
-    inside the kernel (preserving the ``tl.static_range`` unroll).
+    pure overhead per new value. Bucketing to {16, 32, 64, 128, 256, 512,
+    1024} caps the cache at 7 entries while keeping ``Lq`` constexpr inside
+    the kernel (preserving the ``tl.static_range`` unroll).
 
     Pads ``Q`` with zeros along the ``Lq`` axis and extends (or creates)
     ``q_mask`` so the kernel ignores the padded rows in the max reduction
     and the backward zero-grads them.
+
+    Past ``_LQ_BUCKET_CEIL`` we pass Lq through. Use :func:`maxsim_varlen`
+    for genuine long-context workloads — it buckets on ``max_lq`` and
+    avoids the static_range unroll.
     """
     Lq = Q.shape[-2]
+    if Lq > _LQ_BUCKET_CEIL:
+        return Q, q_mask
     bucket = max(_LQ_BUCKET_FLOOR, next_pow2(Lq))
     if bucket == Lq:
         return Q, q_mask
