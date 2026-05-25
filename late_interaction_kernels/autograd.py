@@ -14,12 +14,16 @@ from late_interaction_kernels.forward import _run_forward
 # would be pruned to a fallback config anyway. Use 16 as the bucket floor.
 _LQ_BUCKET_FLOOR = 16
 
-# Above this we stop bucketing and pass Lq through. The static_range unroll
-# scales with Lq/BLOCK_Q, so a bucket of 2048 would unroll 16+ iters per
-# config — compile time grows fast and autotune sweeps stall. Past 1024 the
-# workload is long-context anyway and the caller should be reaching for
-# ``maxsim_varlen`` (which buckets via ``max_lq`` on its own).
-_LQ_BUCKET_CEIL = 1024
+# Above this we stop bucketing and pass Lq through with a one-shot warning.
+# The cap is set to cover the realistic dense-MaxSim workload range:
+# ColBERT (≤ 32), ColPali (~1030 visual patches → bucket 2048), long-doc
+# rerank up to ~4 k. Past 4096 the static_range unroll over Lq/BLOCK_Q
+# starts to dominate compile time and the caller is in genuine long-context
+# territory where :func:`maxsim_varlen` is the right tool (it buckets on
+# ``max_lq`` over a ``range`` loop, no static unroll).
+_LQ_BUCKET_CEIL = 4096
+
+_WARNED_LQ_OVER_CEIL = False
 
 
 def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -28,20 +32,31 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
 
     Without this, every distinct ``Lq`` (e.g. 7, 9, 12, 17, ...) re-triggers
     the full autotune sweep — variable-length training paid up to ~21 s of
-    pure overhead per new value. Bucketing to {16, 32, 64, 128, 256, 512,
-    1024} caps the cache at 7 entries while keeping ``Lq`` constexpr inside
-    the kernel (preserving the ``tl.static_range`` unroll).
+    pure overhead per new value. Bucketing to {16, 32, ..., 2048, 4096}
+    caps the cache at 9 entries while keeping ``Lq`` constexpr inside the
+    kernel (preserving the ``tl.static_range`` unroll).
 
     Pads ``Q`` with zeros along the ``Lq`` axis and extends (or creates)
     ``q_mask`` so the kernel ignores the padded rows in the max reduction
     and the backward zero-grads them.
 
-    Past ``_LQ_BUCKET_CEIL`` we pass Lq through. Use :func:`maxsim_varlen`
-    for genuine long-context workloads — it buckets on ``max_lq`` and
-    avoids the static_range unroll.
+    Past ``_LQ_BUCKET_CEIL`` we emit a one-shot warning and pass Lq through
+    (each value gets its own autotune entry — the v0.2.0 behaviour for any
+    Lq). Use :func:`maxsim_varlen` for genuine long-context workloads.
     """
     Lq = Q.shape[-2]
     if Lq > _LQ_BUCKET_CEIL:
+        global _WARNED_LQ_OVER_CEIL
+        if not _WARNED_LQ_OVER_CEIL:
+            warnings.warn(
+                f"maxsim: Lq={Lq} > {_LQ_BUCKET_CEIL}; falling back to per-Lq autotune "
+                "(each distinct value re-triggers the Triton sweep). For genuine "
+                "long-context use `maxsim_varlen`, which buckets on `max_lq` via a "
+                "non-unrolled loop and avoids this entirely.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            _WARNED_LQ_OVER_CEIL = True
         return Q, q_mask
     bucket = max(_LQ_BUCKET_FLOOR, next_pow2(Lq))
     if bucket == Lq:

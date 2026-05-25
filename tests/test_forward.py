@@ -142,22 +142,55 @@ def test_non_pow2_lq_parity(lq):
     torch.testing.assert_close(fast, ref, rtol=5e-3, atol=5e-3)
 
 
-def test_lq_above_ceil_passes_through(rel):
-    """Lq above the bucket ceiling falls back to the per-Lq autotune path.
+def test_colpali_range_lq_buckets(rel):
+    """Realistic ColPali Lq (~1030 visual patches) is still in the bucketed range.
 
-    Long-context callers should use ``maxsim_varlen``, but ``maxsim`` must
-    still return correct scores when handed a large Lq directly.
+    Was the motivating case for raising the bucket ceiling above 1024 — a
+    fixed-shape ColPali workload would otherwise re-trigger autotune on
+    every distinct token count seen during eval.
     """
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.reference import maxsim_reference
 
-    Q = torch.randn(1, 1100, 128, device="cuda", dtype=torch.float16)
+    Q = torch.randn(1, 1030, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(2, 256, 128, device="cuda", dtype=torch.float16)
 
     fast = maxsim(Q, D).float()
     ref = maxsim_reference(Q.float(), D.float())
     assert fast.shape == (1, 2)
     assert rel(fast, ref) < 5e-3
+
+
+def test_lq_above_ceil_passes_through_with_warning(rel):
+    """Lq above the bucket ceiling falls back to per-Lq autotune + warns once.
+
+    Long-context callers should use ``maxsim_varlen``, but ``maxsim`` must
+    still return correct scores when handed a large Lq directly — and emit
+    a one-shot warning so the autotune fallback isn't silent.
+    """
+    import warnings as _warnings
+
+    from late_interaction_kernels import autograd as _autograd
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    _autograd._WARNED_LQ_OVER_CEIL = False  # reset the one-shot flag
+
+    Q = torch.randn(1, 5000, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(2, 256, 128, device="cuda", dtype=torch.float16)
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        fast = maxsim(Q, D).float()
+    ref = maxsim_reference(Q.float(), D.float())
+
+    assert fast.shape == (1, 2)
+    assert rel(fast, ref) < 5e-3
+    assert any(
+        "Lq=5000" in str(w.message) and "maxsim_varlen" in str(w.message)
+        for w in caught
+        if issubclass(w.category, RuntimeWarning)
+    ), "expected a one-shot RuntimeWarning pointing at maxsim_varlen"
 
 
 def test_non_pow2_lq_gradient_shape():
