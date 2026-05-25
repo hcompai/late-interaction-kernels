@@ -4,9 +4,45 @@ import os
 import warnings
 
 import torch
+import torch.nn.functional as F
 
+from late_interaction_kernels._utils import next_pow2
 from late_interaction_kernels.backward import maxsim_backward, maxsim_backward_unified
 from late_interaction_kernels.forward import _run_forward
+
+# Smallest BLOCK_Q across our autotune pools is 16, so any Lq below that
+# would be pruned to a fallback config anyway. Use 16 as the bucket floor.
+_LQ_BUCKET_FLOOR = 16
+
+
+def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Round Lq up to the next power of two so Triton's autotune cache reuses
+    a config across batches with slightly different query lengths.
+
+    Without this, every distinct ``Lq`` (e.g. 7, 9, 12, 17, ...) re-triggers
+    the full autotune sweep — variable-length training paid up to ~21 s of
+    pure overhead per new value. Bucketing to {16, 32, 64, 128, 256, ...}
+    caps the cache at a handful of entries while keeping ``Lq`` constexpr
+    inside the kernel (preserving the ``tl.static_range`` unroll).
+
+    Pads ``Q`` with zeros along the ``Lq`` axis and extends (or creates)
+    ``q_mask`` so the kernel ignores the padded rows in the max reduction
+    and the backward zero-grads them.
+    """
+    Lq = Q.shape[-2]
+    bucket = max(_LQ_BUCKET_FLOOR, next_pow2(Lq))
+    if bucket == Lq:
+        return Q, q_mask
+
+    pad = bucket - Lq
+    Q = F.pad(Q, (0, 0, 0, pad))
+    if q_mask is None:
+        q_mask = torch.ones(Q.shape[:-1], dtype=torch.bool, device=Q.device)
+        q_mask[..., Lq:] = False
+    else:
+        q_mask = F.pad(q_mask, (0, pad), value=False)
+    return Q, q_mask
+
 
 _BACKWARD_METHOD = "auto"  # module-level toggle, deprecated; prefer per-call `backward=`
 
@@ -212,6 +248,11 @@ def maxsim(
 
     if not normalize:
         _maybe_warn_unnormalized(Q)
+
+    # Bucket Lq to the next power of two so autotune caches one config per
+    # bucket instead of one per distinct Lq seen in training. Caller-visible
+    # output shape is unaffected.
+    Q, q_mask = _bucket_lq(Q, q_mask)
 
     Q = Q.contiguous()
     D = D.contiguous()

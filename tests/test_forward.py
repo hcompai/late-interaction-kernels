@@ -119,3 +119,44 @@ def test_2d_inputs_return_scalar():
     D = torch.randn(16, 128, device="cuda", dtype=torch.float16)
     s = maxsim(Q, D)
     assert s.dim() == 0, f"expected scalar, got {s.shape}"
+
+
+@pytest.mark.parametrize("lq", [3, 9, 17, 33, 63, 127])
+def test_non_pow2_lq_parity(lq):
+    """Bucketing Lq to the next power of two must not change scores.
+
+    Variable-length training has ``Lq`` floating around with the tokenizer
+    output. The internal bucket-pad-mask must be transparent to the caller.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Nq, Nd, Ld, d = 2, 3, 64, 128
+    Q = torch.randn(Nq, lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D).float()
+    ref = maxsim_reference(Q.float(), D.float())
+
+    assert fast.shape == (Nq, Nd), f"output shape leaked the bucketed Lq: {fast.shape}"
+    torch.testing.assert_close(fast, ref, rtol=5e-3, atol=5e-3)
+
+
+def test_non_pow2_lq_gradient_shape():
+    """``Q.grad`` must come back at the user's Lq, not the bucketed one.
+
+    ``F.pad`` is autograd-aware, so the grad scattered onto the padded Q
+    gets sliced back to the original shape on the way out. Pinning this
+    so a future refactor doesn't accidentally break the contract.
+    """
+    from late_interaction_kernels import maxsim
+
+    Q = torch.randn(2, 17, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    D = torch.randn(3, 64, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+
+    maxsim(Q, D).sum().backward()
+
+    assert Q.grad is not None and Q.grad.shape == Q.shape
+    assert D.grad is not None and D.grad.shape == D.shape
+    assert torch.all(torch.isfinite(Q.grad))
+    assert torch.all(torch.isfinite(D.grad))
