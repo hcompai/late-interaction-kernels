@@ -103,19 +103,10 @@ def _large_d_configs():
     ]
 
 
-# TODO: prune_forward's SRAM model below ignores `num_stages`, so it
-# under-estimates the real Triton allocation by ~2x on double-buffered
-# configs. The A10G (Ampere consumer, sm_86) hardware limit is ~99 KiB,
-# and configs the prune lets through with the full 100 KiB budget
-# overshoot at compile time. Band-aid: drop `ampere` to 48 KiB so the
-# under-estimate also prunes (BLOCK_Q=32, BLOCK_D=128) — predicted 56 KiB
-# but actually allocates ~104 KiB with num_stages=2 on A10G. Proper fix
-# is to multiply input-tile bytes by `num_stages` in prune_forward, then
-# restore these values. Same likely applies to `ada` (also 100 KiB hw).
 _SRAM_KIB_BY_FAMILY = {
     "hopper": 228,
     "a100": 164,
-    "ampere": 48,
+    "ampere": 100,
     "ada": 100,
     "generic": 48,
 }
@@ -142,8 +133,16 @@ def prune_forward(configs, named_args, **kwargs):
     keep = []
     for cfg in configs:
         bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
-        # fp16/bf16 Q tile + fp16/bf16 D tile + fp32 S tile.
-        need = (bq * d + bd * d) * 2 + bq * bd * 4
+        # Q and D tiles get N copies in SMEM for the async-copy pipeline
+        # (num_stages-deep double/triple buffering). The fp32 S accumulator
+        # isn't pipelined — it lives in one allocation. Missing the
+        # num_stages multiplier under-estimates real SMEM by ~num_stages×
+        # on the input tiles and lets configs through that OOM at compile
+        # time (e.g. BLOCK_Q=32/BLOCK_D=128 on A10G with num_stages=2:
+        # predicted 56 KiB, actually allocates ~104 KiB).
+        input_bytes = (bq * d + bd * d) * 2 * cfg.num_stages
+        s_bytes = bq * bd * 4
+        need = input_bytes + s_bytes
         if need > sram_budget:
             continue
         if bq > 2 * Lq:
