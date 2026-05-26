@@ -72,6 +72,26 @@ scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
 
+### Score directly (`maxsim` / `maxsim_pairs`)
+
+`maxsim` is the lowest-level public entry point — autograd-aware, mask-aware, and dispatches on `D.dim()` so the same call covers in-batch and knowledge-distillation layouts in one fused launch:
+
+```python
+from late_interaction_kernels import maxsim, maxsim_pairs
+
+# in-batch:  Q[Nq, Lq, d] × D[Nd, Ld, d]    → [Nq, Nd]
+scores = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=True)
+
+# KD / hard-negative:  D is 4D [Nq, K, Ld, d]  → [Nq, K]
+# Single launch, no Python loop, no [Nq, Nq] cross product.
+scores = maxsim(Q, D_kd, q_mask=q_mask, d_mask=d_mask_kd)
+
+# pairwise (diagonal):  Q[B, Lq, d] × D[B, Ld, d]  → [B]
+scores = maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
+```
+
+The argmax buffer for the backward is skipped automatically when neither `Q` nor `D` has `requires_grad=True`, so the same function is the inference path too.
+
 ### Top-k retrieval
 
 ```python
@@ -105,7 +125,7 @@ is asserted at `atol=1e-2` before timing.
 | Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 2-11×          |
 | Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
 | PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.0-5.5×           |
-| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 19-32×             |
+| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 12-32×             |
 | Fused D-side head (training)                                | 1.2-4.2×           |
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.9-2.5×           |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.05-1.27× e2e     |
@@ -139,14 +159,16 @@ Not sure which entry point fits your stack? The docs site ships an interactive d
 
 ## API
 
-| Symbol                                | What it does                                                          |
-| ------------------------------------- | --------------------------------------------------------------------- |
-| `patch_pylate()` / `unpatch_pylate()` | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                 |
-| `MaxSimScorer(normalize=, backward=)` | Stateless `nn.Module`, autograd-aware.                                |
-| `retrieve(Q, D, top_k, chunk=)`       | Top-k retrieval, chunked for huge corpora.                            |
-| `maxsim`                              | Core MaxSim. Dispatches on `D.dim()`: 3D → in-batch `[Nq, Nd]`, 4D → per-query KD candidates `[Nq, K]` (one fused launch, no Python loop). Autograd-aware. |
-| `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
-| `maxsim_padded`                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
+| Symbol                                                | What it does                                                          |
+| ----------------------------------------------------- | --------------------------------------------------------------------- |
+| `patch_pylate()` / `unpatch_pylate()`                 | One-line PyLate drop-in. `LIK_DISABLE=1` kill switch.                 |
+| `patch_colpali_engine()` / `unpatch_colpali_engine()` | One-line colpali_engine drop-in (loss + scoring route through the kernel). |
+| `MaxSimScorer(normalize=, backward=)`                 | Stateless `nn.Module`, autograd-aware.                                |
+| `retrieve(Q, D, top_k, chunk=)`                       | Top-k retrieval, chunked for huge corpora.                            |
+| `maxsim`                                              | Core MaxSim. Dispatches on `D.dim()`: 3D → in-batch `[Nq, Nd]`, 4D → per-query KD candidates `[Nq, K]` (one fused launch, no Python loop). Autograd-aware. |
+| `maxsim_pairs`                                        | Diagonal pairs `Q[B, Lq, d] × D[B, Ld, d] → [B]`. K=1 case of the KD path; never builds the `[B, B]` cross product. Autograd-aware. |
+| `maxsim_varlen`                                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
+| `maxsim_padded`                                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 
 Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `reference`. See [`docs/design.md`](docs/design.md) for details on every kernel, the autograd graph and the backward variants.
 
@@ -156,8 +178,7 @@ Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`,
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.             |
-| `patch_colpali_engine()` / `unpatch_colpali_engine()`             | colpali_engine drop-in: loss + scoring routes through the kernel. |
-| `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate.                  |
+| `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate / colpali_engine. |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |
 | `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`                 | Pin the MPS dispatch.                                             |
