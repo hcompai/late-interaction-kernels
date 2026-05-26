@@ -24,7 +24,10 @@ from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, p
     # winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` config. Keeping
     # it would double the cache cardinality for zero perf win (verified on
     # H100, A100 sweeps).
-    key=["Lq", "d_pad", "has_q_mask", "has_d_mask"],
+    # ``kd_layout`` *is* in the key because the two modes hit very different
+    # D-side cache patterns (in-batch reuses D across queries; KD/pairs
+    # don't), and the best (BLOCK_Q, BLOCK_D, num_warps) trade-off shifts.
+    key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "kd_layout"],
     prune_configs_by={"early_config_prune": prune_forward},
     **autotune_kwargs(),
 )
@@ -37,7 +40,7 @@ def _maxsim_fwd_kernel(
     scores_ptr,
     argmax_ptr,
     Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nd: tl.constexpr,  # cross-product: doc count; KD/pairs: K per query
     Lq: tl.constexpr,
     Ld,
     d: tl.constexpr,
@@ -60,13 +63,22 @@ def _maxsim_fwd_kernel(
     has_d_mask: tl.constexpr,
     save_argmax: tl.constexpr,
     normalize: tl.constexpr,
+    kd_layout: tl.constexpr,
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
 ):
     pid = tl.program_id(0)
     q_idx = pid // Nd
-    d_idx = pid % Nd
+    k_idx = pid - q_idx * Nd
+    # Cross-product: every query scores the same Nd docs → d_global = k_idx
+    # KD / pairs:    each query owns its slab of Nd docs in a flattened
+    #                D[Nq * Nd, Ld, d] view → d_global = pid (= q_idx*Nd + k_idx).
+    # ``d_mask`` follows the same indexing as ``D``.
+    if kd_layout:
+        d_global = pid
+    else:
+        d_global = k_idx
 
     k_off = tl.arange(0, d_pad)
     k_mask = k_off < d
@@ -112,7 +124,7 @@ def _maxsim_fwd_kernel(
 
             if has_d_mask:
                 dm = tl.load(
-                    d_mask_ptr + d_idx * stride_dm_n + d_off * stride_dm_l,
+                    d_mask_ptr + d_global * stride_dm_n + d_off * stride_dm_l,
                     mask=d_valid,
                     other=0,
                 ).to(tl.int1)
@@ -121,7 +133,7 @@ def _maxsim_fwd_kernel(
                 d_active = d_valid
 
             D_block_f32 = tl.load(
-                D_ptr + d_idx * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
+                D_ptr + d_global * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
                 mask=d_valid[:, None] & k_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
@@ -156,7 +168,8 @@ def _maxsim_fwd_kernel(
                 mask=q_valid,
             )
 
-    tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
+    # Output is always [Nq, Nd] (Nd = K_per_query in KD/pairs mode).
+    tl.store(scores_ptr + q_idx * stride_s_n + k_idx * stride_s_d, score_acc)
 
 
 # Small-input bypass: for tiny shapes (inference / REPL / tests) the autotune
@@ -164,7 +177,8 @@ def _maxsim_fwd_kernel(
 # gap is single-digit percent. The fixed config below fits ≤ 96 KiB SMEM so
 # it lands on every supported GPU family. Mirrors flash-maxsim's
 # ``_maxsim_fwd_kernel_small`` (their ``flash_maxsim.py`` L337-348).
-_SMALL_BYPASS_NQND = 500  # max Nq * Nd
+_SMALL_BYPASS_NQND = 500  # max Nq * Nd  (grid size)
+_SMALL_BYPASS_LQLD = 200_000  # max Lq * Ld (per-program work)
 _SMALL_BYPASS_D = 256  # max embedding dim (SMEM ceiling)
 _SMALL_BLOCK_Q = 32
 _SMALL_BLOCK_D = 64
@@ -172,12 +186,30 @@ _SMALL_NUM_WARPS = 4
 _SMALL_NUM_STAGES = 2
 
 
-def _should_bypass_autotune(Nq: int, Nd: int, d: int, save_argmax: bool) -> bool:
+def _should_bypass_autotune(Nq: int, Nd: int, Lq: int, Ld: int, d: int, save_argmax: bool) -> bool:
     """Inference-side small-shape bypass. Only safe when we don't need the
     argmax tile (i.e. no backward) — that keeps the bypass kernel identical
     to the autotuned one except for the fixed block sizes.
+
+    Both gates have to hold:
+
+    * ``Nq * Nd <= 500`` — small grid, otherwise the autotuner amortizes its
+      sweep across enough programs that the fixed config can't catch up.
+    * ``Lq * Ld <= 200_000`` — small per-program work, otherwise the shape
+      is compute-bound and the fixed ``(BLOCK_Q=32, BLOCK_D=64, warps=4)``
+      tile shape loses meaningfully to the Hopper compute-bound winner
+      ``(128, 128, warps=8)``. ColPali Lq=Ld=1024 (1M work) is the
+      canonical example: bypass cost ~2.4× over autotuned on that shape.
+
+    ``d <= 256`` is the SMEM ceiling for the fixed config — past that the
+    operand buffers don't fit.
     """
-    return (not save_argmax) and (Nq * Nd <= _SMALL_BYPASS_NQND) and (d <= _SMALL_BYPASS_D)
+    return (
+        (not save_argmax)
+        and (Nq * Nd <= _SMALL_BYPASS_NQND)
+        and (Lq * Ld <= _SMALL_BYPASS_LQLD)
+        and (d <= _SMALL_BYPASS_D)
+    )
 
 
 def _run_forward(
@@ -187,19 +219,47 @@ def _run_forward(
     d_mask: torch.Tensor | None,
     save_argmax: bool,
     normalize: bool = False,
+    *,
+    kd_layout: bool = False,
 ):
     """Launch the forward kernel. Q/D assumed 3-D, contiguous on last dim.
 
-    Returns (scores [Nq, Nd], argmax [Nq*Nd, Lq] or None).
+    Args:
+        Q: ``[Nq, Lq, d]``.
+        D: ``[Nd, Ld, d]`` for the cross-product layout, or
+            ``[Nq * K, Ld, d]`` for the KD/pairs layout (in which case the
+            caller passes ``kd_layout=True`` and the kernel uses
+            ``d_global = pid`` so each query reads its own ``K``-slab).
+        q_mask: ``[Nq, Lq]`` int8 or ``None``.
+        d_mask: ``[Nd, Ld]`` or ``[Nq*K, Ld]`` int8 (matches ``D``'s first dim).
+        save_argmax: write the ``[Nq*Nd_eff, Lq]`` winner buffer.
+        normalize: per-token L2 normalize inside the kernel.
+        kd_layout: switches from cross-product to per-query slab indexing.
+
+    Returns ``(scores [Nq, Nd_eff], argmax [Nq*Nd_eff, Lq] or None)`` where
+    ``Nd_eff`` is ``Nd`` for cross-product or ``K`` for KD/pairs.
     """
     Nq, Lq, d = Q.shape
-    Nd, Ld, _ = D.shape
+    if kd_layout:
+        # D is the flat [Nq*K, Ld, d] view; recover K from D.shape[0] // Nq.
+        Nd_total = D.shape[0]
+        if Nd_total % Nq != 0:
+            raise ValueError(
+                f"kd_layout=True requires D.shape[0] (={Nd_total}) to be a multiple of Nq (={Nq})."
+            )
+        K = Nd_total // Nq
+        Ld = D.shape[1]
+        Nd_kernel = K
+    else:
+        K = D.shape[0]  # actually Nd, kept named for the constexpr arg
+        Nd_kernel = K
+        Ld = D.shape[1]
     d_pad = next_pow2(d)
     compute_dtype = pick_compute_dtype(Q, D)
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
-    scores = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
-    argmax = torch.empty(Nq * Nd, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
+    scores = torch.empty(Nq, Nd_kernel, device=Q.device, dtype=torch.float32)
+    argmax = torch.empty(Nq * Nd_kernel, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
@@ -212,7 +272,7 @@ def _run_forward(
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)
     a_strides = (argmax.stride(0), argmax.stride(1)) if save_argmax else (0, 0)
 
-    grid = (Nq * Nd,)
+    grid = (Nq * Nd_kernel,)
     args = (
         Q,
         D,
@@ -221,7 +281,7 @@ def _run_forward(
         scores,
         argmax_ptr,
         Nq,
-        Nd,
+        Nd_kernel,
         Lq,
         Ld,
         d,
@@ -244,8 +304,13 @@ def _run_forward(
         has_d_mask,
         save_argmax,
         normalize,
+        kd_layout,
     )
-    if _should_bypass_autotune(Nq, Nd, d, save_argmax):
+    # Bypass eligibility uses ``Nd_kernel`` (= Nd for in-batch, K for KD/pairs)
+    # so the per-program work estimate matches what the kernel will actually
+    # do. KD/pairs of size (Nq=4, K=16) lands in the bypass band just like
+    # in-batch (Nq=4, Nd=16) — the launch budget is the same.
+    if _should_bypass_autotune(Nq, Nd_kernel, Lq, Ld, d, save_argmax):
         # Bypass: launch the underlying JIT directly with fixed constexpr
         # block sizes and fixed launch attrs. ``_maxsim_fwd_kernel.fn`` is the
         # ``JITFunction`` wrapped by ``@triton.autotune`` — calling it via

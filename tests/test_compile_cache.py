@@ -159,6 +159,30 @@ def test_forward_large_input_goes_through_autotune():
     )
 
 
+def test_forward_compute_bound_shape_skips_bypass():
+    """ColPali-style compute-bound shapes must NOT hit the bypass.
+
+    Grid is small enough (Nq*Nd ≤ 500) that the original ``_SMALL_BYPASS_NQND``
+    gate would accept, but Lq*Ld = 1M makes the kernel compute-bound. The
+    fixed bypass tile ``(BLOCK_Q=32, BLOCK_D=64, warps=4)`` loses ~2.4× to
+    the autotuned Hopper compute winner ``(128, 128, warps=8)`` on this
+    shape, so we want the autotuner to run.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # Nq*Nd = 16*16 = 256 ≤ 500 ✓, but Lq*Ld = 1024*1024 = 1M > 200_000 ✗
+    # → autotune.
+    Q = torch.randn(16, 1024, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(16, 1024, 128, device="cuda", dtype=torch.float16)
+    _ = maxsim(Q, D)
+
+    assert len(_maxsim_fwd_kernel.cache) == 1, (
+        f"compute-bound shape must populate the autotune cache; got {len(_maxsim_fwd_kernel.cache)} entries"
+    )
+
+
 def test_forward_bypass_matches_autotune_path():
     """Bypass kernel and autotuned kernel produce numerically equivalent scores.
 

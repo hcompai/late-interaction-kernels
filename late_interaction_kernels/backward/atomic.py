@@ -34,7 +34,7 @@ def _bwd_dQ_kernel(
     q_mask_ptr,
     grad_Q_ptr,
     Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nd: tl.constexpr,  # K_per_query in KD/pairs mode
     Lq: tl.constexpr,
     Ld,
     d: tl.constexpr,
@@ -52,6 +52,7 @@ def _bwd_dQ_kernel(
     stride_a_pair,
     stride_a_lq,
     has_q_mask: tl.constexpr,
+    kd_layout: tl.constexpr,
 ):
     pid = tl.program_id(0)
     q_idx = pid // Lq
@@ -71,8 +72,12 @@ def _bwd_dQ_kernel(
             gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
             t = tl.load(argmax_ptr + (q_idx * Nd + j) * stride_a_pair + s * stride_a_lq)
             t = t.to(tl.int32)
+            if kd_layout:
+                d_global = q_idx * Nd + j
+            else:
+                d_global = j
             v = tl.load(
-                D_ptr + j * stride_d_n + t * stride_d_l + k * stride_d_k,
+                D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
                 mask=km,
                 other=0.0,
             ).to(tl.float32)
@@ -97,7 +102,7 @@ def _bwd_dD_kernel(
     grad_s_ptr,
     q_mask_ptr,
     grad_D_ptr,
-    Nd: tl.constexpr,
+    Nd: tl.constexpr,  # K_per_query in KD/pairs mode
     Lq: tl.constexpr,
     Ld,
     d: tl.constexpr,
@@ -115,6 +120,7 @@ def _bwd_dD_kernel(
     stride_a_pair,
     stride_a_lq,
     has_q_mask: tl.constexpr,
+    kd_layout: tl.constexpr,
 ):
     pid = tl.program_id(0)
     i = pid // Nd
@@ -125,9 +131,14 @@ def _bwd_dD_kernel(
     k = tl.arange(0, d_pad)
     km = k < d
 
+    if kd_layout:
+        d_global = i * Nd + j
+    else:
+        d_global = j
+
     # One query-token at a time (Lq is tiny). For each s, read Q[i, s, :],
     # the winner index t = argmax[i, j, s], and atomic-add gs * Q[i, s, :]
-    # into grad_D[j, t, :].
+    # into grad_D[d_global, t, :].
     for s in range(0, Lq):
         q_active = True
         if has_q_mask:
@@ -141,7 +152,7 @@ def _bwd_dD_kernel(
                 other=0.0,
             ).to(tl.float32)
             tl.atomic_add(
-                grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
                 gs * qv,
                 mask=km,
             )
@@ -161,6 +172,7 @@ def maxsim_backward(
     d_mask: torch.Tensor | None,  # noqa: ARG001 - masked tokens already -inf in fwd
     *,
     method: str = "auto",
+    kd_layout: bool = False,
 ):
     """Compute ``grad_Q`` and ``grad_D`` from the saved argmax buffer.
 
@@ -189,7 +201,20 @@ def maxsim_backward(
         raise ValueError(f"method must be 'csr', 'atomic', or 'auto', got {method!r}")
 
     Nq, Lq, d = Q.shape
-    Nd, Ld, _ = D.shape
+    Nd_total, Ld, _ = D.shape
+    K = Nd_total // Nq if kd_layout else Nd_total
+    if kd_layout and Nd_total != Nq * K:
+        raise ValueError(
+            f"kd_layout=True needs D.shape[0] to be a multiple of Nq; got Nq={Nq}, D.shape[0]={Nd_total}."
+        )
+    # The CSR backward only handles the cross-product layout; for KD/pairs
+    # there's no contention on grad_D (each (i, j) writes a unique slab) so
+    # atomic is both correct and never the limiting path.
+    if kd_layout and method == "csr":
+        raise ValueError("kd_layout=True requires method='atomic' (CSR backward is cross-product only).")
+    if kd_layout and method == "auto":
+        method = "atomic"
+    Nd = K  # kernel param
 
     if method == "auto":
         # Heuristic derived from bench_backward_method.py on 1×H100. CSR wins
@@ -201,9 +226,9 @@ def maxsim_backward(
         #      high fan-in contention on each grad_D row).
         # In all other cases, H100's hardware-coalesced fp32 atomics beat
         # CSR's sort + searchsorted + (mostly empty) bucketed reduction.
-        big_workload = (Nq * Nd * Lq * d) >= 100_000_000
-        long_seq = Lq >= 1024 and (Nq * Nd) >= 16
-        huge_corpus = Nd >= 1024
+        big_workload = (Nq * Nd_total * Lq * d) >= 100_000_000
+        long_seq = Lq >= 1024 and (Nq * Nd_total) >= 16
+        huge_corpus = Nd_total >= 1024
         method = "csr" if (big_workload or long_seq or huge_corpus) else "atomic"
     d_pad = next_pow2(d)
 
@@ -222,7 +247,7 @@ def maxsim_backward(
         qm_ptr,
         grad_Q,
         Nq,
-        Nd,
+        Nd,  # K_per_query when kd_layout=True
         Lq,
         Ld,
         d,
@@ -240,6 +265,7 @@ def maxsim_backward(
         argmax.stride(0),
         argmax.stride(1),
         has_q_mask,
+        kd_layout,
     )
 
     if method == "csr":
@@ -248,7 +274,7 @@ def maxsim_backward(
 
         grad_D = maxsim_backward_csr_dD(grad_scores, Q, D, argmax, q_mask)
     else:
-        grad_D = torch.zeros(Nd, Ld, d, device=D.device, dtype=torch.float32)
+        grad_D = torch.zeros(Nd_total, Ld, d, device=D.device, dtype=torch.float32)
         _bwd_dD_kernel[(Nq * Nd,)](
             Q,
             argmax,
@@ -273,6 +299,7 @@ def maxsim_backward(
             argmax.stride(0),
             argmax.stride(1),
             has_q_mask,
+            kd_layout,
         )
 
     return grad_Q.to(Q.dtype), grad_D.to(D.dtype)

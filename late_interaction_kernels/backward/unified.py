@@ -103,7 +103,7 @@ if _HAS_TRITON:
         grad_Q_ptr,
         grad_D_ptr,
         Nq: tl.constexpr,
-        Nd: tl.constexpr,
+        Nd: tl.constexpr,  # K_per_query in KD/pairs mode
         Lq: tl.constexpr,
         Ld,
         d: tl.constexpr,
@@ -127,6 +127,7 @@ if _HAS_TRITON:
         stride_a_pair,
         stride_a_lq,
         has_q_mask: tl.constexpr,
+        kd_layout: tl.constexpr,
     ):
         pid = tl.program_id(0)
         i = pid // Lq
@@ -164,8 +165,15 @@ if _HAS_TRITON:
         for j in range(0, Nd):
             gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
             t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
+            # Cross-product: all queries share D[j, :]. KD/pairs: query i
+            # owns its slab so the global doc index is i*Nd + j (= the
+            # same value that produced this argmax row in the forward).
+            if kd_layout:
+                d_global = i * Nd + j
+            else:
+                d_global = j
             dv = tl.load(
-                D_ptr + j * stride_d_n + t * stride_d_l + k * stride_d_k,
+                D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
                 mask=km,
                 other=0.0,
             ).to(tl.float32)
@@ -173,7 +181,7 @@ if _HAS_TRITON:
             acc_Q += gs * dv
 
             tl.atomic_add(
-                grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
                 gs * qv,
                 mask=km,
             )
@@ -193,6 +201,7 @@ def maxsim_backward_unified(
     q_mask: torch.Tensor | None = None,
     *,
     method: str = "atomic",
+    kd_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Single-pass ``grad_Q`` + ``grad_D`` backward.
 
@@ -227,11 +236,12 @@ def maxsim_backward_unified(
         raise RuntimeError("maxsim_backward_unified requires CUDA tensors.")
 
     Nq, Lq, d = Q.shape
-    Nd, Ld, _ = D.shape
+    Nd_total, Ld, _ = D.shape  # in KD/pairs mode this is Nq*K (flat view)
+    K = Nd_total // Nq if kd_layout else Nd_total
     d_pad = next_pow2(d)
 
     grad_Q = torch.empty(Nq, Lq, d, device=Q.device, dtype=torch.float32)
-    grad_D = torch.zeros(Nd, Ld, d, device=D.device, dtype=torch.float32)
+    grad_D = torch.zeros(Nd_total, Ld, d, device=D.device, dtype=torch.float32)
 
     has_q_mask = q_mask is not None
     qm_ptr = q_mask if has_q_mask else Q
@@ -246,7 +256,7 @@ def maxsim_backward_unified(
         grad_Q,
         grad_D,
         Nq,
-        Nd,
+        K,
         Lq,
         Ld,
         d,
@@ -270,6 +280,7 @@ def maxsim_backward_unified(
         argmax.stride(0),
         argmax.stride(1),
         has_q_mask,
+        kd_layout,
     )
 
     return grad_Q.to(Q.dtype), grad_D.to(D.dtype)

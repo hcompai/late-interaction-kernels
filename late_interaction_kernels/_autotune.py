@@ -51,12 +51,7 @@ def autotune_kwargs() -> dict:
 
 
 def _cfg(kwargs, *, num_warps, num_stages):
-    """Build a ``triton.Config``. The historical ``warp_spec=True`` shortcut
-    has been removed: Triton 3.4+ does warp specialization automatically
-    from the IR (the ``num_consumer_groups`` / ``num_buffers_warp_spec``
-    kwargs were dropped from ``triton.Config``), so the explicit opt-in
-    silently degrades to a plain config on any supported Triton release.
-    """
+    """Build a ``triton.Config`` with no warp-spec kwargs (see module docstring)."""
     return triton.Config(kwargs, num_warps=num_warps, num_stages=num_stages)
 
 
