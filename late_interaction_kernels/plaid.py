@@ -653,34 +653,6 @@ def maxsim_residual(
     return scores
 
 
-def maxsim_residual_inference(
-    Q: torch.Tensor,
-    codes: torch.Tensor,
-    residuals: torch.Tensor,
-    doc_lengths: torch.Tensor,
-    centroids: torch.Tensor,
-    bucket_weights: torch.Tensor,
-    nbits: int,
-    *,
-    normalize: bool = True,
-) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim_residual`."""
-    import warnings
-
-    warnings.warn(
-        "`maxsim_residual_inference` is deprecated; `maxsim_residual` "
-        "auto-skips the argmax save when `Q.requires_grad=False`.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if Q.dim() == 2:
-        Q = Q.unsqueeze(0)
-    scores, _, _ = _maxsim_residual_forward(
-        Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
-    )
-    return scores
-
-
 # -----------------------------------------------------------------------------
 # C3. maxsim_residual_varlen — ragged decompress + MaxSim
 # -----------------------------------------------------------------------------
@@ -973,7 +945,6 @@ __all__ = [
     "plaid_approx_score",
     "plaid_approx_score_reference",
     "maxsim_residual",
-    "maxsim_residual_inference",
     "maxsim_residual_reference",
     "maxsim_residual_varlen",
 ]

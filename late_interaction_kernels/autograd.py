@@ -446,19 +446,3 @@ def maxsim_pairs(
     return out.squeeze(-1)
 
 
-def maxsim_inference(
-    Q: torch.Tensor,
-    D: torch.Tensor,
-    q_mask: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    *,
-    normalize: bool = False,
-) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim`."""
-    warnings.warn(
-        "`maxsim_inference` is deprecated; use `maxsim(...)`. "
-        "It auto-skips the argmax save when neither input has requires_grad.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)

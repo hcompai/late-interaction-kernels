@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 if _HAS_TRITON:
-    from late_interaction_kernels.autograd import maxsim, maxsim_inference, maxsim_pairs
+    from late_interaction_kernels.autograd import maxsim, maxsim_pairs
     from late_interaction_kernels.varlen import maxsim_varlen
 else:  # pragma: no cover
 
@@ -53,7 +53,7 @@ else:  # pragma: no cover
             "or use `late_interaction_kernels.reference` for the pure-PyTorch path."
         )
 
-    maxsim = maxsim_inference = maxsim_pairs = _needs_triton
+    maxsim = maxsim_pairs = _needs_triton
     maxsim_varlen = _needs_triton
 
 # Cross-platform high-level entry points:
@@ -84,7 +84,6 @@ __all__ = [
     # core MaxSim
     "maxsim",
     "maxsim_pairs",
-    "maxsim_inference",
     "maxsim_varlen",
     # ground-truth reference module
     "reference",

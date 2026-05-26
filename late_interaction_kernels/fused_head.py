@@ -15,8 +15,6 @@ of the inputs has ``requires_grad=True``, the argmax save and the
 autograd graph are skipped — same dispatch as :func:`maxsim_varlen`.
 """
 
-import warnings
-
 import torch
 import triton
 import triton.language as tl
@@ -439,20 +437,3 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         return gQ, grad_H_d, gW, gb, None, None
 
 
-def maxsim_from_hidden_train(
-    Q: torch.Tensor,
-    H_d: torch.Tensor,
-    W: torch.Tensor,
-    b: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    *,
-    normalize: bool = True,
-) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim_from_hidden`."""
-    warnings.warn(
-        "`maxsim_from_hidden_train` is deprecated; use `maxsim_from_hidden(...)`. "
-        "It auto-skips the argmax save when none of Q / H_d / W / b has requires_grad.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return maxsim_from_hidden(Q, H_d, W, b=b, d_mask=d_mask, normalize=normalize)
