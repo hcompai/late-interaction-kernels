@@ -105,10 +105,6 @@ def _get_compiled(key: tuple) -> Callable:
     return fn
 
 
-def is_mps_tensor(x: torch.Tensor) -> bool:
-    return x.device.type == "mps"
-
-
 def _metal_is_worthwhile(Q: torch.Tensor, D: torch.Tensor) -> bool:
     """Heuristic: only launch the Metal kernel when the work amortises.
 
@@ -197,4 +193,4 @@ def maxsim_inference_mps(
         return _compile_path(Q, D, q_mask, d_mask, normalize)
 
 
-__all__ = ["is_mps_tensor", "maxsim_mps", "maxsim_inference_mps"]
+__all__ = ["maxsim_mps", "maxsim_inference_mps"]
