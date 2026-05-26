@@ -383,8 +383,13 @@ def test_patched_colbert_loss_backward_matches_original(fake_colpali):
     ColbertLoss = losses.ColbertLoss  # noqa: N806
 
     torch.manual_seed(0)
-    Q0 = _l2(torch.randn(8, 32, 128, device="cuda", dtype=torch.float32))
-    D0 = _l2(torch.randn(8, 96, 128, device="cuda", dtype=torch.float32))
+    # bf16 matches the kernel's internal compute dtype (`pick_compute_dtype`
+    # forces fp16/bf16 even when callers pass fp32). With fp32 inputs the
+    # autograd reference runs in fp32 while the kernel quantizes to bf16
+    # — on L2-normalized tokens that's enough to flip the inner argmax on
+    # near-tied max candidates and blow up the gradient diff.
+    Q0 = _l2(torch.randn(8, 32, 128, device="cuda", dtype=torch.bfloat16))
+    D0 = _l2(torch.randn(8, 96, 128, device="cuda", dtype=torch.bfloat16))
 
     head = ColbertLoss(normalize_scores=False).to("cuda")
 
@@ -401,7 +406,8 @@ def test_patched_colbert_loss_backward_matches_original(fake_colpali):
         unpatch_colpali_engine()
 
     def _rel(a, b):
-        return (a - b).abs().max() / max(1e-6, b.abs().max().item())
+        diff = (a.float() - b.float()).abs().max()
+        return diff / max(1e-6, b.float().abs().max().item())
 
     assert _rel(Q_fused.grad, Q_ref.grad) < 5e-3
     assert _rel(D_fused.grad, D_ref.grad) < 5e-3
