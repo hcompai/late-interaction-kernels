@@ -51,30 +51,9 @@ pip install late-interaction-kernels
 
 ## Quickstart
 
-### Patch PyLate (one line)
-
-```python
-from late_interaction_kernels import patch_pylate
-
-patch_pylate()
-# PyLate training / rerank code is unchanged
-```
-
-Set `LIK_DISABLE=1` in the environment to fall back to vanilla PyLate at runtime.
-
-### Custom training loop
-
-```python
-from late_interaction_kernels import MaxSimScorer
-
-scorer = MaxSimScorer(normalize=True)                # nn.Module, no parameters
-scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
-scores.mean().backward()
-```
-
 ### Score directly (`maxsim` / `maxsim_pairs`)
 
-`maxsim` is the lowest-level public entry point — autograd-aware, mask-aware, and dispatches on `D.dim()` so the same call covers in-batch and knowledge-distillation layouts in one fused launch:
+`maxsim` is the lowest-level public entry point — autograd-aware, mask-aware, and dispatches on `D.dim()` so the same call covers in-batch and knowledge-distillation layouts in one fused launch. The argmax buffer for the backward is skipped automatically when neither input has `requires_grad=True`, so the same function is the inference path too.
 
 ```python
 from late_interaction_kernels import maxsim, maxsim_pairs
@@ -90,9 +69,9 @@ scores = maxsim(Q, D_kd, q_mask=q_mask, d_mask=d_mask_kd)
 scores = maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 ```
 
-The argmax buffer for the backward is skipped automatically when neither `Q` nor `D` has `requires_grad=True`, so the same function is the inference path too.
-
 ### Top-k retrieval
+
+Score `Q` against a large corpus and return the top-`k` per query without materialising the full `[Nq, Nd]` matrix — `chunk=` streams documents in tiles so peak HBM stays bounded.
 
 ```python
 from late_interaction_kernels import retrieve
@@ -103,6 +82,8 @@ scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
 
 ### PLAID / ColBERTv2 on compressed, ragged docs
 
+For PLAID-style indexes where documents are stored as centroid codes + residuals at variable lengths. A single kernel fuses decompression, L2-normalisation and MaxSim — no decoded tensor is ever written back to HBM.
+
 ```python
 from late_interaction_kernels.plaid import maxsim_residual_varlen
 
@@ -111,6 +92,29 @@ scores = maxsim_residual_varlen(
     centroids=centroids, bucket_weights=bucket_weights,
     nbits=2, normalize=True,
 )  # [Nd] fp32; one kernel does decompress + L2-normalize + MaxSim
+```
+
+### Custom training loop
+
+A stateless `nn.Module` wrapper around `maxsim` — drop it into any training loop that needs autograd-aware late-interaction scoring without touching PyLate.
+
+```python
+from late_interaction_kernels import MaxSimScorer
+
+scorer = MaxSimScorer(normalize=True)                # nn.Module, no parameters
+scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
+scores.mean().backward()
+```
+
+### Patch PyLate (one line)
+
+Monkey-patches PyLate's scoring + loss to route through the fused kernel. Existing PyLate training and rerank scripts run unchanged; set `LIK_DISABLE=1` to fall back to vanilla PyLate at runtime.
+
+```python
+from late_interaction_kernels import patch_pylate
+
+patch_pylate()
+# PyLate training / rerank code is unchanged
 ```
 
 ## Benchmarks
@@ -198,9 +202,15 @@ uv run ruff check . && uv run ruff format --check .
 > [!NOTE]
 > Pick exactly one of `--extra torch-cuda` (pulls torch from the CUDA index — `cu124`) or `--extra torch-cpu` (CPU-only wheel, what CI uses). The two are declared as conflicting in `pyproject.toml` so the lockfile resolves cleanly for both. On macOS, `--extra torch-cpu` falls back to PyPI's default (MPS-capable) wheel automatically.
 
-GPU tests run automatically on every push to `main`. To run them on a PR, apply the `run-gpu-tests` label.
+GPU tests run automatically on every push to `main`. To run them on a PR, apply the `run-gpu-tests` label — this requires repository admin permissions, so ping a maintainer if your PR needs it.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
+
+## Related projects
+
+- [roipony/flash-maxsim](https://github.com/roipony/flash-maxsim) — fused Triton kernel that tiles the similarity matrix in SRAM instead of materialising it in HBM.
+- [erikkaum/maxsim](https://github.com/erikkaum/maxsim) — exact MaxSim with hand-written CUDA (NVIDIA) and Metal (Apple Silicon) kernels; avoids materialising the similarity matrix on either backend.
+- [mixedbread-ai/maxsim-cpu](https://github.com/mixedbread-ai/maxsim-cpu) — Rust + SIMD CPU implementation (libxsmm on x86, Accelerate on ARM) for environments without a GPU.
 
 ## Citation
 
