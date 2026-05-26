@@ -38,6 +38,33 @@ except (TypeError, ValueError):  # pragma: no cover
 _HAS_WARP_SPEC = {"num_consumer_groups", "num_buffers_warp_spec"} <= _CFG_PARAMS
 
 
+# Persistent on-disk best-config cache landed in Triton 3.4 (the parameter is
+# ``cache_results``). On older Triton (3.0 - 3.3) the kwarg doesn't exist and
+# passing it would TypeError, so we feature-detect and only inject it when
+# available. Effect: first run on a fresh machine pays the usual benchmark
+# cost; subsequent processes (CI runs, second training epoch, new shell) load
+# the winner from ``$TRITON_CACHE_DIR`` and skip the sweep entirely. The cache
+# key Triton uses already includes the Triton version, backend hash, kernel
+# source hash, env-var hash and the config list, so it invalidates on its own
+# when any of those change — we don't need our own bust mechanism.
+try:
+    _AUTOTUNE_PARAMS = set(inspect.signature(triton.autotune).parameters)
+except (TypeError, ValueError):  # pragma: no cover
+    _AUTOTUNE_PARAMS = set()
+_HAS_DISK_CACHE = "cache_results" in _AUTOTUNE_PARAMS
+
+
+def autotune_kwargs() -> dict:
+    """Shared ``triton.autotune`` kwargs every LIK kernel injects via ``**``.
+
+    Today only carries ``cache_results=True`` (when supported). If Triton
+    grows more first-class autotune knobs in the future (e.g. global cache
+    key prefix, remote cache backend) this is where they go so every kernel
+    inherits them at once.
+    """
+    return {"cache_results": True} if _HAS_DISK_CACHE else {}
+
+
 def _cfg(kwargs, *, num_warps, num_stages):
     """Build a ``triton.Config``. The historical ``warp_spec=True`` shortcut
     has been removed: Triton 3.4+ does warp specialization automatically

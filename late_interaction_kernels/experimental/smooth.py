@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from late_interaction_kernels._autotune import forward_configs, prune_forward
+from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 
@@ -84,6 +84,7 @@ if _HAS_TRITON:
         configs=forward_configs(),
         key=["Lq", "d_pad", "K", "has_q_mask", "has_d_mask", "normalize"],
         prune_configs_by={"early_config_prune": prune_forward},
+        **autotune_kwargs(),
     )
     @triton.jit
     def _smooth_maxsim_fwd_kernel(

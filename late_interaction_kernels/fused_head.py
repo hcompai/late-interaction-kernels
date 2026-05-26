@@ -21,6 +21,7 @@ import torch
 import triton
 import triton.language as tl
 
+from late_interaction_kernels._autotune import autotune_kwargs
 from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 
@@ -39,6 +40,7 @@ def _fused_head_configs():
 @triton.autotune(
     configs=_fused_head_configs(),
     key=["Lq", "d_out_pad", "d_model_pad", "has_bias", "has_d_mask", "normalize", "save_argmax"],
+    **autotune_kwargs(),
 )
 @triton.jit
 def _fused_head_fwd_kernel(

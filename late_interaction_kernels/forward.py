@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 
-from late_interaction_kernels._autotune import forward_configs, prune_forward
+from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
 
 
@@ -18,9 +18,15 @@ from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, p
     configs=forward_configs(),
     # ``Ld`` stays out of the key: it only drives a runtime ``range(0, Ld,
     # BLOCK_D)`` loop, so keying on it would force one recompile + one
-    # autotune sweep per distinct doc length.
-    key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "normalize"],
+    # autotune sweep per distinct doc length. ``normalize`` is also
+    # intentionally absent — it's a constexpr toggle for ~3 extra ops in the
+    # inner Ld loop, doesn't shift register pressure enough to change the
+    # winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` config. Keeping
+    # it would double the cache cardinality for zero perf win (verified on
+    # H100, A100 sweeps).
+    key=["Lq", "d_pad", "has_q_mask", "has_d_mask"],
     prune_configs_by={"early_config_prune": prune_forward},
+    **autotune_kwargs(),
 )
 @triton.jit
 def _maxsim_fwd_kernel(
@@ -153,6 +159,31 @@ def _maxsim_fwd_kernel(
     tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
 
+# Small-input bypass thresholds. Below these we sidestep autotune entirely
+# and launch the kernel with a conservative fixed config that fits the SMEM
+# budget of every GPU family we support (≤ 96 KiB for d ≤ 256, well under the
+# 100 KiB Ampere-consumer floor). The motivation is the same as
+# flash-maxsim's ``_maxsim_fwd_kernel_small`` (line 337-348 of their
+# ``flash_maxsim.py``): inference / REPL / test calls hit autotune over and
+# over for shapes where the autotune *cost* (5+ s) dominates the workload
+# (sub-millisecond). For these the optimum-vs-fixed-config gap is single-digit
+# percent — well worth trading away to skip the sweep.
+_SMALL_BYPASS_NQND = 500  # max Nq * Nd
+_SMALL_BYPASS_D = 256  # max embedding dim (SMEM ceiling)
+_SMALL_BLOCK_Q = 32
+_SMALL_BLOCK_D = 64
+_SMALL_NUM_WARPS = 4
+_SMALL_NUM_STAGES = 2
+
+
+def _should_bypass_autotune(Nq: int, Nd: int, d: int, save_argmax: bool) -> bool:
+    """Inference-side small-shape bypass. Only safe when we don't need the
+    argmax tile (i.e. no backward) — that keeps the bypass kernel identical
+    to the autotuned one except for the fixed block sizes.
+    """
+    return (not save_argmax) and (Nq * Nd <= _SMALL_BYPASS_NQND) and (d <= _SMALL_BYPASS_D)
+
+
 def _run_forward(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -186,7 +217,7 @@ def _run_forward(
     a_strides = (argmax.stride(0), argmax.stride(1)) if save_argmax else (0, 0)
 
     grid = (Nq * Nd,)
-    _maxsim_fwd_kernel[grid](
+    args = (
         Q,
         D,
         q_mask_ptr,
@@ -217,8 +248,25 @@ def _run_forward(
         has_d_mask,
         save_argmax,
         normalize,
-        COMPUTE_DTYPE=tl_dtype,
     )
+    if _should_bypass_autotune(Nq, Nd, d, save_argmax):
+        # Bypass: launch the underlying JIT directly with fixed constexpr
+        # block sizes and fixed launch attrs. ``_maxsim_fwd_kernel.fn`` is the
+        # ``JITFunction`` wrapped by ``@triton.autotune`` — calling it via
+        # ``[grid](...)`` skips the autotuner entirely, so no sweep, no
+        # benchmark, no disk cache touch. Same kernel binary as the autotuned
+        # path would compile for this (BLOCK_Q, BLOCK_D) tuple, so the
+        # Triton compile cache is shared.
+        _maxsim_fwd_kernel.fn[grid](
+            *args,
+            BLOCK_Q=_SMALL_BLOCK_Q,
+            BLOCK_D=_SMALL_BLOCK_D,
+            COMPUTE_DTYPE=tl_dtype,
+            num_warps=_SMALL_NUM_WARPS,
+            num_stages=_SMALL_NUM_STAGES,
+        )
+    else:
+        _maxsim_fwd_kernel[grid](*args, COMPUTE_DTYPE=tl_dtype)
     return scores, argmax
 
 

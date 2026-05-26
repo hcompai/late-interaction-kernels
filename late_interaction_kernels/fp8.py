@@ -22,7 +22,7 @@ try:
     import triton
     import triton.language as tl
 
-    from late_interaction_kernels._autotune import forward_configs, prune_forward
+    from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
     from late_interaction_kernels._utils import next_pow2
 
     _HAS_TRITON = True
@@ -74,6 +74,7 @@ if _HAS_TRITON:
         configs=forward_configs(),
         key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "SCALE_Q_PER_TOKEN", "SCALE_D_PER_TOKEN"],
         prune_configs_by={"early_config_prune": prune_forward},
+        **autotune_kwargs(),
     )
     @triton.jit
     def _maxsim_fp8_fwd_kernel(
