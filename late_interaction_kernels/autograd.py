@@ -213,6 +213,59 @@ class _MaxSimFn(torch.autograd.Function):
         return grad_Q, grad_D, None, None, None, None
 
 
+def _maxsim_kd(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    *,
+    normalize: bool,
+) -> torch.Tensor:
+    """KD layout ``[Nq, Lq, d] x [Nq, K, Ld, d] -> [Nq, K]`` via packed pairs.
+
+    Converts contiguous prefix-True masks to per-row lengths, then delegates
+    to :func:`~late_interaction_kernels.maxsim_padded`. One fused kernel
+    launch for all ``Nq * K`` pairs (vs the per-query Python loop that
+    callers had to write before this dispatch existed).
+    """
+    from late_interaction_kernels.padded import maxsim_padded
+
+    if Q.dim() != 3:
+        raise ValueError(f"KD layout (D.dim()==4) needs Q to be [Nq, Lq, d]; got Q.shape={tuple(Q.shape)}")
+    Nq, Lq, d_q = Q.shape
+    Nq_d, K, Ld, d_d = D.shape
+    if Nq != Nq_d:
+        raise ValueError(
+            f"KD layout needs D.shape[0] == Q.shape[0]; got Q.shape[0]={Nq} vs D.shape[0]={Nq_d}."
+        )
+    if d_q != d_d:
+        raise ValueError(f"Q and D must share the embedding dim; got {d_q} vs {d_d}.")
+
+    if normalize:
+        # Single-line normalize on the wrapper side — the packed kernel
+        # doesn't have a built-in ``normalize`` flag (forward.py does).
+        Q = torch.nn.functional.normalize(Q, p=2, dim=-1, eps=1e-12)
+        D = torch.nn.functional.normalize(D, p=2, dim=-1, eps=1e-12)
+
+    if q_mask is not None:
+        if q_mask.shape != (Nq, Lq):
+            raise ValueError(f"q_mask must be [Nq={Nq}, Lq={Lq}] for KD layout; got {tuple(q_mask.shape)}.")
+        qlen = q_mask.to(torch.int32).sum(dim=-1)
+    else:
+        qlen = torch.full((Nq,), Lq, device=Q.device, dtype=torch.int32)
+
+    if d_mask is not None:
+        if d_mask.shape != (Nq, K, Ld):
+            raise ValueError(
+                f"d_mask must be [Nq={Nq}, K={K}, Ld={Ld}] for KD layout; got {tuple(d_mask.shape)}."
+            )
+        dlen = d_mask.to(torch.int32).sum(dim=-1)
+    else:
+        dlen = torch.full((Nq, K), Ld, device=D.device, dtype=torch.int32)
+
+    return maxsim_padded(Q, D, qlen, dlen)
+
+
 def maxsim(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -224,22 +277,43 @@ def maxsim(
 ) -> torch.Tensor:
     """Differentiable fused MaxSim. Drop-in for PyLate's ``colbert_scores``.
 
+    Dispatches on ``D``'s rank so the same call covers in-batch scoring and
+    per-query candidate scoring (PyLate's ``colbert_kd_scores`` shape):
+
     Args:
         Q: ``[Nq, Lq, d]`` or ``[Lq, d]``.
-        D: ``[Nd, Ld, d]`` or ``[Ld, d]``.
-        q_mask, d_mask: bool tensors (``True`` = valid token).
+        D: one of
+
+            * ``[Ld, d]`` — single doc → returns a scalar (with 2-D ``Q``)
+              or ``[Nq]`` (with 3-D ``Q``).
+            * ``[Nd, Ld, d]`` — in-batch cross product → returns ``[Nq, Nd]``.
+            * ``[Nq, K, Ld, d]`` — per-query candidate lists (KD layout) →
+              returns ``[Nq, K]``. Internally dispatched to
+              :func:`~late_interaction_kernels.maxsim_padded`, which uses a
+              single fused packed kernel (``O(Nq * K)`` compute, no per-query
+              Python loop).
+        q_mask, d_mask: bool tensors (``True`` = valid token). Shapes mirror
+            the matching ``Q``/``D`` axes. Masks are assumed to be contiguous
+            prefix-True (the ColBERT/ColPali tokenizer convention) — the KD
+            path uses ``mask.sum(-1)`` to extract per-row lengths.
         normalize: L2-normalize Q and D per-token inside the kernel. Set to
             ``True`` for ColBERT / ColPali / LateOn-style scoring.
         backward: per-call override of the ``grad_D`` strategy
             (``"auto" | "unified" | "csr" | "atomic"``). ``None`` defers
-            to :func:`set_backward_method`.
+            to :func:`set_backward_method`. Ignored on the KD path
+            (``score_pairs_packed`` ships its own fused backward).
 
     Returns:
-        scores: ``[Nq, Nd]`` fp32, squeezed to match 2-D inputs.
+        scores: fp32, shape as above.
 
     Inputs can be fp16 / bf16 / fp32 (fp32 accumulator). Gradients flow
     into Q and D; masks are non-differentiable.
     """
+    # KD layout: D is [Nq, K, Ld, d]. Delegate to the packed pair-list kernel,
+    # which handles all Nq*K pairs in one launch (no Python loop).
+    if D.dim() == 4:
+        return _maxsim_kd(Q, D, q_mask, d_mask, normalize=normalize)
+
     q_was_2d = Q.dim() == 2
     d_was_2d = D.dim() == 2
     if q_was_2d:
