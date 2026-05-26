@@ -259,8 +259,7 @@ def scenario_inference_like_shapes() -> None:
 
         verdict = "✓" if ok else f"✗ (err={err:.2e})"
         print(
-            f"{label:35}  {t_base * 1e3:7.3f} ms   {t_lik * 1e3:7.3f} ms   "
-            f"{t_base / t_lik:5.2f}×  {verdict}"
+            f"{label:35}  {t_base * 1e3:7.3f} ms   {t_lik * 1e3:7.3f} ms   {t_base / t_lik:5.2f}×  {verdict}"
         )
     print()
 
