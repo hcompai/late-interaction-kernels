@@ -3,7 +3,7 @@ name: GPU CI
 permissions:
   contents: read
 
-# Runs the CUDA-marked tests on an AWS CodeBuild-hosted GPU runner (T4).
+# Runs the CUDA-marked tests on an AWS CodeBuild-hosted GPU runner (A10G).
 # Triggered:
 #   - on commits to main that touch GPU-relevant code;
 #   - on PRs carrying the `run-gpu-tests` label, when GPU-relevant code changed
@@ -37,7 +37,7 @@ concurrency:
 jobs:
   gpu-tests:
     name: GPU tests (${{ matrix.bucket.name }})
-    # T4, ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
+    # A10G (g5-class), ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
     runs-on: codebuild-late-interaction-kernels-${{ github.run_id }}-${{ github.run_attempt }}-linux-5.0-gpu_small
     # Run on every push to main; on PRs, only when the `run-gpu-tests` label
     # is attached (so new commits on a labeled PR also re-run). Label apply
