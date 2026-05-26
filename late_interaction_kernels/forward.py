@@ -159,15 +159,11 @@ def _maxsim_fwd_kernel(
     tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
 
-# Small-input bypass thresholds. Below these we sidestep autotune entirely
-# and launch the kernel with a conservative fixed config that fits the SMEM
-# budget of every GPU family we support (≤ 96 KiB for d ≤ 256, well under the
-# 100 KiB Ampere-consumer floor). The motivation is the same as
-# flash-maxsim's ``_maxsim_fwd_kernel_small`` (line 337-348 of their
-# ``flash_maxsim.py``): inference / REPL / test calls hit autotune over and
-# over for shapes where the autotune *cost* (5+ s) dominates the workload
-# (sub-millisecond). For these the optimum-vs-fixed-config gap is single-digit
-# percent — well worth trading away to skip the sweep.
+# Small-input bypass: for tiny shapes (inference / REPL / tests) the autotune
+# sweep (~5 s) dominates the actual work (sub-ms), and the optimum-vs-fixed
+# gap is single-digit percent. The fixed config below fits ≤ 96 KiB SMEM so
+# it lands on every supported GPU family. Mirrors flash-maxsim's
+# ``_maxsim_fwd_kernel_small`` (their ``flash_maxsim.py`` L337-348).
 _SMALL_BYPASS_NQND = 500  # max Nq * Nd
 _SMALL_BYPASS_D = 256  # max embedding dim (SMEM ceiling)
 _SMALL_BLOCK_Q = 32

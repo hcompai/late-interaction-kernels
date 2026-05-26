@@ -19,39 +19,24 @@ Per-family SRAM budgets (KiB of shared memory the kernel can actually use):
 - Unknown / older:             48 (safe floor)
 """
 
-import inspect
+import re
 
 import triton
 
 from late_interaction_kernels._utils import detect_gpu
 
-# Warp specialization (FA-3 style) was a manual opt-in via
-# ``num_consumer_groups`` / ``num_buffers_warp_spec`` on Triton 3.2 - 3.3.
-# Triton 3.4+ derives it automatically from the IR and dropped the kwargs.
-# We keep this probe for backwards compat with the brief 3.2/3.3 window —
-# on modern Triton it returns ``False`` and the helper below silently emits
-# plain configs.
-try:
-    _CFG_PARAMS = set(inspect.signature(triton.Config).parameters)
-except (TypeError, ValueError):  # pragma: no cover
-    _CFG_PARAMS = set()
-_HAS_WARP_SPEC = {"num_consumer_groups", "num_buffers_warp_spec"} <= _CFG_PARAMS
-
-
-# Persistent on-disk best-config cache landed in Triton 3.4 (the parameter is
-# ``cache_results``). On older Triton (3.0 - 3.3) the kwarg doesn't exist and
-# passing it would TypeError, so we feature-detect and only inject it when
-# available. Effect: first run on a fresh machine pays the usual benchmark
-# cost; subsequent processes (CI runs, second training epoch, new shell) load
-# the winner from ``$TRITON_CACHE_DIR`` and skip the sweep entirely. The cache
-# key Triton uses already includes the Triton version, backend hash, kernel
-# source hash, env-var hash and the config list, so it invalidates on its own
-# when any of those change — we don't need our own bust mechanism.
-try:
-    _AUTOTUNE_PARAMS = set(inspect.signature(triton.autotune).parameters)
-except (TypeError, ValueError):  # pragma: no cover
-    _AUTOTUNE_PARAMS = set()
-_HAS_DISK_CACHE = "cache_results" in _AUTOTUNE_PARAMS
+# Persistent on-disk best-config cache landed in Triton 3.4 (the ``cache_results``
+# kwarg on ``triton.autotune``). On older Triton the kwarg doesn't exist and
+# passing it would TypeError, so we gate on the version. Effect: first run on
+# a fresh machine pays the usual benchmark cost; subsequent processes (CI
+# runs, second training epoch, new shell) load the winner from
+# ``$TRITON_CACHE_DIR`` and skip the sweep. Triton's cache key already
+# includes its version, backend hash, kernel source hash, env-var hash and
+# the config list, so it invalidates on its own when any of those change.
+_TRITON_VERSION: tuple[int, int] = tuple(
+    int(part) for part in re.match(r"(\d+)\.(\d+)", triton.__version__).groups()
+)
+_HAS_DISK_CACHE = _TRITON_VERSION >= (3, 4)
 
 
 def autotune_kwargs() -> dict:
