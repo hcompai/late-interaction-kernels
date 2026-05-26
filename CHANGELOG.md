@@ -6,6 +6,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-26
+
+### Removed
+
+- [breaking] **Experimental kernels.** The `late_interaction_kernels.experimental`
+  package and its three research variants (`soft_maxsim`, `smooth_maxsim`,
+  `maxsim_matryoshka`) are gone, along with `reference.maxsim_reference_soft`
+  and the matching `tests/test_{soft,smooth,matryoshka}.py` plus the two
+  soft-maxsim cases in `tests/test_robustness.py`. None of them shipped to
+  PyLate, colpali_engine, FastPlaid, or NextPlaid; folding research kernels
+  into prod was the same mistake as `maxsim_xtr` in 0.2.0. Users on a
+  research path can vendor the kernel source from the pre-0.3.0 git
+  history.
+- [breaking] **Deprecated `*_inference` shims and `maxsim_from_hidden_train`.**
+  The four shims marked `DeprecationWarning` in 0.2.0 ("will be removed in
+  the next breaking release") are removed:
+  - `late_interaction_kernels.maxsim_inference` → `maxsim(...)`
+  - `late_interaction_kernels.fused_head.maxsim_from_hidden_train` →
+    `maxsim_from_hidden(...)`
+  - `late_interaction_kernels.varlen.maxsim_varlen_inference` →
+    `maxsim_varlen(...)`
+  - `late_interaction_kernels.plaid.maxsim_residual_inference` →
+    `maxsim_residual(...)`
+
+  Each surviving function already auto-skips the saved argmax buffer
+  when no input has `requires_grad=True`, so behaviour is unchanged.
+- [breaking] **`set_backward_method` / `get_backward_method`** removed.
+  They were deprecated in 0.2.0 and carried no expressivity over the
+  per-call `backward=` kwarg on `maxsim(...)` / `MaxSimScorer(...)`.
+  Migration: replace `set_backward_method("csr")` with
+  `maxsim(..., backward="csr")` (or `MaxSimScorer(backward="csr")`).
+  `maxsim()`'s `backward=None` now resolves directly to `"auto"`
+  instead of reading a module-level global.
+- [breaking] `reference.xtr_reference` and its three CPU-only tests
+  in `tests/test_reference_cpu.py`. The XTR Triton kernel was already
+  deleted in 0.2.0; the orphaned PyTorch helper is now gone too.
+
+### Changed
+
+- Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
+  `_mask_as_bool`) and `mps.is_mps_tensor` (exported but unreferenced).
+- `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
+  `Q.contiguous()` directly; the previous `ensure_contiguous_last(Q).contiguous()`
+  pattern was a no-op pair (the unconditional `.contiguous()` already
+  covered every stride layout).
+
+### Fixed
+
+- `docs/benchmarks.md` Apple Silicon section now points at
+  `late_interaction_kernels.mps.metal.maxsim_inference_metal` (the
+  module was relocated under `mps/` in 0.2.0).
+
 ## [0.2.0] - 2026-05-22
 
 ### Added

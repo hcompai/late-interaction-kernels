@@ -474,7 +474,7 @@ you fit ~5–10× more of them than vanilla PyLate.
 implementations land on Apple Silicon and the dispatch picks per call:
 
 * **`metal`** — fused `simdgroup_matrix` kernel
-  (`late_interaction_kernels.metal.maxsim_inference_metal`, JIT-compiled
+  (`late_interaction_kernels.mps.metal.maxsim_inference_metal`, JIT-compiled
   via `torch.mps.compile_shader`). Forward-only; never materialises the
   `[Nq · Nd · Lq · Ld]` similarity tensor.
 * **`compile`** — `torch.compile`-fused dense reference. Autograd-aware,
