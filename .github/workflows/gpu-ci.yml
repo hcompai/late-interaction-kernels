@@ -72,7 +72,6 @@ jobs:
               tests/test_normalize.py
               tests/test_robustness.py
               tests/test_fused_head_train.py
-            args: -m "not perf"
           - name: kernels-medium
             paths: >-
               tests/test_plaid.py
@@ -81,7 +80,6 @@ jobs:
               tests/test_compile_cache.py
               tests/test_smooth.py
               tests/test_fused_head.py
-            args: -m "not perf"
           - name: kernels-light
             paths: >-
               tests/test_forward.py
@@ -95,10 +93,6 @@ jobs:
               tests/test_pylate_compat.py
               tests/test_pylate_compat_warnings.py
               tests/test_colpali_compat.py
-            args: -m "not perf"
-          - name: perf
-            paths: tests/regression/
-            args: -m perf
     steps:
       - uses: actions/checkout@v5
 
@@ -116,4 +110,4 @@ jobs:
       - name: Run tests (${{ matrix.bucket.name }})
         # --durations=20 prints the long pole per bucket so we can rebalance
         # the matrix when test additions shift the picture.
-        run: pytest ${{ matrix.bucket.paths }} -v --durations=20 ${{ matrix.bucket.args }}
+        run: pytest ${{ matrix.bucket.paths }} -v --durations=20
