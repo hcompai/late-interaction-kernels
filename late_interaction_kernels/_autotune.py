@@ -133,16 +133,9 @@ def prune_forward(configs, named_args, **kwargs):
     keep = []
     for cfg in configs:
         bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
-        # Q and D tiles get N copies in SMEM for the async-copy pipeline
-        # (num_stages-deep double/triple buffering). The fp32 S accumulator
-        # isn't pipelined — it lives in one allocation. Missing the
-        # num_stages multiplier under-estimates real SMEM by ~num_stages×
-        # on the input tiles and lets configs through that OOM at compile
-        # time (e.g. BLOCK_Q=32/BLOCK_D=128 on A10G with num_stages=2:
-        # predicted 56 KiB, actually allocates ~104 KiB).
-        input_bytes = (bq * d + bd * d) * 2 * cfg.num_stages
-        s_bytes = bq * bd * 4
-        need = input_bytes + s_bytes
+        # Triton allocates num_stages copies of Q/D in SMEM for the
+        # async-copy pipeline; the fp32 S accumulator stays in one slot.
+        need = (bq * d + bd * d) * 2 * cfg.num_stages + bq * bd * 4
         if need > sram_budget:
             continue
         if bq > 2 * Lq:
