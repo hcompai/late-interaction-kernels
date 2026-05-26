@@ -1,5 +1,5 @@
-# End-to-end fast-plaid vs fused kernel comparison on 1xH100.
-#   sky launch scripts/sky_fastplaid_e2e.yaml -c lik-e2e
+# End-to-end fast-plaid vs fused kernel comparison on 1×H100.
+#   sky launch scripts/sky_fastplaid_e2e.yaml -c lik-e2e -y
 # Reuses an existing cluster:
 #   sky exec lik-e2e scripts/sky_fastplaid_e2e.yaml
 
@@ -7,10 +7,7 @@ name: lik-fastplaid-e2e
 
 resources:
   infra: kubernetes
-  # Use the official pytorch image (vanilla torch 2.8.0) — NGC ships a
-  # pre-release torch with a different ABI that the fast-plaid wheel
-  # can't link against (undefined symbol in at::kthvalue).
-  image_id: docker:pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
   accelerators: H100:1
   cpus: 8+
 
@@ -22,36 +19,40 @@ config:
       spec:
         priorityClassName: low
 
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
 setup: |
   set -eux
   cd ~/sky_workdir
-  # Stock pytorch image lacks triton — install it from pypi (matches torch 2.8).
-  pip install --no-cache-dir triton
-  pip install --no-cache-dir -e ".[dev]"
-  # fast-plaid ships per-torch-version wheels: 1.4.6.280 is the torch-2.8 one.
-  pip install --no-cache-dir fast-plaid==1.4.6.280
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  # fast-plaid ships per-torch-version wheels; 1.4.6.280 is the torch-2.8 one.
+  uv pip install "fast-plaid==1.4.6.280"
 
 run: |
   set -eux
   cd ~/sky_workdir
-  # If we launched fresh, setup already ran. If `sky exec` reused the cluster
-  # the setup block is skipped → install here too. Stock pytorch image has no
-  # triton, no lik, no fast-plaid.
-  python -c "import fast_plaid, triton, late_interaction_kernels" 2>/dev/null || {
-    pip install --no-cache-dir triton
-    pip install --no-cache-dir -e ".[dev]"
-    pip install --no-cache-dir fast-plaid==1.4.6.280
+  export PATH="$HOME/.local/bin:$PATH"
+  # If we launched fresh, setup already ran. `sky exec` against an existing
+  # cluster skips the setup block — re-install on demand.
+  uv run python -c "import fast_plaid, triton, late_interaction_kernels" 2>/dev/null || {
+    uv sync --frozen --extra dev --extra torch-cuda
+    uv pip install "fast-plaid==1.4.6.280"
   }
-  python -c "import torch, triton, fast_plaid; print('torch', torch.__version__, 'triton', triton.__version__)"
-  python -c "import torch; print(torch.cuda.get_device_name())"
+  uv run python -c "import torch, triton, fast_plaid; print('torch', torch.__version__, 'triton', triton.__version__)"
+  uv run python -c "import torch; print(torch.cuda.get_device_name())"
 
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-  GPU=$(python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
+  GPU=$(uv run python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
   ART=/tmp/artifacts/${STAMP}_${GPU}_e2e
   mkdir -p "${ART}"
 
   echo ">>> fast-plaid e2e comparison"
-  python benchmarks/bench_fastplaid_e2e.py --outdir "${ART}" --small 2>&1 | tee "${ART}/bench_e2e.log"
+  uv run python benchmarks/bench_fastplaid_e2e.py --outdir "${ART}" --small 2>&1 | tee "${ART}/bench_e2e.log"
 
   echo ">>> artifact summary"
   find "${ART}" -type f | sort
