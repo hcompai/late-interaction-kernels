@@ -72,57 +72,11 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
     return Q, q_mask
 
 
-_BACKWARD_METHOD = "auto"  # module-level toggle, deprecated; prefer per-call `backward=`
-
 _VALID_METHODS = ("auto", "atomic", "csr", "unified")
 
 # One-shot flag so we don't spam the user's logs if they happen to pass
 # unnormalized inputs inside a tight training loop.
 _WARNED_UNNORMALIZED = False
-
-
-def set_backward_method(method: str) -> None:
-    """Set the process-wide default ``grad_D`` path.
-
-    .. deprecated::
-        Pass ``backward=`` per call on :func:`maxsim` or
-        :class:`~late_interaction_kernels.MaxSimScorer` instead — the
-        kwarg is strictly more flexible and avoids a process-wide global.
-
-    Values:
-
-    * ``"auto"`` — ``"unified"`` for almost every shape; ``"csr"`` for
-      very high ``grad_D`` contention (``Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64``).
-    * ``"unified"`` — single-pass fused ``grad_Q + grad_D`` kernel.
-    * ``"csr"`` — scatter-free bucketed reduction; bitwise-deterministic.
-    * ``"atomic"`` — legacy two-pass with fp32 ``tl.atomic_add``.
-    """
-    global _BACKWARD_METHOD
-    if method not in _VALID_METHODS:
-        raise ValueError(f"method must be one of {_VALID_METHODS}, got {method!r}")
-    warnings.warn(
-        "`set_backward_method` is deprecated; pass `backward=` per call on "
-        "`maxsim(...)` or `MaxSimScorer(backward=...)` instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    _BACKWARD_METHOD = method
-
-
-def get_backward_method() -> str:
-    """Return the current process-wide default ``grad_D`` path.
-
-    .. deprecated::
-        Pass ``backward=`` per call on :func:`maxsim` or
-        :class:`~late_interaction_kernels.MaxSimScorer` instead.
-    """
-    warnings.warn(
-        "`get_backward_method` is deprecated; pass `backward=` per call on "
-        "`maxsim(...)` or `MaxSimScorer(backward=...)` instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _BACKWARD_METHOD
 
 
 def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
@@ -318,10 +272,10 @@ def maxsim(
             (masked positions get ``-inf`` scores before the row max).
         normalize: L2-normalize Q and D per-token inside the kernel. Set to
             ``True`` for ColBERT / ColPali / LateOn-style scoring.
-        backward: per-call override of the ``grad_D`` strategy
-            (``"auto" | "unified" | "csr" | "atomic"``). ``None`` defers
-            to :func:`set_backward_method`. KD/pairs always use ``unified``
-            (no cross-query contention on ``grad_D``).
+        backward: ``grad_D`` strategy
+            (``"auto" | "unified" | "csr" | "atomic"``). ``None`` (default)
+            is treated as ``"auto"``. KD/pairs always use ``unified`` (no
+            cross-query contention on ``grad_D``).
 
     Returns:
         scores: fp32, shape as above.
@@ -330,7 +284,7 @@ def maxsim(
     into Q and D; masks are non-differentiable.
     """
     if backward is None:
-        method_for_kd = _BACKWARD_METHOD
+        method_for_kd = "auto"
     elif backward not in _VALID_METHODS:
         raise ValueError(f"backward= must be one of {_VALID_METHODS} or None, got {backward!r}")
     else:

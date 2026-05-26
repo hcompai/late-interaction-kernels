@@ -198,32 +198,6 @@ def test_maxsim_per_call_backward_invalid_raises():
         maxsim(Q, D, normalize=True, backward="nope")  # type: ignore[arg-type]
 
 
-def test_maxsim_per_call_overrides_global():
-    """Per-call `backward=` must not leak back into the global state.
-
-    The ``set_backward_method`` / ``get_backward_method`` globals are deprecated
-    (see :func:`late_interaction_kernels.autograd.set_backward_method`) and emit
-    ``DeprecationWarning``; the test asserts they still behave correctly until
-    the next breaking release.
-    """
-    from late_interaction_kernels import maxsim
-    from late_interaction_kernels.autograd import get_backward_method, set_backward_method
-
-    with pytest.warns(DeprecationWarning):
-        old = get_backward_method()
-    try:
-        with pytest.warns(DeprecationWarning):
-            set_backward_method("csr")
-        Q = torch.randn(2, 16, 64, device="cuda", dtype=torch.float32, requires_grad=True)
-        D = torch.randn(4, 32, 64, device="cuda", dtype=torch.float32, requires_grad=True)
-        maxsim(Q, D, normalize=True, backward="atomic").sum().backward()
-        with pytest.warns(DeprecationWarning):
-            assert get_backward_method() == "csr"
-    finally:
-        with pytest.warns(DeprecationWarning):
-            set_backward_method(old)
-
-
 def test_unnormalized_input_warns_once(monkeypatch):
     import warnings
 
