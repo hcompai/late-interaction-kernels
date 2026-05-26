@@ -10,24 +10,30 @@ name: lik-colpali-tune
 
 resources:
   infra: kubernetes
-  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
   accelerators: H100:1
   cpus: 16+
 
 workdir: .
 
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
 setup: |
   set -eux
   cd ~/sky_workdir
-  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.1
-  pip install -e ".[dev]" --no-deps --break-system-packages
-  pip install "flash-maxsim==0.2.0" --break-system-packages
-  python -c "import torch, triton, flash_maxsim; print('torch', torch.__version__, '| triton', triton.__version__, '| flash_maxsim', flash_maxsim.__version__)"
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  uv pip install "flash-maxsim==0.2.0"
+  uv run python -c "import torch, triton, flash_maxsim; print('torch', torch.__version__, '| triton', triton.__version__, '| flash_maxsim', flash_maxsim.__version__)"
 
 run: |
   set -euxo pipefail
   cd ~/sky_workdir
-  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.1
+  export PATH="$HOME/.local/bin:$PATH"
   mkdir -p /tmp/bench
 
   nvidia-smi --query-gpu=name,driver_version,clocks.current.sm,clocks.current.memory --format=csv | tee /tmp/bench/gpu.txt
@@ -36,10 +42,10 @@ run: |
   rm -rf ~/.triton/cache || true
 
   echo "=== bench_flash_maxsim (bf16) — all shapes, full report ==="
-  python benchmarks/bench_flash_maxsim.py --dtype bf16 2>&1 | tee /tmp/bench/fm_bf16.log
+  uv run python benchmarks/bench_flash_maxsim.py --dtype bf16 2>&1 | tee /tmp/bench/fm_bf16.log
 
   echo "=== which autotune config won on rerank-colpali? ==="
-  python - <<'PY'
+  uv run python - <<'PY'
   import torch
   from late_interaction_kernels import maxsim
   from late_interaction_kernels.forward import _maxsim_fwd_kernel as _maxsim_kernel

@@ -1,4 +1,4 @@
-# Fused decompress+MaxSim bench on 1xH100.
+# Fused decompress+MaxSim bench on 1×H100.
 #   sky exec lik-dev scripts/sky_decompress_bench.yaml --gpus H100:1
 # Or as a one-shot job:
 #   sky jobs launch scripts/sky_decompress_bench.yaml
@@ -7,7 +7,7 @@ name: lik-decompress-bench
 
 resources:
   infra: kubernetes
-  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
   accelerators: H100:1
   cpus: 8+
 
@@ -19,32 +19,40 @@ config:
       spec:
         priorityClassName: low
 
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
 setup: |
   set -eux
   cd ~/sky_workdir
-  pip install --no-cache-dir -e ".[dev]"
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
 
 run: |
   set -eux
   cd ~/sky_workdir
-  python -c "import torch, triton; print('torch', torch.__version__, 'triton', triton.__version__); print(torch.cuda.get_device_name())"
+  export PATH="$HOME/.local/bin:$PATH"
+  uv run python -c "import torch, triton; print('torch', torch.__version__, 'triton', triton.__version__); print(torch.cuda.get_device_name())"
 
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-  GPU=$(python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
+  GPU=$(uv run python -c "import torch; print(torch.cuda.get_device_name(0).replace(' ', '_'))")
   ART=/tmp/artifacts/${STAMP}_${GPU}_decompress
   mkdir -p "${ART}"
 
   echo ">>> correctness"
-  pytest tests/test_plaid.py -v 2>&1 | tee "${ART}/test_plaid.log"
+  uv run pytest tests/test_plaid.py -v 2>&1 | tee "${ART}/test_plaid.log"
 
   echo ">>> bench nbits=2 bf16 (PLAID default)"
-  python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_bf16.log"
+  uv run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_bf16.log"
 
   echo ">>> bench nbits=4 bf16"
-  python benchmarks/bench_decompress_maxsim.py --nbits 4 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb4_bf16.log"
+  uv run python benchmarks/bench_decompress_maxsim.py --nbits 4 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb4_bf16.log"
 
   echo ">>> bench nbits=2 fp16"
-  python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype fp16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_fp16.log"
+  uv run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype fp16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_fp16.log"
 
   echo ">>> artifact summary"
   find "${ART}" -type f | sort
