@@ -1,0 +1,29 @@
+# Validates the autotune-cost reductions from PR #65 (persistent disk cache
+# + small-input bypass + key cleanup). Reproduces issue lightonai/pylate#224
+# §2 shapes via the 4-D dispatch from PR #63. Single H100, ~5 min, auto-down.
+
+name: lik-autotune-persistence
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+setup: |
+  set -eux
+  pip install --break-system-packages --upgrade pip
+  # NGC 25.06 ships Triton 3.3. We need 3.4+ to test the persistent autotune
+  # cache (``cache_results=True``). Triton 3.4 was released alongside PyTorch
+  # 2.8 (NGC's pinned torch) so this upgrade is on a supported pair.
+  pip install --break-system-packages -U "triton>=3.4,<4"
+  export SETUPTOOLS_SCM_PRETEND_VERSION=0.2.1
+  pip install --break-system-packages -e . --no-deps
+
+run: |
+  set -eux
+  cd ~/sky_workdir
+  nvidia-smi | head -10
+  python scripts/_bench_autotune_persistence.py

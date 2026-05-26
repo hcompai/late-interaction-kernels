@@ -11,7 +11,7 @@ import torch
 import triton
 import triton.language as tl
 
-from late_interaction_kernels._autotune import forward_configs, prune_forward
+from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 
@@ -19,6 +19,7 @@ from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
     configs=forward_configs(),
     key=["Lq", "d_pad", "has_q_mask", "has_d_mask"],
     prune_configs_by={"early_config_prune": prune_forward},
+    **autotune_kwargs(),
 )
 @triton.jit
 def _soft_maxsim_kernel(

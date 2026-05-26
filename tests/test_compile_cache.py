@@ -94,6 +94,92 @@ def test_scatter_kernel_compiles_once_for_varying_max_ld():
     )
 
 
+def test_forward_normalize_shares_autotune_entry():
+    """Toggling ``normalize`` must NOT spawn a new autotune entry.
+
+    ``normalize`` is a tl.constexpr knob that adds ~3 ops to the inner Ld
+    loop (an L2-norm + multiply). It doesn't shift register pressure enough
+    to change the winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)``
+    config, so keeping it in the autotune key would just double the cache
+    cardinality for free. This test is the canary if anyone re-adds it.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
+    _ = maxsim(Q, D, normalize=False)
+    _ = maxsim(Q, D, normalize=True)
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 1, (
+        f"normalize=True/False must share one autotune entry; got {len(cache)}. "
+        "If autotune behaviour changed and normalize genuinely shifts the optimum, "
+        "re-add it to the key in forward.py and update this test."
+    )
+
+
+def test_forward_small_input_bypasses_autotune():
+    """Small inference shapes route through the no-autotune fast path.
+
+    ``_run_forward`` checks ``_should_bypass_autotune(...)`` and, when true,
+    calls ``_maxsim_fwd_kernel.fn[grid](...)`` directly with a fixed config.
+    The autotune cache must stay empty in that case — that's the entire
+    point of the bypass (no benchmark, no first-call stall).
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # Nq * Nd = 1 * 100 = 100 ≤ 500, d = 128 ≤ 256 → bypass triggers.
+    Q = torch.randn(1, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(100, 180, 128, device="cuda", dtype=torch.float16)
+    out = maxsim(Q, D)
+
+    assert out.shape == (1, 100)
+    assert len(_maxsim_fwd_kernel.cache) == 0, (
+        f"small-input call must bypass the autotuner; cache has {len(_maxsim_fwd_kernel.cache)} entries"
+    )
+
+
+def test_forward_large_input_goes_through_autotune():
+    """Above the bypass threshold the autotune path runs and caches a winner."""
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # Nq * Nd = 32 * 32 = 1024 > 500 → autotune.
+    Q = torch.randn(32, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(32, 180, 128, device="cuda", dtype=torch.float16)
+    _ = maxsim(Q, D)
+
+    assert len(_maxsim_fwd_kernel.cache) == 1, (
+        f"large-input call must populate the autotune cache; got {len(_maxsim_fwd_kernel.cache)} entries"
+    )
+
+
+def test_forward_bypass_matches_autotune_path():
+    """Bypass kernel and autotuned kernel produce numerically equivalent scores.
+
+    Both call the same Triton kernel body — only the ``(BLOCK_Q, BLOCK_D,
+    num_warps, num_stages)`` tuple differs. Within fp32-accumulator
+    nondeterminism (reduction order can shift across configs), the scores
+    must agree to fp16-input slack.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    torch.manual_seed(0)
+    # Small enough to bypass (Nq*Nd=200 ≤ 500).
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(100, 180, 128, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D).float()
+    ref = maxsim_reference(Q.float(), D.float())
+    torch.testing.assert_close(fast, ref, rtol=5e-3, atol=5e-3)
+
+
 def test_scatter_kernel_compiles_once_for_varying_max_lq():
     """Many distinct ``max_lq`` values share one autotune-cache entry."""
     from late_interaction_kernels.score_pairs import _scatter_fwd_kernel, score_pairs_packed

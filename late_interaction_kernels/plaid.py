@@ -16,7 +16,7 @@ import torch
 import triton
 import triton.language as tl
 
-from late_interaction_kernels._autotune import forward_configs, prune_forward
+from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2
 
 # -----------------------------------------------------------------------------
@@ -146,6 +146,7 @@ def plaid_approx_score(
     configs=forward_configs(),
     key=["Lq", "max_Ld", "d_pad", "nbits", "normalize", "SAVE_ARGMAX"],
     prune_configs_by={"early_config_prune": prune_forward},
+    **autotune_kwargs(),
 )
 @triton.jit
 def _maxsim_residual_kernel(
@@ -693,6 +694,7 @@ def maxsim_residual_inference(
     configs=forward_configs(),
     key=["Lq", "max_Ld", "d_pad", "nbits", "normalize", "SAVE_ARGMAX"],
     prune_configs_by={"early_config_prune": prune_forward},
+    **autotune_kwargs(),
 )
 @triton.jit
 def _maxsim_residual_varlen_kernel(
