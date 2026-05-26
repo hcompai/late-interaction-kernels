@@ -435,5 +435,3 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
             gQ = gQ.to(Q.dtype)
 
         return gQ, grad_H_d, gW, gb, None, None
-
-

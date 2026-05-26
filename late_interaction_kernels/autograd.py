@@ -398,5 +398,3 @@ def maxsim_pairs(
     d_mask_kd = d_mask.unsqueeze(1) if d_mask is not None else None
     out = maxsim(Q, D_kd, q_mask=q_mask, d_mask=d_mask_kd, normalize=normalize, backward=backward)
     return out.squeeze(-1)
-
-

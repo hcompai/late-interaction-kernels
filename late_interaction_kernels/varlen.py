@@ -464,5 +464,3 @@ def maxsim_varlen(
         Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d, max_seqlen_q, max_seqlen_d, False
     )
     return scores
-
-
