@@ -15,6 +15,13 @@ resources:
 
 workdir: .
 
+# The local workdir may be a git worktree; its `.git` file points at a host
+# path that does not exist on the remote, so hatch-vcs can't infer a
+# version. Pin a placeholder version explicitly — this is just for the
+# bench install, not a release build.
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LATE_INTERACTION_KERNELS: "0.3.0.dev0"
+
 setup: |
   set -eux
   cd ~/sky_workdir
