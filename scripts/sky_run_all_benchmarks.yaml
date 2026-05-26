@@ -20,11 +20,12 @@ workdir: .
 # version. Pin a placeholder version explicitly — this is just for the
 # bench install, not a release build.
 envs:
-  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LATE_INTERACTION_KERNELS: "0.3.0.dev0"
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
 
 setup: |
   set -eux
   cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION="${SETUPTOOLS_SCM_PRETEND_VERSION}"
   # NGC image is Debian-managed (PEP 668) — use --break-system-packages.
   pip install -e ".[dev,pylate]" --no-deps --break-system-packages
   # Pin pylate to the last patch_pylate-compatible release (the 1.5 series
