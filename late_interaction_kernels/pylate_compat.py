@@ -153,18 +153,45 @@ def patched_colbert_kd_scores(
     if D.dim() != 4:
         raise ValueError(f"colbert_kd_scores expects D.dim()==4, got {D.dim()}")
 
-    Nq, _Lq, _d = Q.shape
-    _, Nd, _Ld, _ = D.shape
-    out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
-    for i in range(Nq):
-        out[i] = _dispatch_maxsim(
-            Q[i].unsqueeze(0),
-            D[i],
-            q_mask[i : i + 1] if q_mask is not None else None,
-            d_mask[i] if d_mask is not None else None,
-            path,
-        ).squeeze(0)
-    return out
+    # Single fused launch over all Nq*K pairs via the 4-D dispatch in
+    # ``maxsim`` (kd_layout=True). No more per-query Python loop — that loop
+    # was the catastrophic regression Raphael flagged in pylate#224 §2/§4.
+    return _dispatch_maxsim(Q, D, q_mask, d_mask, path)
+
+
+def patched_colbert_scores_pairwise(
+    queries_embeddings,
+    documents_embeddings,
+    queries_mask=None,
+    documents_mask=None,
+    *,
+    mask=None,  # legacy
+):
+    """Drop-in replacement for :func:`pylate.scores.colbert_scores_pairwise`.
+
+    Diagonal pairwise scoring ``[B, Lq, d] x [B, Ld, d] -> [B]``. Routes
+    through :func:`maxsim_pairs`, which is the ``K=1`` case of the KD
+    layout — same fast kernel as in-batch, never materialises the
+    ``[B, B]`` cross-product that vanilla ``maxsim_varlen`` would build.
+    Closes the pylate#224 §5 regression for free.
+    """
+    from pylate.utils.tensor import convert_to_tensor  # type: ignore
+
+    Q = convert_to_tensor(queries_embeddings)
+    D = convert_to_tensor(documents_embeddings)
+    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
+
+    path = _device_path(Q, D)
+    # CUDA gets the fused K=1 KD launch; everything else defers to PyLate's
+    # original pairwise scorer (MPS doesn't have a 4-D fused path yet).
+    if path != "cuda":
+        return _ORIGINAL["colbert_scores_pairwise"](
+            Q, D, queries_mask=queries_mask, documents_mask=documents_mask
+        )
+
+    from late_interaction_kernels.autograd import maxsim_pairs
+
+    return maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 
 
 def patch_pylate():
@@ -177,11 +204,19 @@ def patch_pylate():
 
     _ORIGINAL["colbert_scores"] = s.colbert_scores
     _ORIGINAL["colbert_kd_scores"] = s.colbert_kd_scores
+    # ``colbert_scores_pairwise`` only exists in recent PyLate; fall back
+    # cleanly when the attribute is missing instead of breaking the patch.
+    has_pairwise = hasattr(s, "colbert_scores_pairwise")
+    if has_pairwise:
+        _ORIGINAL["colbert_scores_pairwise"] = s.colbert_scores_pairwise
 
     s.colbert_scores = patched_colbert_scores
     s.colbert_kd_scores = patched_colbert_kd_scores
     api.colbert_scores = patched_colbert_scores
     api.colbert_kd_scores = patched_colbert_kd_scores
+    if has_pairwise:
+        s.colbert_scores_pairwise = patched_colbert_scores_pairwise
+        api.colbert_scores_pairwise = patched_colbert_scores_pairwise
 
     # PyLate loss modules capture `colbert_scores` at import time; patch
     # those references too. Warn if any are unreachable so users notice
@@ -234,6 +269,9 @@ def unpatch_pylate():
     s.colbert_kd_scores = _ORIGINAL["colbert_kd_scores"]
     api.colbert_scores = _ORIGINAL["colbert_scores"]
     api.colbert_kd_scores = _ORIGINAL["colbert_kd_scores"]
+    if "colbert_scores_pairwise" in _ORIGINAL:
+        s.colbert_scores_pairwise = _ORIGINAL["colbert_scores_pairwise"]
+        api.colbert_scores_pairwise = _ORIGINAL["colbert_scores_pairwise"]
 
     for mod_name, attr, orig_key in (
         ("pylate.losses.contrastive", "colbert_scores", "colbert_scores"),

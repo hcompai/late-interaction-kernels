@@ -51,10 +51,15 @@ def test_kd_dispatch_shape() -> None:
 
 @cuda_only
 def test_kd_dispatch_matches_maxsim_padded() -> None:
-    """``maxsim(Q, D_kd)`` and ``maxsim_padded(Q, D_kd, full_lens)`` agree.
+    """``maxsim(Q, D_kd)`` (fast path) and ``maxsim_padded(Q, D_kd, full_lens)``
+    (packed pair path) agree within fp16 accumulation noise.
 
-    Same kernel under the hood; this just pins the wrapper plumbing
-    (lengths derivation from no-mask, dtype, contiguous handling).
+    They use the same math and same fp32 accumulator but different kernels:
+    the fast path runs ``_maxsim_fwd_kernel`` with ``kd_layout=True`` (full
+    ``tl.static_range`` over Lq); the packed path runs ``_scatter_fwd_kernel``
+    with a dynamic Lq loop. Different tile orderings + different autotune
+    configs mean the sum of ``Lq`` per-token maxes lands on slightly
+    different fp32 representations — within ``5e-3`` for fp16 inputs.
     """
     Q, D = _make_kd()
     Nq, K, Ld, _ = D.shape
@@ -66,7 +71,7 @@ def test_kd_dispatch_matches_maxsim_padded() -> None:
     out_dispatch = maxsim(Q, D)
     out_padded = maxsim_padded(Q, D, qlen, dlen)
 
-    torch.testing.assert_close(out_dispatch, out_padded, rtol=0, atol=0)
+    torch.testing.assert_close(out_dispatch, out_padded, rtol=5e-3, atol=5e-3)
 
 
 @cuda_only
@@ -98,7 +103,9 @@ def test_kd_dispatch_handles_masks_as_lengths() -> None:
 
     out_via_mask = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)
     out_via_len = maxsim_padded(Q, D, qlen_int, dlen_int)
-    torch.testing.assert_close(out_via_mask, out_via_len, rtol=0, atol=0)
+    # Same parity bar as test_kd_dispatch_matches_maxsim_padded — the two
+    # kernels share the math but differ in tile order / autotune choice.
+    torch.testing.assert_close(out_via_mask, out_via_len, rtol=5e-3, atol=5e-3)
 
 
 @cuda_only
@@ -153,8 +160,10 @@ def test_kd_dispatch_grad_matches_padded_path() -> None:
     maxsim(Q_a, D_a).sum().backward()
     maxsim_padded(Q_b, D_b, qlen, dlen).sum().backward()
 
-    torch.testing.assert_close(Q_a.grad, Q_b.grad, rtol=0, atol=0)
-    torch.testing.assert_close(D_a.grad, D_b.grad, rtol=0, atol=0)
+    # See test_kd_dispatch_matches_maxsim_padded: same math, different tile
+    # ordering between the two kernels → fp16-scale noise on grads.
+    torch.testing.assert_close(Q_a.grad, Q_b.grad, rtol=5e-3, atol=5e-3)
+    torch.testing.assert_close(D_a.grad, D_b.grad, rtol=5e-3, atol=5e-3)
 
 
 # --------------------------------------------------------------------------- #

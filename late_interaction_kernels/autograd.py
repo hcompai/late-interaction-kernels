@@ -157,33 +157,49 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
 
 
 class _MaxSimFn(torch.autograd.Function):
-    """Fused MaxSim with saved argmax, 3-D inputs."""
+    """Fused MaxSim with saved argmax, 3-D inputs.
+
+    When ``kd_layout=True``, ``D`` is the flat ``[Nq * K, Ld, d]`` view of a
+    KD/pairs batch (see :func:`_maxsim_kd_fast`); the forward kernel uses
+    ``d_global = pid`` so each query reads its own slab.
+    """
 
     @staticmethod
-    def forward(ctx, Q, D, q_mask, d_mask, normalize, backward_method):
-        scores, argmax = _run_forward(Q, D, q_mask, d_mask, save_argmax=True, normalize=normalize)
+    def forward(ctx, Q, D, q_mask, d_mask, normalize, backward_method, kd_layout):
+        scores, argmax = _run_forward(
+            Q, D, q_mask, d_mask, save_argmax=True, normalize=normalize, kd_layout=kd_layout
+        )
         ctx.save_for_backward(Q, D, argmax, q_mask, d_mask)
         ctx.backward_method = backward_method
         ctx.normalize = normalize
+        ctx.kd_layout = kd_layout
         return scores
 
     @staticmethod
     def backward(ctx, grad_scores):
         Q, D, argmax, q_mask, d_mask = ctx.saved_tensors
         grad_scores = grad_scores.contiguous().to(torch.float32)
+        kd_layout = ctx.kd_layout
 
         # `auto` -> `unified` for typical training shapes; `csr` only when
         # `grad_D` contention is very high (large square batches, short Lq).
+        # KD/pairs has no cross-query contention on grad_D (each pair owns
+        # its own slab), so we always pick the cheaper unified path there.
         method = ctx.backward_method
         if method == "auto":
-            Nq, Lq, _ = Q.shape
-            Nd = D.shape[0]
-            high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
-            method = "csr" if high_contention else "unified"
+            if kd_layout:
+                method = "unified"
+            else:
+                Nq, Lq, _ = Q.shape
+                Nd = D.shape[0]
+                high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+                method = "csr" if high_contention else "unified"
 
         def _bwd(Qt, Dt):
             if method == "unified":
-                return maxsim_backward_unified(grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic")
+                return maxsim_backward_unified(
+                    grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic", kd_layout=kd_layout
+                )
             return maxsim_backward(
                 grad_scores,
                 Qt,
@@ -192,6 +208,7 @@ class _MaxSimFn(torch.autograd.Function):
                 q_mask,
                 d_mask,
                 method=method,
+                kd_layout=kd_layout,
             )
 
         if ctx.normalize:
@@ -209,8 +226,8 @@ class _MaxSimFn(torch.autograd.Function):
             grad_D = (grad_Dh - (grad_Dh * D_hat).sum(-1, keepdim=True) * D_hat) / d_norm
         else:
             grad_Q, grad_D = _bwd(Q, D)
-        # masks, normalize, backward_method receive no gradient
-        return grad_Q, grad_D, None, None, None, None
+        # masks, normalize, backward_method, kd_layout receive no gradient.
+        return grad_Q, grad_D, None, None, None, None, None
 
 
 def _maxsim_kd(
@@ -220,16 +237,17 @@ def _maxsim_kd(
     d_mask: torch.Tensor | None,
     *,
     normalize: bool,
+    backward_method: str,
 ) -> torch.Tensor:
-    """KD layout ``[Nq, Lq, d] x [Nq, K, Ld, d] -> [Nq, K]`` via packed pairs.
+    """KD layout ``[Nq, Lq, d] x [Nq, K, Ld, d] -> [Nq, K]``.
 
-    Converts contiguous prefix-True masks to per-row lengths, then delegates
-    to :func:`~late_interaction_kernels.maxsim_padded`. One fused kernel
-    launch for all ``Nq * K`` pairs (vs the per-query Python loop that
-    callers had to write before this dispatch existed).
+    Reshapes ``D`` to the flat ``[Nq * K, Ld, d]`` view and dispatches to the
+    same fast forward kernel as in-batch, with ``kd_layout=True`` so each
+    program reads its own ``K``-slab (no cross-product, no packing). One
+    fused launch, full ``tl.static_range`` unroll over ``Lq``, identical
+    backward kernels as the cross-product path (KD just skips the CSR
+    branch because there's no cross-query contention on ``grad_D``).
     """
-    from late_interaction_kernels.padded import maxsim_padded
-
     if Q.dim() != 3:
         raise ValueError(f"KD layout (D.dim()==4) needs Q to be [Nq, Lq, d]; got Q.shape={tuple(Q.shape)}")
     Nq, Lq, d_q = Q.shape
@@ -240,30 +258,32 @@ def _maxsim_kd(
         )
     if d_q != d_d:
         raise ValueError(f"Q and D must share the embedding dim; got {d_q} vs {d_d}.")
+    if q_mask is not None and q_mask.shape != (Nq, Lq):
+        raise ValueError(f"q_mask must be [Nq={Nq}, Lq={Lq}] for KD layout; got {tuple(q_mask.shape)}.")
+    if d_mask is not None and d_mask.shape != (Nq, K, Ld):
+        raise ValueError(
+            f"d_mask must be [Nq={Nq}, K={K}, Ld={Ld}] for KD layout; got {tuple(d_mask.shape)}."
+        )
 
-    if normalize:
-        # Single-line normalize on the wrapper side — the packed kernel
-        # doesn't have a built-in ``normalize`` flag (forward.py does).
-        Q = torch.nn.functional.normalize(Q, p=2, dim=-1, eps=1e-12)
-        D = torch.nn.functional.normalize(D, p=2, dim=-1, eps=1e-12)
+    # ``F.pad`` + ``reshape(Nq * K, ...)`` keeps strides contiguous so the view
+    # below is a real zero-copy reinterpretation, not a hidden materialise.
+    Q = Q.contiguous()
+    D = D.contiguous()
+    D_flat = D.view(Nq * K, Ld, d_d)
+    d_mask_flat = d_mask.contiguous().view(Nq * K, Ld) if d_mask is not None else None
 
-    if q_mask is not None:
-        if q_mask.shape != (Nq, Lq):
-            raise ValueError(f"q_mask must be [Nq={Nq}, Lq={Lq}] for KD layout; got {tuple(q_mask.shape)}.")
-        qlen = q_mask.to(torch.int32).sum(dim=-1)
+    Q, q_mask = _bucket_lq(Q, q_mask)
+    q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
+    d_mask_i8 = d_mask_flat.to(torch.int8) if d_mask_flat is not None else None
+
+    if Q.requires_grad or D.requires_grad:
+        scores = _MaxSimFn.apply(Q, D_flat, q_mask_i8, d_mask_i8, normalize, backward_method, True)
     else:
-        qlen = torch.full((Nq,), Lq, device=Q.device, dtype=torch.int32)
-
-    if d_mask is not None:
-        if d_mask.shape != (Nq, K, Ld):
-            raise ValueError(
-                f"d_mask must be [Nq={Nq}, K={K}, Ld={Ld}] for KD layout; got {tuple(d_mask.shape)}."
-            )
-        dlen = d_mask.to(torch.int32).sum(dim=-1)
-    else:
-        dlen = torch.full((Nq, K), Ld, device=D.device, dtype=torch.int32)
-
-    return maxsim_padded(Q, D, qlen, dlen)
+        scores, _ = _run_forward(
+            Q, D_flat, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize, kd_layout=True
+        )
+    # scores comes out as [Nq, K] — exactly the requested KD shape.
+    return scores
 
 
 def maxsim(
@@ -288,20 +308,20 @@ def maxsim(
               or ``[Nq]`` (with 3-D ``Q``).
             * ``[Nd, Ld, d]`` — in-batch cross product → returns ``[Nq, Nd]``.
             * ``[Nq, K, Ld, d]`` — per-query candidate lists (KD layout) →
-              returns ``[Nq, K]``. Internally dispatched to
-              :func:`~late_interaction_kernels.maxsim_padded`, which uses a
-              single fused packed kernel (``O(Nq * K)`` compute, no per-query
-              Python loop).
+              returns ``[Nq, K]``. Internally dispatches the same fast
+              forward kernel as in-batch, with a constexpr flag that switches
+              the per-program doc index from ``pid % Nd`` (cross-product) to
+              ``pid`` (each query owns its K-slab). One launch, no Python
+              loop, no packing.
         q_mask, d_mask: bool tensors (``True`` = valid token). Shapes mirror
-            the matching ``Q``/``D`` axes. Masks are assumed to be contiguous
-            prefix-True (the ColBERT/ColPali tokenizer convention) — the KD
-            path uses ``mask.sum(-1)`` to extract per-row lengths.
+            the matching ``Q``/``D`` axes. Any boolean pattern is supported
+            (masked positions get ``-inf`` scores before the row max).
         normalize: L2-normalize Q and D per-token inside the kernel. Set to
             ``True`` for ColBERT / ColPali / LateOn-style scoring.
         backward: per-call override of the ``grad_D`` strategy
             (``"auto" | "unified" | "csr" | "atomic"``). ``None`` defers
-            to :func:`set_backward_method`. Ignored on the KD path
-            (``score_pairs_packed`` ships its own fused backward).
+            to :func:`set_backward_method`. KD/pairs always use ``unified``
+            (no cross-query contention on ``grad_D``).
 
     Returns:
         scores: fp32, shape as above.
@@ -309,10 +329,19 @@ def maxsim(
     Inputs can be fp16 / bf16 / fp32 (fp32 accumulator). Gradients flow
     into Q and D; masks are non-differentiable.
     """
-    # KD layout: D is [Nq, K, Ld, d]. Delegate to the packed pair-list kernel,
-    # which handles all Nq*K pairs in one launch (no Python loop).
+    if backward is None:
+        method_for_kd = _BACKWARD_METHOD
+    elif backward not in _VALID_METHODS:
+        raise ValueError(f"backward= must be one of {_VALID_METHODS} or None, got {backward!r}")
+    else:
+        method_for_kd = backward
+
+    # KD layout: D is [Nq, K, Ld, d]. Delegate to the unified fast path,
+    # which runs the standard forward kernel with ``kd_layout=True`` so each
+    # program reads its own K-slab — same kernel, same backward family, no
+    # Python loop, no packing overhead.
     if D.dim() == 4:
-        return _maxsim_kd(Q, D, q_mask, d_mask, normalize=normalize)
+        return _maxsim_kd(Q, D, q_mask, d_mask, normalize=normalize, backward_method=method_for_kd)
 
     q_was_2d = Q.dim() == 2
     d_was_2d = D.dim() == 2
@@ -341,12 +370,7 @@ def maxsim(
     if d_mask is not None and d_mask.device != D.device:
         raise ValueError(f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}.")
 
-    if backward is None:
-        method = _BACKWARD_METHOD
-    elif backward not in _VALID_METHODS:
-        raise ValueError(f"backward= must be one of {_VALID_METHODS} or None, got {backward!r}")
-    else:
-        method = backward
+    method = method_for_kd  # already resolved + validated above
 
     if not normalize:
         _maybe_warn_unnormalized(Q)
@@ -365,9 +389,11 @@ def maxsim(
     # kernel is otherwise identical. Same pattern as `maxsim_varlen` and
     # `maxsim_residual`.
     if Q.requires_grad or D.requires_grad:
-        scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method)
+        scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method, False)
     else:
-        scores, _ = _run_forward(Q, D, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize)
+        scores, _ = _run_forward(
+            Q, D, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize, kd_layout=False
+        )
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())
@@ -376,6 +402,48 @@ def maxsim(
     if d_was_2d:
         return scores.squeeze(-1)
     return scores
+
+
+def maxsim_pairs(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
+    backward: str | None = None,
+) -> torch.Tensor:
+    """Diagonal (paired) MaxSim — for PyLate's ``colbert_scores_pairwise``.
+
+    Computes one score per same-index pair ``(Q[i], D[i])`` and returns
+    ``[B]``. Internally this is the ``K = 1`` case of the KD layout, so it
+    routes through the same fast forward kernel as
+    :func:`maxsim` — no full ``[B, B]`` cross product, no Python loop, no
+    packing.
+
+    Args:
+        Q: ``[B, Lq, d]``.
+        D: ``[B, Ld, d]``. ``B`` must match ``Q``'s.
+        q_mask: optional ``[B, Lq]`` bool mask.
+        d_mask: optional ``[B, Ld]`` bool mask.
+        normalize: per-token L2-normalize inside the kernel.
+        backward: same semantics as :func:`maxsim` (auto / unified / atomic).
+
+    Returns:
+        scores: ``[B]`` fp32.
+    """
+    if Q.dim() != 3 or D.dim() != 3:
+        raise ValueError(
+            f"maxsim_pairs needs both Q and D to be [B, L, d]; got Q.shape={tuple(Q.shape)}, "
+            f"D.shape={tuple(D.shape)}."
+        )
+    if Q.shape[0] != D.shape[0]:
+        raise ValueError(f"maxsim_pairs needs Q.shape[0] == D.shape[0]; got {Q.shape[0]} vs {D.shape[0]}.")
+    # Same code path as KD with K=1; the ``unsqueeze`` is a view (free).
+    D_kd = D.unsqueeze(1)
+    d_mask_kd = d_mask.unsqueeze(1) if d_mask is not None else None
+    out = maxsim(Q, D_kd, q_mask=q_mask, d_mask=d_mask_kd, normalize=normalize, backward=backward)
+    return out.squeeze(-1)
 
 
 def maxsim_inference(
