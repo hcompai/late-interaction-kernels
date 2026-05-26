@@ -48,9 +48,15 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
     # Silence the unnormalized-input warning: many parity tests deliberately
     # feed unnormalized vectors, so the warning is expected noise here.
+    # TRITON_CACHE_DIR pins the autotune disk cache to a stable path so the
+    # actions/cache step below can save and restore it across runs.
     env:
       LIK_SUPPRESS_NORM_WARN: "1"
-    timeout-minutes: 30
+      TRITON_CACHE_DIR: ${{ github.workspace }}/.triton-cache
+    # 60 min covers a cold-cache first run on an ephemeral CodeBuild box;
+    # subsequent runs hit the restored Triton autotune cache and finish much
+    # faster.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -71,6 +77,19 @@ jobs:
         run: |
           nvidia-smi
           uv run python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+      - name: Restore Triton autotune cache
+        # Triton 3.4+ persists best-config picks on disk; caching the dir
+        # across CI runs skips the multi-minute autotune sweep that was
+        # blowing past the 30-min budget on ephemeral CodeBuild runners.
+        # The cache is keyed on kernel sources + lockfile so any change
+        # that would invalidate a Triton cache entry also rotates the key.
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.triton-cache
+          key: triton-autotune-${{ runner.os }}-${{ hashFiles('late_interaction_kernels/**/*.py', 'uv.lock') }}
+          restore-keys: |
+            triton-autotune-${{ runner.os }}-
 
       - name: Run tests
         # Single bucket — CodeBuild's ephemeral runner makes per-job overhead
