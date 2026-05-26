@@ -32,19 +32,42 @@ def test_forward_kernel_compiles_once_for_varying_ld():
     assert len(cache) == 1, f"forward autotune cache exploded across Ld: {len(cache)} entries (expected 1)"
 
 
-def test_forward_kernel_keys_on_lq():
-    """``Lq`` stays in the key; distinct ``Lq`` values get distinct entries."""
+def test_forward_kernel_keys_on_lq_bucket():
+    """Distinct ``Lq`` buckets get distinct entries (Lq is still in the key)."""
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
-    for lq in (32, 128):
+    for lq in (32, 128):  # both are exact powers of two → distinct buckets
         Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16)
         D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
-    assert len(cache) == 2, f"Lq must stay in the autotune key; got {len(cache)} entries for 2 distinct Lq"
+    assert len(cache) == 2, (
+        f"Lq bucket must stay in the autotune key; got {len(cache)} entries for 2 distinct buckets"
+    )
+
+
+def test_forward_kernel_buckets_lq_to_pow2():
+    """Many non-pow2 ``Lq`` values inside one bucket share a single entry.
+
+    Real-world ColBERT/ColPali training has Lq varying with the tokenizer
+    output. Without bucketing each new Lq re-triggered the full autotune
+    sweep. Bucketing to power-of-two collapses them to one entry per bucket.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # All of these fall in the bucket=32 slot.
+    for lq in (17, 19, 23, 25, 29, 31, 32):
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16)
+        D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
+        _ = maxsim(Q, D)
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 1, f"Lq=17..32 should bucket to a single autotune entry; got {len(cache)}"
 
 
 def test_scatter_kernel_compiles_once_for_varying_max_ld():
