@@ -98,59 +98,6 @@ def maxsim_reference(
     return scores
 
 
-def xtr_reference(
-    Q: torch.Tensor,
-    D: torch.Tensor,
-    top_k: int,
-    q_mask: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    *,
-    normalize: bool = False,
-    normalize_by_k: bool = True,
-) -> torch.Tensor:
-    """XTR-style MaxSim reference: ``sum_s topk_t(Q[s] @ D[t])``.
-
-    When ``top_k=1`` this is exactly plain MaxSim. Larger ``top_k`` gives the
-    XTR (Lee et al., NeurIPS 2023) scoring variant. ``normalize_by_k=True``
-    divides each query-token's top-k sum by ``k`` (mean) — the canonical XTR
-    formulation.
-    """
-    q_squeeze = Q.dim() == 2
-    d_squeeze = D.dim() == 2
-    if q_squeeze:
-        Q = Q.unsqueeze(0)
-    if d_squeeze:
-        D = D.unsqueeze(0)
-    Qf = Q.float()
-    Df = D.float()
-    if normalize:
-        Qf = torch.nn.functional.normalize(Qf, p=2, dim=-1, eps=1e-12)
-        Df = torch.nn.functional.normalize(Df, p=2, dim=-1, eps=1e-12)
-    S = torch.einsum("ild,jtd->ijlt", Qf, Df)
-    if d_mask is not None:
-        if d_mask.dim() == 1:
-            d_mask = d_mask.unsqueeze(0)
-        S = S.masked_fill(~d_mask.bool()[None, :, None, :], NEG_INF)
-
-    Ld = S.shape[-1]
-    k = min(top_k, Ld)
-    top = S.topk(k, dim=-1).values
-    top = torch.where(torch.isfinite(top), top, torch.zeros_like(top))
-    row = top.sum(dim=-1)
-    if normalize_by_k:
-        row = row / k
-    if q_mask is not None:
-        if q_mask.dim() == 1:
-            q_mask = q_mask.unsqueeze(0)
-        row = row * q_mask.to(row.dtype)[:, None, :]
-    scores = row.sum(dim=-1)
-    if q_squeeze:
-        scores = scores.squeeze(0)
-    if d_squeeze:
-        scores = scores.squeeze(-1)
-    return scores
-
-
 def plaid_approx_score_reference(
     query_centroid_scores: torch.Tensor,
     codes: torch.Tensor,
