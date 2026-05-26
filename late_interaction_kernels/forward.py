@@ -177,7 +177,8 @@ def _maxsim_fwd_kernel(
 # gap is single-digit percent. The fixed config below fits ≤ 96 KiB SMEM so
 # it lands on every supported GPU family. Mirrors flash-maxsim's
 # ``_maxsim_fwd_kernel_small`` (their ``flash_maxsim.py`` L337-348).
-_SMALL_BYPASS_NQND = 500  # max Nq * Nd
+_SMALL_BYPASS_NQND = 500  # max Nq * Nd  (grid size)
+_SMALL_BYPASS_LQLD = 200_000  # max Lq * Ld (per-program work)
 _SMALL_BYPASS_D = 256  # max embedding dim (SMEM ceiling)
 _SMALL_BLOCK_Q = 32
 _SMALL_BLOCK_D = 64
@@ -185,12 +186,30 @@ _SMALL_NUM_WARPS = 4
 _SMALL_NUM_STAGES = 2
 
 
-def _should_bypass_autotune(Nq: int, Nd: int, d: int, save_argmax: bool) -> bool:
+def _should_bypass_autotune(Nq: int, Nd: int, Lq: int, Ld: int, d: int, save_argmax: bool) -> bool:
     """Inference-side small-shape bypass. Only safe when we don't need the
     argmax tile (i.e. no backward) — that keeps the bypass kernel identical
     to the autotuned one except for the fixed block sizes.
+
+    Both gates have to hold:
+
+    * ``Nq * Nd <= 500`` — small grid, otherwise the autotuner amortizes its
+      sweep across enough programs that the fixed config can't catch up.
+    * ``Lq * Ld <= 200_000`` — small per-program work, otherwise the shape
+      is compute-bound and the fixed ``(BLOCK_Q=32, BLOCK_D=64, warps=4)``
+      tile shape loses meaningfully to the Hopper compute-bound winner
+      ``(128, 128, warps=8)``. ColPali Lq=Ld=1024 (1M work) is the
+      canonical example: bypass cost ~2.4× over autotuned on that shape.
+
+    ``d <= 256`` is the SMEM ceiling for the fixed config — past that the
+    operand buffers don't fit.
     """
-    return (not save_argmax) and (Nq * Nd <= _SMALL_BYPASS_NQND) and (d <= _SMALL_BYPASS_D)
+    return (
+        (not save_argmax)
+        and (Nq * Nd <= _SMALL_BYPASS_NQND)
+        and (Lq * Ld <= _SMALL_BYPASS_LQLD)
+        and (d <= _SMALL_BYPASS_D)
+    )
 
 
 def _run_forward(
@@ -291,7 +310,7 @@ def _run_forward(
     # so the per-program work estimate matches what the kernel will actually
     # do. KD/pairs of size (Nq=4, K=16) lands in the bypass band just like
     # in-batch (Nq=4, Nd=16) — the launch budget is the same.
-    if _should_bypass_autotune(Nq, Nd_kernel, d, save_argmax):
+    if _should_bypass_autotune(Nq, Nd_kernel, Lq, Ld, d, save_argmax):
         # Bypass: launch the underlying JIT directly with fixed constexpr
         # block sizes and fixed launch attrs. ``_maxsim_fwd_kernel.fn`` is the
         # ``JITFunction`` wrapped by ``@triton.autotune`` — calling it via
