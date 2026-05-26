@@ -16,7 +16,6 @@ in submodules and must be imported explicitly:
 - fused D-side head → ``late_interaction_kernels.fused_head``
 - PLAID / ColBERTv2 → ``late_interaction_kernels.plaid``
 - FP8 inference → ``late_interaction_kernels.fp8``
-- research variants → ``late_interaction_kernels.experimental``
 
 Picking a backward strategy is per-call: ``maxsim(..., backward="auto" | "unified"
 | "csr" | "atomic")`` (or the same kwarg on :class:`MaxSimScorer`).

@@ -98,55 +98,6 @@ def maxsim_reference(
     return scores
 
 
-def maxsim_reference_soft(
-    Q: torch.Tensor,
-    D: torch.Tensor,
-    q_mask: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    beta: float = 10.0,
-) -> torch.Tensor:
-    """Log-sum-exp relaxation of MaxSim: smooth approximation of max.
-
-        softmax_t(beta * S) -> max when beta -> inf.
-
-    Score: sum_s (1/beta) * logsumexp_t(beta * S[s, t]).
-
-    This variant is differentiable through ALL query-document pairs (not just
-    the argmax), giving denser gradients during training. At eval time you can
-    either pick a large beta (scores approach hard max) or swap back to
-    `maxsim_reference`.
-    """
-    q_squeeze = Q.dim() == 2
-    d_squeeze = D.dim() == 2
-    if q_squeeze:
-        Q = Q.unsqueeze(0)
-    if d_squeeze:
-        D = D.unsqueeze(0)
-
-    S = torch.einsum("ild,jtd->ijlt", Q.float(), D.float())
-
-    if d_mask is not None:
-        if d_mask.dim() == 1:
-            d_mask = d_mask.unsqueeze(0)
-        S = S.masked_fill(~d_mask.bool()[None, :, None, :], NEG_INF)
-
-    # (1/beta) * logsumexp(beta * S, dim=-1)
-    row_soft = (1.0 / beta) * torch.logsumexp(beta * S, dim=-1)  # [Nq, Nd, Lq]
-    row_soft = torch.where(torch.isfinite(row_soft), row_soft, torch.zeros_like(row_soft))
-
-    if q_mask is not None:
-        if q_mask.dim() == 1:
-            q_mask = q_mask.unsqueeze(0)
-        row_soft = row_soft * q_mask.to(row_soft.dtype)[:, None, :]
-
-    scores = row_soft.sum(dim=-1)
-    if q_squeeze:
-        scores = scores.squeeze(0)
-    if d_squeeze:
-        scores = scores.squeeze(-1)
-    return scores
-
-
 def xtr_reference(
     Q: torch.Tensor,
     D: torch.Tensor,

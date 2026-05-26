@@ -51,32 +51,7 @@ def test_varlen_forward_is_bitwise_deterministic():
 
 
 # --------------------------------------------------------------------------- #
-# 2. Soft-maxsim gradcheck (smooth forward → fp64 gradcheck is valid)         #
-# --------------------------------------------------------------------------- #
-
-
-def test_gradcheck_soft_maxsim_smooth():
-    """Soft-maxsim uses log-sum-exp and is smooth everywhere — unlike hard
-    maxsim, whose forward has argmax kinks that confuse finite-difference
-    gradcheck. We run gradcheck on a tiny fp64 shape; on fp64 the soft path
-    falls back to a pure-PyTorch reference whose backward must match
-    finite-difference to tight tolerances.
-    """
-    from late_interaction_kernels.experimental import soft_maxsim
-
-    Nq, Nd, Lq, Ld, d = 1, 2, 3, 5, 32
-    torch.manual_seed(0)
-    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float64, requires_grad=True)
-    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float64, requires_grad=True)
-
-    def fn(q, d_):
-        return soft_maxsim(q, d_, beta=2.0)
-
-    assert torch.autograd.gradcheck(fn, (Q, D), eps=1e-6, atol=1e-5, rtol=1e-5, fast_mode=True)
-
-
-# --------------------------------------------------------------------------- #
-# 3. torch.compile smoke                                                       #
+# 2. torch.compile smoke                                                       #
 # --------------------------------------------------------------------------- #
 
 
@@ -102,7 +77,7 @@ def test_torch_compile_maxsim_smoke():
 
 
 # --------------------------------------------------------------------------- #
-# 4. inference_mode / no_grad                                                  #
+# 3. inference_mode / no_grad                                                  #
 # --------------------------------------------------------------------------- #
 
 
@@ -181,7 +156,7 @@ def test_no_grad_does_not_save_argmax_buffer():
 
 
 # --------------------------------------------------------------------------- #
-# 5. CUDA Graph capture                                                        #
+# 4. CUDA Graph capture                                                        #
 # --------------------------------------------------------------------------- #
 
 
@@ -225,7 +200,7 @@ def test_cuda_graph_capture_and_replay():
 
 
 # --------------------------------------------------------------------------- #
-# 6. Error-path contract                                                       #
+# 5. Error-path contract                                                       #
 # --------------------------------------------------------------------------- #
 
 
@@ -271,7 +246,7 @@ def test_varlen_cu_seqlens_dtype_coercion():
 
 
 # --------------------------------------------------------------------------- #
-# 7. Numerical stability                                                       #
+# 6. Numerical stability                                                       #
 # --------------------------------------------------------------------------- #
 
 
@@ -287,26 +262,3 @@ def test_very_small_magnitudes_dont_underflow():
     fast = maxsim(Q, D).float()
     ref = maxsim_reference(Q.float(), D.float())
     assert (fast - ref).abs().max().item() / max(1.0, ref.abs().max().item()) < 5e-3
-
-
-def test_soft_maxsim_backward_deterministic():
-    """soft_maxsim has a dense gradient (no argmax); it must be bitwise
-    deterministic across repeated calls on fp32."""
-    from late_interaction_kernels.experimental import soft_maxsim
-
-    Q0 = torch.randn(2, 16, 128, device="cuda", dtype=torch.float32)
-    D0 = torch.randn(4, 64, 128, device="cuda", dtype=torch.float32)
-    go = torch.randn(2, 4, device="cuda", dtype=torch.float32)
-
-    grads = []
-    for _ in range(3):
-        Q = Q0.clone().requires_grad_(True)
-        D = D0.clone().requires_grad_(True)
-        soft_maxsim(Q, D, beta=5.0).backward(go)
-        grads.append((Q.grad.clone(), D.grad.clone()))
-    for k in range(1, 3):
-        assert torch.equal(grads[0][0], grads[k][0]), f"soft_maxsim grad_Q non-det at run {k}"
-        # soft_maxsim grad_D may use atomics; allow tiny drift but not nonsense.
-        err = (grads[0][1] - grads[k][1]).abs().max().item()
-        denom = max(1.0, grads[0][1].abs().max().item())
-        assert err / denom < 1e-5, f"soft_maxsim grad_D drift at run {k}: {err}"

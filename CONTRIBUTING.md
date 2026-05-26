@@ -27,9 +27,6 @@ existing split:
 - pure-PyTorch reference in `late_interaction_kernels/reference.py`;
 - parity tests in `tests/`.
 
-Research kernels with no production user yet land under
-`late_interaction_kernels/experimental/`.
-
 ## Development setup
 
 ```bash

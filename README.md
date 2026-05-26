@@ -148,7 +148,7 @@ Not sure which entry point fits your stack? The docs site ships an interactive d
 | `maxsim_varlen`                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
 | `maxsim_padded`                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 
-Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `experimental`, `reference`. See [`docs/design.md`](docs/design.md) for details on every kernel, the autograd graph and the backward variants.
+Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `reference`. See [`docs/design.md`](docs/design.md) for details on every kernel, the autograd graph and the backward variants.
 
 <details>
 <summary><strong>🔽 Configuration knobs (env vars + kwargs)</strong></summary>
