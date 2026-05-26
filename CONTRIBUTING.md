@@ -2,33 +2,8 @@
 
 ## Reporting issues
 
-Use the **Bug report** or **Feature request** templates under
+Use the **Bug report** / **Feature request** templates under
 [Issues → New issue](https://github.com/hcompai/late-interaction-kernels/issues/new/choose).
-
-## Autotune for a new GPU
-
-If performance is poor on a GPU we don't have a shortlist for:
-
-1. Run the benchmark for the shape you care about
-   (`benchmarks/bench_forward.py`, `benchmarks/bench_inference_edge.py`,
-   `benchmarks/bench_backward_method.py`).
-2. Add a shortlist in `late_interaction_kernels/_autotune.py` keyed on
-   the device-name prefix.
-3. Re-run the benchmark and include before / after in the PR.
-
-## New kernel variant
-
-For a new reduction flavor (e.g. top-K, soft variants), keep it in a
-separate module under `late_interaction_kernels/` and follow the
-existing split:
-
-- internal `_forward` returning `(scores, argmax)` without autograd;
-- `torch.autograd.Function` wrapper that saves minimal state;
-- pure-PyTorch reference in `late_interaction_kernels/reference.py`;
-- parity tests in `tests/`.
-
-Research kernels with no production user yet land under
-`late_interaction_kernels/experimental/`.
 
 ## Development setup
 
@@ -44,17 +19,30 @@ pytest -q
 ## Style
 
 - Python 3.10+; type hints on public APIs.
-- Comments explain *why*, not *what*. Don't narrate trivial code.
-- Match the existing docstring tone — short, concrete, no marketing.
+- Comments explain *why*, not *what*.
+- Docstrings: short, concrete, no marketing.
+
+## Autotune for a new GPU
+
+Run the relevant `benchmarks/bench_*.py`, add a shortlist in
+`late_interaction_kernels/_autotune.py` keyed on the device-name prefix,
+re-run and include before / after in the PR.
+
+## New kernel variant
+
+Keep it in its own module under `late_interaction_kernels/` and follow
+the existing split: internal `_forward` returning `(scores, argmax)`,
+`torch.autograd.Function` wrapper, pure-PyTorch reference in
+`reference.py`, parity tests in `tests/`.
 
 ## Publishing a release
 
-1. Ensure `main` is green and `CHANGELOG.md` has the `Unreleased` block filled in.
-2. On GitHub: **Releases → Draft a new release**, tag `vX.Y.Z` off `main`.
-3. Paste the matching `CHANGELOG.md` section as the release body, then **Publish**.
+1. `main` is green and `CHANGELOG.md` `Unreleased` is filled in.
+2. **Releases → Draft a new release** on GitHub, tag `vX.Y.Z` off `main`.
+3. Paste the matching `CHANGELOG.md` section as the body, then **Publish**.
 
-The [`publish.yml`](.github/workflows/publish.yml) workflow builds and uploads
-to PyPI automatically via OIDC trusted publishing. No token needed.
+[`publish.yml`](.github/workflows/publish.yml) builds and uploads to PyPI
+via OIDC — no token needed.
 
 ## License
 

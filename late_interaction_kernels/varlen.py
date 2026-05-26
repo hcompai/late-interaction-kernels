@@ -464,26 +464,3 @@ def maxsim_varlen(
         Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d, max_seqlen_q, max_seqlen_d, False
     )
     return scores
-
-
-def maxsim_varlen_inference(
-    Q_packed: torch.Tensor,
-    D_packed: torch.Tensor,
-    cu_seqlens_q: torch.Tensor,
-    cu_seqlens_d: torch.Tensor,
-    max_seqlen_q: int | None = None,
-    max_seqlen_d: int | None = None,
-) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim_varlen`."""
-    import warnings
-
-    warnings.warn(
-        "`maxsim_varlen_inference` is deprecated; use `maxsim_varlen(...)`. "
-        "It auto-skips the argmax save when neither input has requires_grad.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    scores, _, _, _ = _varlen_forward(
-        Q_packed, D_packed, cu_seqlens_q, cu_seqlens_d, max_seqlen_q, max_seqlen_d, False
-    )
-    return scores

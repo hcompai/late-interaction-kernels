@@ -33,9 +33,8 @@ from late_interaction_kernels._utils import detect_gpu
 # ``$TRITON_CACHE_DIR`` and skip the sweep. Triton's cache key already
 # includes its version, backend hash, kernel source hash, env-var hash and
 # the config list, so it invalidates on its own when any of those change.
-_TRITON_VERSION: tuple[int, int] = tuple(
-    int(part) for part in re.match(r"(\d+)\.(\d+)", triton.__version__).groups()
-)
+_match = re.match(r"(\d+)\.(\d+)", triton.__version__)
+_TRITON_VERSION: tuple[int, int] = (int(_match.group(1)), int(_match.group(2)))
 _HAS_DISK_CACHE = _TRITON_VERSION >= (3, 4)
 
 

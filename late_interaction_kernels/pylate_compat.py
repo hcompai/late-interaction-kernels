@@ -33,12 +33,6 @@ import torch
 _ORIGINAL = {}
 
 
-def _bool_mask(m):
-    if m is None:
-        return None
-    return m.bool() if m.dtype != torch.bool else m
-
-
 def _device_path(q: torch.Tensor, d: torch.Tensor) -> str | None:
     """Pick the dispatch path or ``None`` when we should fall back.
 

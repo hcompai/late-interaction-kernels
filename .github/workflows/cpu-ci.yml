@@ -49,6 +49,6 @@ jobs:
       - name: Import check
         run: |
           uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
-          uv run --python ${{ matrix.python-version }} python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_soft, maxsim_reference_varlen; print('reference ok')"
+          uv run --python ${{ matrix.python-version }} python -c "from late_interaction_kernels.reference import maxsim_reference, maxsim_reference_varlen; print('reference ok')"
       - name: Run CPU-safe tests (CUDA tests auto-skip)
         run: uv run --python ${{ matrix.python-version }} pytest -q

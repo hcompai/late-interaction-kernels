@@ -98,8 +98,8 @@ def test_fully_masked_query_scores_zero():
 
 def test_no_grad_dispatch_bit_equals_autograd_path():
     """``maxsim`` must produce a bit-identical forward whether the autograd
-    path is taken or not. Pins the ``requires_grad``-driven dispatch added
-    when ``maxsim_inference`` was folded into ``maxsim``."""
+    path is taken or not. Pins the ``requires_grad``-driven dispatch that
+    auto-skips the saved argmax when neither input needs a backward."""
     from late_interaction_kernels import maxsim
 
     Nq, Nd, Lq, Ld, d = 4, 8, 32, 128, 128

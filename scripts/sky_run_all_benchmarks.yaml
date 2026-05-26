@@ -1,0 +1,51 @@
+# Full benchmark sweep on 1×H100. Wraps scripts/run_all_benchmarks.sh and
+# tars the result directory back to the controller.
+#
+#   sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y
+#   sky logs lik-bench-all
+#   sky down lik-bench-all -y
+
+name: lik-bench-all
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvcr.io/nvidia/pytorch:25.06-py3
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+# The local workdir may be a git worktree; its `.git` file points at a host
+# path that does not exist on the remote, so hatch-vcs can't infer a
+# version. Pin a placeholder version explicitly — this is just for the
+# bench install, not a release build.
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  export SETUPTOOLS_SCM_PRETEND_VERSION="${SETUPTOOLS_SCM_PRETEND_VERSION}"
+  # NGC image is Debian-managed (PEP 668) — use --break-system-packages.
+  pip install -e ".[dev,pylate]" --no-deps --break-system-packages
+  # Pin pylate to the last patch_pylate-compatible release (the 1.5 series
+  # rewrote the score dispatch surface) and install the minimum runtime deps
+  # the bench scripts hit.
+  pip install "pylate==1.3.4" --no-deps --break-system-packages
+  pip install "sentence-transformers==5.1.1" "transformers>=4.41,<=4.56.2" \
+              accelerate datasets pandas tokenizers tabulate --break-system-packages
+  # Optional baselines for the head-to-head benches. Failure to install
+  # either is non-fatal — run_all_benchmarks.sh probes via `import` and
+  # skips the relevant bench.
+  pip install "flash-maxsim==0.2.0" --break-system-packages || true
+  pip install fast-plaid --break-system-packages || true
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  python -c "import torch; print('GPU:', torch.cuda.get_device_name()); print('torch:', torch.__version__)"
+  OUTDIR=/tmp/bench bash scripts/run_all_benchmarks.sh 2>&1 | tee /tmp/bench_run.log
+  echo "=== artifacts ==="
+  ls -la /tmp/bench
+  tar -czf /tmp/bench_artifacts.tgz -C /tmp bench bench_run.log
+  ls -la /tmp/bench_artifacts.tgz

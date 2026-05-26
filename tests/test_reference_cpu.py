@@ -1,10 +1,9 @@
 """CPU-only sanity tests for the PyTorch reference implementations.
 
 These tests don't exercise the Triton kernels — they validate that the
-references themselves agree with known identities (e.g. XTR top_k=1 equals
-plain MaxSim, PLAID residual reconstruction round-trips through the bit
-packer). This lets us catch logical bugs in the references long before we
-need a GPU.
+references themselves agree with known identities (e.g. PLAID residual
+reconstruction round-trips through the bit packer). This lets us catch
+logical bugs in the references long before we need a GPU.
 """
 
 import pytest
@@ -15,48 +14,7 @@ from late_interaction_kernels.reference import (
     maxsim_residual_reference,
     plaid_approx_score_reference,
     unpack_residuals_reference,
-    xtr_reference,
 )
-
-# --------------------------------------------------------------------------- #
-# XTR                                                                         #
-# --------------------------------------------------------------------------- #
-
-
-def test_xtr_topk1_matches_maxsim():
-    torch.manual_seed(0)
-    Q = torch.randn(2, 8, 32)
-    D = torch.randn(3, 20, 32)
-    maxsim_score = maxsim_reference(Q, D)
-    xtr_score = xtr_reference(Q, D, top_k=1, normalize_by_k=False)
-    assert torch.allclose(maxsim_score, xtr_score, atol=1e-5)
-
-
-def test_xtr_topk_increases_monotonically():
-    torch.manual_seed(0)
-    Q = torch.randn(1, 4, 16)
-    D = torch.randn(1, 12, 16)
-    s1 = xtr_reference(Q, D, top_k=1, normalize_by_k=False).item()
-    s3 = xtr_reference(Q, D, top_k=3, normalize_by_k=False).item()
-    s6 = xtr_reference(Q, D, top_k=6, normalize_by_k=False).item()
-    # Sum of top-k grows with k (scores can be negative, but the argmax is
-    # always included in larger k sets).
-    assert s3 >= s1 - 1e-5
-    assert s6 >= s3 - 1e-5
-
-
-def test_xtr_respects_doc_mask():
-    torch.manual_seed(0)
-    Q = torch.randn(1, 4, 16)
-    D = torch.randn(1, 12, 16)
-    mask = torch.ones(1, 12, dtype=torch.bool)
-    mask[0, 8:] = False
-
-    D_trunc = D[:, :8]
-    full = xtr_reference(Q, D, top_k=2, d_mask=mask)
-    truncated = xtr_reference(Q, D_trunc, top_k=2)
-    assert torch.allclose(full, truncated, atol=1e-5)
-
 
 # --------------------------------------------------------------------------- #
 # PLAID approx score                                                          #

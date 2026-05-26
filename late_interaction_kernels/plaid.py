@@ -17,7 +17,7 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2
+from late_interaction_kernels._utils import next_pow2
 
 # -----------------------------------------------------------------------------
 # C1. plaid_approx_score
@@ -424,7 +424,7 @@ def _maxsim_residual_forward(
     if residuals.dim() != 3:
         raise ValueError("residuals must be [Nd, max_Ld, packed_dim]")
 
-    Q = ensure_contiguous_last(Q).contiguous()
+    Q = Q.contiguous()
     codes = codes.contiguous().to(torch.int64)
     residuals = residuals.contiguous().to(torch.uint8)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
@@ -653,34 +653,6 @@ def maxsim_residual(
     return scores
 
 
-def maxsim_residual_inference(
-    Q: torch.Tensor,
-    codes: torch.Tensor,
-    residuals: torch.Tensor,
-    doc_lengths: torch.Tensor,
-    centroids: torch.Tensor,
-    bucket_weights: torch.Tensor,
-    nbits: int,
-    *,
-    normalize: bool = True,
-) -> torch.Tensor:
-    """Deprecated alias for :func:`maxsim_residual`."""
-    import warnings
-
-    warnings.warn(
-        "`maxsim_residual_inference` is deprecated; `maxsim_residual` "
-        "auto-skips the argmax save when `Q.requires_grad=False`.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if Q.dim() == 2:
-        Q = Q.unsqueeze(0)
-    scores, _, _ = _maxsim_residual_forward(
-        Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
-    )
-    return scores
-
-
 # -----------------------------------------------------------------------------
 # C3. maxsim_residual_varlen — ragged decompress + MaxSim
 # -----------------------------------------------------------------------------
@@ -887,7 +859,7 @@ def maxsim_residual_varlen(
     if cu_seqlens_d.dim() != 1:
         raise ValueError("cu_seqlens_d must be 1-D [Nd + 1]")
 
-    Q = ensure_contiguous_last(Q).contiguous()
+    Q = Q.contiguous()
     codes_flat = codes_flat.contiguous().to(torch.int64)
     residuals_flat = residuals_flat.contiguous().to(torch.uint8)
     cu_seqlens_d = cu_seqlens_d.contiguous().to(torch.int32)
@@ -973,7 +945,6 @@ __all__ = [
     "plaid_approx_score",
     "plaid_approx_score_reference",
     "maxsim_residual",
-    "maxsim_residual_inference",
     "maxsim_residual_reference",
     "maxsim_residual_varlen",
 ]
