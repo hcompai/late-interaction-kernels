@@ -37,12 +37,7 @@ concurrency:
 jobs:
   gpu-tests:
     name: GPU tests (${{ matrix.bucket.name }})
-    # AWS CodeBuild-hosted ephemeral runner (Tesla T4, `gpu_small` size,
-    # ~$0.05/min — see https://aws.amazon.com/codebuild/pricing/). The
-    # `codebuild-late-interaction-kernels-*` label is wired to a CodeBuild
-    # project in our AWS account that listens for queued GitHub Actions jobs
-    # and spins up a fresh container per run. Bump the image suffix here if
-    # a larger SKU is needed.
+    # T4, ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
     runs-on: codebuild-late-interaction-kernels-${{ github.run_id }}-${{ github.run_attempt }}-linux-5.0-gpu_small
     # Run on every push to main; on PRs, only when the `run-gpu-tests` label
     # is attached (so new commits on a labeled PR also re-run). Label apply
