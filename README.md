@@ -206,6 +206,14 @@ GPU tests run automatically on every push to `main`. To run them on a PR, apply 
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 
+## Related projects
+
+Other open-source MaxSim implementations worth knowing about:
+
+- [**roipony/flash-maxsim**](https://github.com/roipony/flash-maxsim) — fused Triton kernel that tiles the similarity matrix in SRAM instead of materialising it in HBM.
+- [**erikkaum/maxsim**](https://github.com/erikkaum/maxsim) — fast, memory-efficient exact MaxSim kernel for late-interaction retrieval and reranking.
+- [**mixedbread-ai/maxsim-cpu**](https://github.com/mixedbread-ai/maxsim-cpu) — Rust + SIMD CPU implementation (libxsmm on x86, Accelerate on ARM) for environments without a GPU.
+
 ## Citation
 
 ```bibtex
