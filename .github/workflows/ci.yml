@@ -52,7 +52,7 @@ jobs:
   # to changes under late_interaction_kernels/**, tests/**, pyproject.toml,
   # uv.lock, or the workflow itself.
   #
-  # GPU tests run on a GitHub-hosted GPU larger runner via gpu-ci.yml —
+  # GPU tests run on an AWS CodeBuild-hosted GPU runner (T4) via gpu-ci.yml —
   # on pushes to main or PRs carrying the `run-gpu-tests` label, gated to
   # changes under late_interaction_kernels/**, torch-ext/**, tests/**,
   # pyproject.toml, uv.lock, or the workflow itself.
