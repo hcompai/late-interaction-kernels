@@ -3,10 +3,17 @@
 Both libraries implement the same core MaxSim math with FlashAttention-style
 tiling, so this is the canonical apples-to-apples comparison. We run:
 
-  * forward, bf16 + fp16
-  * forward with ``normalize=True`` (we fuse it; flash-maxsim doesn't)
-  * training forward + backward (late-interaction-kernels only — flash-maxsim 0.x
-    doesn't ship an autograd-aware backward that matches our API)
+  * cross-product forward, bf16 + fp16
+    ``Q[Nq, Lq, d] x D[Nd, Ld, d] -> [Nq, Nd]``
+  * cross-product forward with ``normalize=True`` (we fuse it; flash-maxsim doesn't)
+  * KD-style 4-D forward ``Q[B, Lq, d] x D[B, K, Ld, d] -> [B, K]``
+    (each query reads its own slab of ``K`` candidates — common in distillation
+    / hard-negative training, and the layout where ``maxsim()`` picks up
+    ``kd_layout=True`` instead of materialising a ``[B, B]`` cross product)
+  * pairwise forward ``Q[B, Lq, d] x D[B, Ld, d] -> [B]``
+    (diagonal pair scoring — routed through :func:`maxsim_pairs`)
+  * cross-product training forward + backward (late-interaction-kernels only —
+    flash-maxsim 0.x doesn't ship an autograd-aware backward that matches our API)
 
 and report: ms/iter, peak memory, and **speedup ratio**. Negative speedups
 (i.e. flash-maxsim is faster) are reported honestly; if that happens on a
@@ -16,8 +23,10 @@ Usage::
 
     pip install "flash-maxsim==0.2.0"   # pinned to match the published numbers
     python benchmarks/bench_flash_maxsim.py
-    python benchmarks/bench_flash_maxsim.py --quick  # skip biggest shapes
+    python benchmarks/bench_flash_maxsim.py --quick      # skip biggest shapes
     python benchmarks/bench_flash_maxsim.py --shape train-batch
+    python benchmarks/bench_flash_maxsim.py --no-kd      # cross-product only
+    python benchmarks/bench_flash_maxsim.py --no-pairs   # skip pairwise
 
 Writes a Markdown + JSON report to ``benchmarks/results/flash_maxsim_<gpu>_<dtype>.{md,json}``.
 """
@@ -30,7 +39,7 @@ import sys
 
 import torch
 
-from late_interaction_kernels import maxsim
+from late_interaction_kernels import maxsim, maxsim_pairs
 
 try:
     import flash_maxsim  # noqa: F401
@@ -56,6 +65,31 @@ SHAPES = [
     ("train-long-doc", 16, 16, 32, 2048, 128),
     ("edge-d48", 1, 4000, 32, 2048, 48),
     ("edge-d64", 1, 10000, 32, 300, 64),
+]
+
+# KD layout: Q[B, Lq, d] x D[B, K, Ld, d] -> [B, K]. Same shapes the public
+# `colbert_kd_scores`-style entry point routes through; ours dispatches to
+# `kd_layout=True` since #66, FM uses `shared_docs=False`.
+KD_SHAPES = [
+    # (name, B, K, Lq, Ld, d)
+    ("kd-small", 16, 8, 32, 180, 128),
+    ("kd-mid", 32, 16, 32, 180, 128),
+    ("kd-wide", 32, 32, 32, 180, 128),
+    ("kd-bigbatch", 64, 32, 32, 180, 128),
+    ("kd-long", 16, 8, 128, 512, 128),
+    ("kd-long-mid", 32, 16, 128, 512, 128),
+]
+
+# Pairwise (diagonal): Q[B, Lq, d] x D[B, Ld, d] -> [B]. Drives `maxsim_pairs`,
+# which is the K=1 case of the KD layout. FM has no public pair entry point;
+# we emulate it with `D.unsqueeze(1)` + `shared_docs=False`.
+PAIR_SHAPES = [
+    # (name, B, Lq, Ld, d)
+    ("pair-small", 64, 32, 180, 128),
+    ("pair-mid", 256, 32, 180, 128),
+    ("pair-large", 1024, 32, 180, 128),
+    ("pair-long", 128, 128, 512, 128),
+    ("pair-huge", 2048, 32, 180, 128),
 ]
 
 
@@ -144,6 +178,100 @@ def bench_forward_one(name, Nq, Nd, Lq, Ld, d, dtype, normalize: bool):
     return results
 
 
+def bench_kd_one(name, B, K, Lq, Ld, d, dtype):
+    """Forward only, ``Q[B, Lq, d] x D[B, K, Ld, d] -> [B, K]``.
+
+    Same shape pattern as standard knowledge-distillation / hard-negative
+    scoring — each query reads its own ``K``-slab of candidates. ``maxsim()``
+    dispatches on ``D.dim() == 4`` to the fast in-batch kernel with
+    ``kd_layout=True`` (no cross-product, no packing). FM goes through
+    ``flash_maxsim_batched(..., shared_docs=False)``.
+    """
+    Q = torch.randn(B, Lq, d, device="cuda", dtype=dtype)
+    D = torch.randn(B, K, Ld, d, device="cuda", dtype=dtype)
+    results = {}
+
+    def _ours():
+        return maxsim(Q, D)
+
+    t, sd = cuda_time(_ours)
+    m = peak_mem_mb(_ours)
+    results["late-interaction-kernels"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+
+    if HAS_FM:
+
+        def _fm():
+            return flash_maxsim_batched(Q, D, shared_docs=False)
+
+        try:
+            t, sd = cuda_time(_fm)
+            m = peak_mem_mb(_fm)
+            results["flash-maxsim"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+        except Exception as e:
+            results["flash-maxsim"] = {"error": f"{type(e).__name__}: {e}"}
+
+    # Naive baseline materialises the [B, K, Lq, Ld] similarity tensor in fp32.
+    def _naive():
+        S = torch.einsum("bld,bkmd->bklm", Q.float(), D.float())
+        return S.max(-1).values.sum(-1)
+
+    try:
+        t, sd = cuda_time(_naive)
+        m = peak_mem_mb(_naive)
+        results["naive-einsum"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+    except torch.cuda.OutOfMemoryError:
+        results["naive-einsum"] = {"error": "OOM"}
+
+    return results
+
+
+def bench_pairs_one(name, B, Lq, Ld, d, dtype):
+    """Forward only, diagonal pairs ``Q[B, Lq, d] x D[B, Ld, d] -> [B]``.
+
+    ``maxsim_pairs`` is the public K=1 wrapper on the KD layout — same fast
+    kernel, never materialises the ``[B, B]`` cross product. FM has no
+    public pair entry, so we emulate it with ``D.unsqueeze(1)`` and
+    ``shared_docs=False`` (the canonical "B independent K=1 queries"
+    interpretation of the batched API).
+    """
+    Q = torch.randn(B, Lq, d, device="cuda", dtype=dtype)
+    D = torch.randn(B, Ld, d, device="cuda", dtype=dtype)
+    results = {}
+
+    def _ours():
+        return maxsim_pairs(Q, D)
+
+    t, sd = cuda_time(_ours)
+    m = peak_mem_mb(_ours)
+    results["late-interaction-kernels"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+
+    if HAS_FM:
+        D_kd = D.unsqueeze(1)  # [B, 1, Ld, d] — view, no copy.
+
+        def _fm():
+            return flash_maxsim_batched(Q, D_kd, shared_docs=False).view(-1)
+
+        try:
+            t, sd = cuda_time(_fm)
+            m = peak_mem_mb(_fm)
+            results["flash-maxsim"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+        except Exception as e:
+            results["flash-maxsim"] = {"error": f"{type(e).__name__}: {e}"}
+
+    def _naive():
+        S = torch.einsum("bld,bmd->blm", Q.float(), D.float())
+        return S.max(-1).values.sum(-1)
+
+    try:
+        t, sd = cuda_time(_naive)
+        m = peak_mem_mb(_naive)
+        results["naive-einsum"] = {"ms": t, "ms_stdev": sd, "peak_mb": m}
+    except torch.cuda.OutOfMemoryError:
+        results["naive-einsum"] = {"error": "OOM"}
+
+    return results
+
+
 def bench_backward_one(name, Nq, Nd, Lq, Ld, d, dtype):
     """Forward + backward; late-interaction-kernels only (flash-maxsim 0.x lacks a matching bwd API)."""
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype, requires_grad=True)
@@ -181,6 +309,16 @@ def main():
         "--no-backward",
         action="store_true",
         help="Skip the training fwd+bwd section (forward-only report).",
+    )
+    ap.add_argument(
+        "--no-kd",
+        action="store_true",
+        help="Skip the 4-D KD layout section.",
+    )
+    ap.add_argument(
+        "--no-pairs",
+        action="store_true",
+        help="Skip the diagonal-pairs section.",
     )
     args = ap.parse_args()
 
@@ -244,9 +382,76 @@ def main():
         report["shapes"].append(entry)
         print()
 
+    # --- KD layout (4-D D) -------------------------------------------------
+    report["kd_shapes"] = []
+    if not args.no_kd:
+        kd_shapes = KD_SHAPES
+        if args.shape:
+            kd_shapes = [s for s in kd_shapes if s[0] == args.shape]
+        if args.quick:
+            kd_shapes = [s for s in kd_shapes if s[1] * s[2] <= 256]
+
+        for name, B, K, Lq, Ld, d in kd_shapes:
+            print(f"== {name:25s}  B={B} K={K} Lq={Lq} Ld={Ld} d={d}  (KD: D is 4-D)")
+            try:
+                r = bench_kd_one(name, B, K, Lq, Ld, d, dtype)
+            except torch.cuda.OutOfMemoryError:
+                r = {"error": "OOM"}
+            entry = {"name": name, "shape": [B, K, Lq, Ld, d], "kd_forward": r}
+            for impl, d_ in r.items() if isinstance(r, dict) and "error" not in r else []:
+                if "error" in d_:
+                    print(f"      {impl:30s}  {d_['error']}")
+                    continue
+                print(
+                    f"      {impl:30s}  {d_['ms']:7.3f} ± {d_['ms_stdev']:.3f} ms   {d_['peak_mb']:7.1f} MB"
+                )
+            if isinstance(r, dict) and "flash-maxsim" in r and "late-interaction-kernels" in r:
+                print(
+                    f"   → vs flash-maxsim:  {fmt_speedup(r['flash-maxsim'], r['late-interaction-kernels'])}"
+                )
+            report["kd_shapes"].append(entry)
+            print()
+
+    # --- Pairwise (K=1 KD) -------------------------------------------------
+    report["pair_shapes"] = []
+    if not args.no_pairs:
+        pair_shapes = PAIR_SHAPES
+        if args.shape:
+            pair_shapes = [s for s in pair_shapes if s[0] == args.shape]
+        if args.quick:
+            pair_shapes = [s for s in pair_shapes if s[1] <= 256]
+
+        for name, B, Lq, Ld, d in pair_shapes:
+            print(f"== {name:25s}  B={B} Lq={Lq} Ld={Ld} d={d}  (pairwise diagonal)")
+            try:
+                r = bench_pairs_one(name, B, Lq, Ld, d, dtype)
+            except torch.cuda.OutOfMemoryError:
+                r = {"error": "OOM"}
+            entry = {"name": name, "shape": [B, Lq, Ld, d], "pair_forward": r}
+            for impl, d_ in r.items() if isinstance(r, dict) and "error" not in r else []:
+                if "error" in d_:
+                    print(f"      {impl:30s}  {d_['error']}")
+                    continue
+                print(
+                    f"      {impl:30s}  {d_['ms']:7.3f} ± {d_['ms_stdev']:.3f} ms   {d_['peak_mb']:7.1f} MB"
+                )
+            if isinstance(r, dict) and "flash-maxsim" in r and "late-interaction-kernels" in r:
+                print(
+                    f"   → vs flash-maxsim:  {fmt_speedup(r['flash-maxsim'], r['late-interaction-kernels'])}"
+                )
+            report["pair_shapes"].append(entry)
+            print()
+
     # Markdown report
     md = [f"# Head-to-head vs flash-maxsim — {gpu} ({args.dtype})\n"]
     md.append(f"flash-maxsim version: `{FM_VERSION}`.  50-iter median, CUDA events.\n")
+
+    def _cell(r):
+        if not r or "error" in r:
+            return r.get("error", "-") if r else "-"
+        return f"{r['ms']:.3f}"
+
+    md.append("## Cross-product forward — `Q[Nq, Lq, d] x D[Nd, Ld, d] -> [Nq, Nd]`\n")
     md.append("| shape | impl | fwd (no norm) ms | fwd (norm) ms | peak MB | speedup vs FM |")
     md.append("| --- | --- | --- | --- | --- | --- |")
     for e in report["shapes"]:
@@ -254,13 +459,8 @@ def main():
             row_n = e["forward_plain"].get(impl, {})
             row_N = e["forward_normalize"].get(impl, {})
 
-            def cell(r):
-                if not r or "error" in r:
-                    return r.get("error", "-") if r else "-"
-                return f"{r['ms']:.3f}"
-
-            mem = cell(row_n).replace("ms", "").strip()
-            if "error" not in row_n and row_n:
+            mem = "-"
+            if isinstance(row_n, dict) and "error" not in row_n and row_n:
                 mem = f"{row_n['peak_mb']:.1f}"
             speedup = (
                 fmt_speedup(
@@ -269,7 +469,49 @@ def main():
                 if impl == "late-interaction-kernels"
                 else "-"
             )
-            md.append(f"| {e['name']} | {impl} | {cell(row_n)} | {cell(row_N)} | {mem} | {speedup} |")
+            md.append(f"| {e['name']} | {impl} | {_cell(row_n)} | {_cell(row_N)} | {mem} | {speedup} |")
+
+    if report.get("kd_shapes"):
+        md.append("\n## KD layout forward — `Q[B, Lq, d] x D[B, K, Ld, d] -> [B, K]`\n")
+        md.append("| shape | impl | fwd ms | peak MB | speedup vs FM |")
+        md.append("| --- | --- | --- | --- | --- |")
+        for e in report["kd_shapes"]:
+            r = e.get("kd_forward") or {}
+            if not isinstance(r, dict) or "error" in r:
+                md.append(f"| {e['name']} | – | {r.get('error', '-')} | – | – |")
+                continue
+            for impl in ["late-interaction-kernels", "flash-maxsim", "naive-einsum"]:
+                row = r.get(impl, {})
+                mem = "-"
+                if isinstance(row, dict) and "error" not in row and row:
+                    mem = f"{row['peak_mb']:.1f}"
+                speedup = (
+                    fmt_speedup(r.get("flash-maxsim"), r.get("late-interaction-kernels"))
+                    if impl == "late-interaction-kernels"
+                    else "-"
+                )
+                md.append(f"| {e['name']} | {impl} | {_cell(row)} | {mem} | {speedup} |")
+
+    if report.get("pair_shapes"):
+        md.append("\n## Pairwise forward — `Q[B, Lq, d] x D[B, Ld, d] -> [B]`\n")
+        md.append("| shape | impl | fwd ms | peak MB | speedup vs FM |")
+        md.append("| --- | --- | --- | --- | --- |")
+        for e in report["pair_shapes"]:
+            r = e.get("pair_forward") or {}
+            if not isinstance(r, dict) or "error" in r:
+                md.append(f"| {e['name']} | – | {r.get('error', '-')} | – | – |")
+                continue
+            for impl in ["late-interaction-kernels", "flash-maxsim", "naive-einsum"]:
+                row = r.get(impl, {})
+                mem = "-"
+                if isinstance(row, dict) and "error" not in row and row:
+                    mem = f"{row['peak_mb']:.1f}"
+                speedup = (
+                    fmt_speedup(r.get("flash-maxsim"), r.get("late-interaction-kernels"))
+                    if impl == "late-interaction-kernels"
+                    else "-"
+                )
+                md.append(f"| {e['name']} | {impl} | {_cell(row)} | {mem} | {speedup} |")
 
     out_md = os.path.join(args.outdir, f"flash_maxsim_{gpu}_{args.dtype}.md")
     out_json = os.path.join(args.outdir, f"flash_maxsim_{gpu}_{args.dtype}.json")
