@@ -23,9 +23,11 @@ def test_forward_kernel_compiles_once_for_varying_ld():
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
-    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16)
+    # requires_grad=True routes through autograd so save_argmax=True, which
+    # defeats the small-input bypass and forces the autotune path.
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
     for ld in (192, 256, 384, 512, 768, 1024, 1100, 1280):
-        D = torch.randn(4, ld, 128, device="cuda", dtype=torch.float16)
+        D = torch.randn(4, ld, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
@@ -39,8 +41,8 @@ def test_forward_kernel_keys_on_lq_bucket():
 
     _maxsim_fwd_kernel.cache.clear()
     for lq in (32, 128):  # both are exact powers of two → distinct buckets
-        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16)
-        D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
@@ -60,14 +62,18 @@ def test_forward_kernel_buckets_lq_to_pow2():
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
-    # All of these fall in the bucket=32 slot.
-    for lq in (17, 19, 23, 25, 29, 31, 32):
-        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16)
-        D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
+    # All of these fall in the bucket=32 slot. We deliberately exclude
+    # lq=32 from the sweep: `_bucket_lq` only creates a q_mask when Lq
+    # < bucket (the padded values need a mask), so lq=32 would land with
+    # has_q_mask=False while the others have has_q_mask=True, and the
+    # autotune key (which includes has_q_mask) would split the cache.
+    for lq in (17, 19, 23, 25, 29, 31):
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
-    assert len(cache) == 1, f"Lq=17..32 should bucket to a single autotune entry; got {len(cache)}"
+    assert len(cache) == 1, f"Lq=17..31 should bucket to a single autotune entry; got {len(cache)}"
 
 
 def test_scatter_kernel_compiles_once_for_varying_max_ld():
@@ -107,8 +113,8 @@ def test_forward_normalize_shares_autotune_entry():
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
-    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16)
-    D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16)
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
     _ = maxsim(Q, D, normalize=False)
     _ = maxsim(Q, D, normalize=True)
 

@@ -3,7 +3,8 @@ name: GPU CI
 permissions:
   contents: read
 
-# Runs the CUDA-marked tests on a GitHub-hosted GPU larger runner. Triggered:
+# Runs the CUDA-marked tests on an AWS CodeBuild-hosted GPU runner (A10G).
+# Triggered:
 #   - on commits to main that touch GPU-relevant code;
 #   - on PRs carrying the `run-gpu-tests` label, when GPU-relevant code changed
 #     (label apply requires triage+);
@@ -35,79 +36,65 @@ concurrency:
 
 jobs:
   gpu-tests:
-    name: GPU tests (${{ matrix.bucket.name }})
-    # GitHub-hosted GPU larger runner (Tesla T4, 4 vCPUs) — provisioned by
-    # the org admin. Swap the label here if more GPU SKUs come online later.
-    runs-on: late-interaction-kernels-runner
+    name: GPU tests
+    # A10G (g5-class), ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
+    runs-on: codebuild-late-interaction-kernels-${{ github.run_id }}-${{ github.run_attempt }}-linux-5.0-gpu_small
     # Run on every push to main; on PRs, only when the `run-gpu-tests` label
-    # is attached (so new commits on a labeled PR also re-run).
+    # is attached (so new commits on a labeled PR also re-run). Label apply
+    # requires triage+ — every current collaborator on this repo has that,
+    # so the gate is effectively "any internal collaborator can trigger."
     if: >-
       github.event_name == 'push' ||
       contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
-    # NVIDIA PyTorch image — CUDA torch is preinstalled, so we don't have to
-    # fight the CPU-only torch pin in pyproject.toml (`[tool.uv.sources]`).
-    # Mirrors scripts/sky_run_benchmarks.yaml setup. Docker is preinstalled
-    # on GitHub-hosted larger runners.
-    container:
-      image: nvcr.io/nvidia/pytorch:25.06-py3
-      options: --gpus all --ipc=host
     # Silence the unnormalized-input warning: many parity tests deliberately
     # feed unnormalized vectors, so the warning is expected noise here.
+    # TRITON_CACHE_DIR pins the autotune disk cache to a stable path so the
+    # actions/cache step below can save and restore it across runs.
     env:
       LIK_SUPPRESS_NORM_WARN: "1"
-    timeout-minutes: 30
-    strategy:
-      # One bucket failing shouldn't cancel the others — we want to see all
-      # failures in a single run rather than chase one at a time.
-      fail-fast: false
-      matrix:
-        bucket:
-          # Buckets sized roughly by post-trim per-file durations from the
-          # single-shard run; rebalance via the --durations=20 output of
-          # each shard when test additions shift the picture.
-          - name: heavy-parity
-            paths: >-
-              tests/test_backward.py
-              tests/test_backward_unified.py
-              tests/test_normalize.py
-              tests/test_robustness.py
-              tests/test_fused_head_train.py
-          - name: kernels-medium
-            paths: >-
-              tests/test_plaid.py
-              tests/test_padded.py
-              tests/test_fp8.py
-              tests/test_compile_cache.py
-              tests/test_smooth.py
-              tests/test_fused_head.py
-          - name: kernels-light
-            paths: >-
-              tests/test_forward.py
-              tests/test_varlen.py
-              tests/test_scatter.py
-              tests/test_topk.py
-              tests/test_soft.py
-              tests/test_matryoshka.py
-              tests/test_edge_cases.py
-              tests/test_retrieve.py
-              tests/test_pylate_compat.py
-              tests/test_pylate_compat_warnings.py
-              tests/test_colpali_compat.py
+      TRITON_CACHE_DIR: ${{ github.workspace }}/.triton-cache
+    # 60 min covers a cold-cache first run on an ephemeral CodeBuild box;
+    # subsequent runs hit the restored Triton autotune cache and finish much
+    # faster.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          prune-cache: false
+
+      - name: Install dependencies
+        # `torch-cuda` extra pulls the cu124 wheel from the pytorch index
+        # defined in pyproject.toml. pylate's dep tree can conflict with
+        # CUDA torch, so we skip the pylate extra here; pylate parity tests
+        # auto-skip when the import fails.
+        run: uv sync --frozen --extra dev --extra torch-cuda
 
       - name: GPU sanity check
         run: |
           nvidia-smi
-          python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+          uv run python -c "import torch; print('cuda:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
-      - name: Install package
-        # pylate's dep tree conflicts with the NVCR image's torch, so we skip
-        # the pylate extra here. pylate parity tests auto-skip when the import
-        # fails.
-        run: pip install --no-cache-dir -e ".[dev]"
+      - name: Restore Triton autotune cache
+        # Triton 3.4+ persists best-config picks on disk; caching the dir
+        # across CI runs skips the multi-minute autotune sweep that was
+        # blowing past the 30-min budget on ephemeral CodeBuild runners.
+        # The cache is keyed on kernel sources + lockfile so any change
+        # that would invalidate a Triton cache entry also rotates the key.
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.triton-cache
+          key: triton-autotune-${{ runner.os }}-${{ hashFiles('late_interaction_kernels/**/*.py', 'uv.lock') }}
+          restore-keys: |
+            triton-autotune-${{ runner.os }}-
 
-      - name: Run tests (${{ matrix.bucket.name }})
-        # --durations=20 prints the long pole per bucket so we can rebalance
-        # the matrix when test additions shift the picture.
-        run: pytest ${{ matrix.bucket.paths }} -v --durations=20
+      - name: Run tests
+        # Single bucket — CodeBuild's ephemeral runner makes per-job overhead
+        # the long pole, so parallelizing across buckets isn't worth the
+        # maintenance cost of keeping file lists in sync. MPS-only and
+        # CPU-reference tests auto-skip on the A10G via their own gating.
+        # `--durations=20` keeps slow-test visibility for occasional triage.
+        run: uv run pytest tests/ -v --durations=20
