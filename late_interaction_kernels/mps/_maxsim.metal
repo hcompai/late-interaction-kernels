@@ -250,9 +250,6 @@ inline void maxsim_inference_impl(
                 score_acc[j_idx] += partial;
             }}
 
-            // Per-(i, s, j) argmax write. Each lane owns its own s.
-            // Lanes whose s ≥ Lq skipped via s_valid; masked rows still
-            // get a write (value=0) so the backward sees a defined slot.
             if (SaveArgmax && s_valid) {{
                 argmax[(i * Nd + j) * Lq + s] = running_argmax;
             }}
@@ -269,7 +266,6 @@ inline void maxsim_inference_impl(
     }}
 }}
 
-// Inference (no argmax save). Buffer 6 is a placeholder.
 #define MAXSIM_KERNEL(NAME, T, J)                                                \
 kernel void NAME(                                                                \
     device const T*        Q       [[buffer(0)]],                                \
@@ -286,7 +282,7 @@ kernel void NAME(                                                               
     threadgroup float S_tile[BLOCK_Q * BLOCK_D];                                 \
     threadgroup uchar d_active_tile[BLOCK_D];                                    \
     threadgroup uchar q_active_tile[BLOCK_Q];                                    \
-    /* argmax is unused (SaveArgmax=false) — reuse `scores` as placeholder. */\
+    /* argmax slot is unused (SaveArgmax=false); reuse `scores`. */              \
     maxsim_inference_impl<T, J, false>(                                          \
         Q, D, q_mask, d_mask, scores,                                            \
         reinterpret_cast<device int*>(scores), p,                                \
@@ -294,7 +290,6 @@ kernel void NAME(                                                               
         tid3.z, tg.x, tg.y);                                                     \
 }}
 
-// Training (save argmax to buffer 6). One kernel per (dtype, J_PER_TG).
 #define MAXSIM_TRAIN_KERNEL(NAME, T, J)                                          \
 kernel void NAME(                                                                \
     device const T*        Q       [[buffer(0)]],                                \
@@ -329,27 +324,59 @@ MAXSIM_TRAIN_KERNEL(maxsim_bfloat_small_train, bfloat, 1)
 MAXSIM_TRAIN_KERNEL(maxsim_bfloat_big_train,   bfloat, {J_PER_TG_BIG})
 
 
-// ===== Backward =====
+// Backward — Triton analogue: `maxsim_backward_unified`. One
+// threadgroup per (i, s); `d` lanes cooperate on the d-axis. `acc_Q`
+// is row-private (no atomics on grad_Q); `grad_D` scatters via
+// `atomic_uint` CAS since multiple (i, s) can land on the same
+// (d_global, t).
 //
-// Triton analogue: `maxsim_backward_unified` in `backward/unified.py`.
-// One threadgroup per (i, s); `THREADS` lanes cooperate on the d-axis.
-// `acc_Q` is row-private (no atomics on grad_Q); `grad_D` is scattered
-// via `atomic_fetch_add_explicit` because multiple (i, j) pairs can
-// land on the same (d_global, t).
-//
-// `kd_layout` switches `d_global` from `j` (cross-product) to `i*Nd+j`
-// (each query owns its own slab).
-template <typename T>
+// When `Normalize` is set, the kernel normalizes Q/D on the fly and
+// folds the L2-normalize Jacobian into the writes — saves the
+// otherwise-dominant host-side launch overhead (full-tensor norms +
+// projections were ~3 ms on a 32x32x32x200x128 step versus ~0.3 ms
+// for the kernel itself).
+
+// Reduce `val` across all `num_threads` lanes of the threadgroup.
+// `scratch` must be sized for one float per simdgroup; unused when
+// `num_threads ≤ 32`.
+inline float threadgroup_reduce_sum(
+    float val,
+    uint tid,
+    uint num_threads,
+    threadgroup float* scratch)
+{{
+    const uint SIMD_W = 32u;
+    float simd_partial = simd_sum(val);
+    if (num_threads <= SIMD_W) {{
+        return simd_partial;
+    }}
+    const uint simd_id = tid / SIMD_W;
+    if ((tid % SIMD_W) == 0u) {{
+        scratch[simd_id] = simd_partial;
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint num_simds = (num_threads + SIMD_W - 1u) / SIMD_W;
+    float total = 0.0f;
+    for (uint k = 0; k < num_simds; ++k) total += scratch[k];
+    // Trailing barrier so successive reductions sharing the same
+    // `scratch` don't race (next write would otherwise outrun this
+    // read on simdgroups that finish quickly).
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    return total;
+}}
+
+template <typename T, bool Normalize>
 inline void maxsim_bwd_impl(
     device const T*           Q,
     device const T*           D,
-    device const int*         argmax,        // [Nq*Nd, Lq] int32
-    device const float*       grad_scores,   // [Nq, Nd] fp32
-    device const char*        q_mask,        // [Nq, Lq] int8 or unused
-    device       float*       grad_Q,        // [Nq, Lq, d] fp32
-    device       atomic_uint* grad_D_atomic, // [Nd_total, Ld, d] aliased fp32 storage
+    device const int*         argmax,
+    device const float*       grad_scores,
+    device const char*        q_mask,
+    device       float*       grad_Q,
+    device       atomic_uint* grad_D_atomic,
     constant MaxSimParams&    p,
-    uint tid,                                // 0 ≤ tid < d
+    threadgroup float*        scratch,    // sized for one float per simdgroup
+    uint tid,                             // 0 ≤ tid < d
     uint i,
     uint s)
 {{
@@ -374,7 +401,21 @@ inline void maxsim_bwd_impl(
         return;
     }}
 
-    const float qv = float(Q[q_off]);
+    const float qv_raw = float(Q[q_off]);
+
+    // q_hat and 1 / ||Q||. In the un-normalized path q_hat == qv_raw
+    // and inv_q_norm == 1, so the same formula reduces to the original
+    // contributions.
+    float q_norm = 1.0f;
+    float inv_q_norm = 1.0f;
+    float qv = qv_raw;
+    if (Normalize) {{
+        const float qq = threadgroup_reduce_sum(qv_raw * qv_raw, tid, d, scratch);
+        q_norm = sqrt(max(qq, 1e-12f));
+        inv_q_norm = 1.0f / q_norm;
+        qv = qv_raw * inv_q_norm;
+    }}
+
     float acc_Q = 0.0f;
 
     for (uint j = 0; j < Nd; ++j) {{
@@ -383,27 +424,44 @@ inline void maxsim_bwd_impl(
         const int t = argmax[(i * Nd + j) * Lq + s];
         if (t < 0 || (uint)t >= Ld) continue;
         const uint d_idx = (d_global * Ld + (uint)t) * d + tid;
-        const float dv = float(D[d_idx]);
+        const float dv_raw = float(D[d_idx]);
+
+        float dv = dv_raw;
+        float inv_d_norm = 1.0f;
+        float dot_qh_dh = 0.0f;
+        if (Normalize) {{
+            const float dd = threadgroup_reduce_sum(dv_raw * dv_raw, tid, d, scratch);
+            const float d_norm = sqrt(max(dd, 1e-12f));
+            inv_d_norm = 1.0f / d_norm;
+            dv = dv_raw * inv_d_norm;
+            dot_qh_dh = threadgroup_reduce_sum(qv * dv, tid, d, scratch);
+        }}
+
         acc_Q += gs * dv;
-        // Apple Silicon supports fp32 atomic add on device memory via
-        // the bitcast-to-uint dance below (Metal3 has no direct
-        // atomic_float; ``atomic_fetch_add_explicit`` on a uint that
-        // aliases a float is the documented workaround).
-        const float contrib = gs * qv;
+        // grad_D contribution. In the normalize path we fold the
+        // D-side Jacobian here: (gs * Q_hat - <gs * Q_hat, D_hat> * D_hat) / ||D||.
+        const float contrib = Normalize
+            ? gs * (qv - dot_qh_dh * dv) * inv_d_norm
+            : gs * qv;
         uint old_bits = atomic_load_explicit(&grad_D_atomic[d_idx], memory_order_relaxed);
         uint new_bits;
         do {{
-            const float old_val = as_type<float>(old_bits);
-            new_bits = as_type<uint>(old_val + contrib);
+            new_bits = as_type<uint>(as_type<float>(old_bits) + contrib);
         }} while (!atomic_compare_exchange_weak_explicit(
             &grad_D_atomic[d_idx], &old_bits, new_bits,
             memory_order_relaxed, memory_order_relaxed));
     }}
 
-    grad_Q[q_off] = acc_Q;
+    if (Normalize) {{
+        // Q-side Jacobian: (acc_Q - <acc_Q, Q_hat> * Q_hat) / ||Q||.
+        const float dot_aQ_qh = threadgroup_reduce_sum(acc_Q * qv, tid, d, scratch);
+        grad_Q[q_off] = (acc_Q - dot_aQ_qh * qv) * inv_q_norm;
+    }} else {{
+        grad_Q[q_off] = acc_Q;
+    }}
 }}
 
-#define MAXSIM_BWD_KERNEL(NAME, T)                                               \
+#define MAXSIM_BWD_KERNEL(NAME, T, NORM)                                         \
 kernel void NAME(                                                                \
     device const T*           Q           [[buffer(0)]],                         \
     device const T*           D           [[buffer(1)]],                         \
@@ -416,10 +474,14 @@ kernel void NAME(                                                               
     uint3 tg                              [[threadgroup_position_in_grid]],      \
     uint3 tid3                            [[thread_position_in_threadgroup]])    \
 {{                                                                               \
-    maxsim_bwd_impl<T>(Q, D, argmax, grad_scores, q_mask,                        \
-                       grad_Q, grad_D, p,                                        \
-                       tid3.z, tg.x, tg.y);                                      \
+    /* One slot per possible simdgroup at d=128 (max 4 simdgroups). */           \
+    threadgroup float scratch[4];                                                \
+    maxsim_bwd_impl<T, NORM>(Q, D, argmax, grad_scores, q_mask,                  \
+                             grad_Q, grad_D, p, scratch,                         \
+                             tid3.z, tg.x, tg.y);                                \
 }}
 
-MAXSIM_BWD_KERNEL(maxsim_bwd_half,   half)
-MAXSIM_BWD_KERNEL(maxsim_bwd_bfloat, bfloat)
+MAXSIM_BWD_KERNEL(maxsim_bwd_half,         half,   false)
+MAXSIM_BWD_KERNEL(maxsim_bwd_half_norm,    half,   true)
+MAXSIM_BWD_KERNEL(maxsim_bwd_bfloat,       bfloat, false)
+MAXSIM_BWD_KERNEL(maxsim_bwd_bfloat_norm,  bfloat, true)

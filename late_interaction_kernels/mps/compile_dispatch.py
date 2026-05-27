@@ -212,11 +212,9 @@ def _compile_path(
 class _MaxSimFnMetal(torch.autograd.Function):
     """Fused MaxSim forward + Metal backward (mirrors Triton's ``_MaxSimFn``).
 
-    Forward saves the per-(i, s, j) argmax buffer so the backward can
-    run without re-doing the [Lq, Ld] dot products. When ``normalize``
-    is set the kernel scores against ``Q/||Q||`` and ``D/||D||``, so we
-    unwind the L2-normalize Jacobian on the host — same shape as the
-    Triton path in ``autograd._MaxSimFn``.
+    Both halves run on the GPU. When ``normalize=True`` the backward
+    kernel folds the L2-normalize Jacobian into its writes (the
+    host-side variant was ~10x more expensive than the kernel proper).
     """
 
     @staticmethod
@@ -233,33 +231,18 @@ class _MaxSimFnMetal(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_scores):
         Q, D, argmax, q_mask_i8 = ctx.saved_tensors
-        kd_layout = ctx.kd_layout
-        grad_scores = grad_scores.contiguous().to(torch.float32)
-
-        if ctx.normalize:
-            q_norm = torch.linalg.vector_norm(Q.float(), dim=-1, keepdim=True).clamp_min(1e-6)
-            d_norm = torch.linalg.vector_norm(D.float(), dim=-1, keepdim=True).clamp_min(1e-6)
-            Q_hat = (Q.float() / q_norm).to(Q.dtype)
-            D_hat = (D.float() / d_norm).to(D.dtype)
-            gQh, gDh = _metal.maxsim_backward_metal(
-                grad_scores, Q_hat, D_hat, argmax, q_mask=q_mask_i8, kd_layout=kd_layout
-            )
-            gQh = gQh.float()
-            gDh = gDh.float()
-            Q_hat_f = Q_hat.float()
-            D_hat_f = D_hat.float()
-            grad_Q = (gQh - (gQh * Q_hat_f).sum(-1, keepdim=True) * Q_hat_f) / q_norm
-            grad_D = (gDh - (gDh * D_hat_f).sum(-1, keepdim=True) * D_hat_f) / d_norm
-        else:
-            grad_Q, grad_D = _metal.maxsim_backward_metal(
-                grad_scores, Q, D, argmax, q_mask=q_mask_i8, kd_layout=kd_layout
-            )
-            grad_Q = grad_Q.float()
-            grad_D = grad_D.float()
-
-        if kd_layout:
+        grad_Q, grad_D = _metal.maxsim_backward_metal(
+            grad_scores,
+            Q,
+            D,
+            argmax,
+            q_mask=q_mask_i8,
+            kd_layout=ctx.kd_layout,
+            normalize=ctx.normalize,
+        )
+        if ctx.kd_layout:
             grad_D = grad_D.view(ctx.d_input_shape)
-        return grad_Q.to(Q.dtype), grad_D.to(D.dtype), None, None, None, None
+        return grad_Q, grad_D, None, None, None, None
 
 
 def _metal_train_supported(Q: torch.Tensor, D: torch.Tensor) -> bool:

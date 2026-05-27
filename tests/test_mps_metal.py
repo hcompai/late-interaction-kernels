@@ -720,6 +720,41 @@ def test_metal_backward_zeroes_grad_Q_on_masked_rows():
     assert torch.any(gQ[:, : Lq // 2, :].abs() > 0), "unmasked rows should be nonzero"
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("shape", [(4, 8, 16, 32, 64), (8, 16, 32, 128, 128), (4, 8, 32, 64, 48)])
+def test_metal_backward_normalize_fused_matches_host_jacobian(dtype, shape):
+    """The in-kernel normalize Jacobian must match the host-side unwind
+    (norm + project) byte-equivalent up to fp16 rounding."""
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, normalize=True)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+
+    gQ_fused, gD_fused = _metal.maxsim_backward_metal(gs, Q, D, argmax, normalize=True)
+
+    # Host-side unwind, same shape as the old _MaxSimFnMetal.backward.
+    q_norm = torch.linalg.vector_norm(Q.float(), dim=-1, keepdim=True).clamp_min(1e-6)
+    d_norm = torch.linalg.vector_norm(D.float(), dim=-1, keepdim=True).clamp_min(1e-6)
+    Q_hat = (Q.float() / q_norm).to(dtype)
+    D_hat = (D.float() / d_norm).to(dtype)
+    gQh, gDh = _metal.maxsim_backward_metal(gs, Q_hat, D_hat, argmax, normalize=False)
+    gQh = gQh.float()
+    gDh = gDh.float()
+    Qh = Q_hat.float()
+    Dh = D_hat.float()
+    gQ_host = (gQh - (gQh * Qh).sum(-1, keepdim=True) * Qh) / q_norm
+    gD_host = (gDh - (gDh * Dh).sum(-1, keepdim=True) * Dh) / d_norm
+
+    # Atomic-add ordering is nondeterministic so allow a small absolute
+    # diff scaled by the magnitude of the gradient.
+    gQ_err = (gQ_fused.float() - gQ_host).norm() / gQ_host.norm().clamp_min(1e-6)
+    gD_err = (gD_fused.float() - gD_host).norm() / gD_host.norm().clamp_min(1e-6)
+    assert gQ_err < 5e-3, f"gQ rel diff {gQ_err}"
+    assert gD_err < 5e-3, f"gD rel diff {gD_err}"
+
+
 def test_metal_backward_KD_layout_matches_reference():
     """4-D ``D`` (KD): backward parity vs the per-pair atomic reference."""
     Nq, K, Lq, Ld, d = 4, 8, 16, 32, 64

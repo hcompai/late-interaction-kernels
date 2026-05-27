@@ -136,8 +136,10 @@ _DTYPE_TO_TRAIN_KERNEL = {
 }
 
 _DTYPE_TO_BWD_KERNEL = {
-    torch.float16: "maxsim_bwd_half",
-    torch.bfloat16: "maxsim_bwd_bfloat",
+    (torch.float16, False): "maxsim_bwd_half",
+    (torch.float16, True): "maxsim_bwd_half_norm",
+    (torch.bfloat16, False): "maxsim_bwd_bfloat",
+    (torch.bfloat16, True): "maxsim_bwd_bfloat_norm",
 }
 
 
@@ -389,14 +391,12 @@ def maxsim_train_metal(
     *,
     normalize: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-    """Forward + argmax save. Returns ``(scores, argmax, ctx)``.
+    """Forward + per-(i, s, j) argmax save. Returns ``(scores, argmax, ctx)``.
 
-    ``ctx`` carries the contiguous ``Q``/``D`` and the masks that
-    :func:`maxsim_backward_metal` needs — same shapes the kernel saw, so
-    the backward doesn't have to re-do the broadcasts.
-
-    ``argmax`` has shape ``[Nq * Nd, Lq]`` int32 (Nd = K in KD mode),
-    matching Triton's :func:`maxsim_backward_unified`.
+    ``argmax`` is ``[Nq * Nd, Lq]`` int32 (Nd = K in KD mode), matching
+    the Triton ``maxsim_backward_unified`` contract. ``ctx`` carries the
+    contiguous Q / D / q_mask the kernel saw so the backward doesn't
+    redo broadcasts.
     """
     if not is_available():
         raise RuntimeError(
@@ -454,19 +454,25 @@ def maxsim_backward_metal(
     q_mask: torch.Tensor | None = None,
     *,
     kd_layout: bool = False,
+    normalize: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """``grad_Q``, ``grad_D`` for the fused MaxSim. Mirrors Triton's
     :func:`maxsim_backward_unified` API.
 
     Args:
         grad_scores: ``[Nq, Nd]`` fp32 upstream gradient.
-        Q: ``[Nq, Lq, d]`` contiguous, fp16 / bf16.
+        Q: ``[Nq, Lq, d]`` contiguous, fp16 / bf16. Pass the *raw* Q
+            when ``normalize=True`` (kernel normalizes internally).
         D: ``[Nd, Ld, d]`` (cross-product) or ``[Nq * K, Ld, d]`` (KD,
-            already flat — same view the forward kernel saw).
+            same flat view the forward saw). Same raw/normalized rule
+            as ``Q``.
         argmax: ``[Nq * Nd, Lq]`` int32 winner buffer from
             :func:`maxsim_train_metal`.
         q_mask: optional ``[Nq, Lq]`` int8 mask (``1`` = valid).
         kd_layout: ``True`` if ``D`` is the flat KD view.
+        normalize: when ``True``, fold the L2-normalize Jacobian into
+            the writes. Eliminates the host-side norm + projection
+            ops that otherwise dominate the backward step.
 
     Returns:
         ``(grad_Q, grad_D)`` cast back to ``Q.dtype`` / ``D.dtype``.
@@ -512,7 +518,7 @@ def maxsim_backward_metal(
     grad_D = torch.zeros(n_axis, Ld, d, device="mps", dtype=torch.float32)
 
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
-    kernel_name = _DTYPE_TO_BWD_KERNEL[Q.dtype]
+    kernel_name = _DTYPE_TO_BWD_KERNEL[(Q.dtype, bool(normalize))]
     fn = getattr(_get_lib(), kernel_name)
     fn(
         Q,
