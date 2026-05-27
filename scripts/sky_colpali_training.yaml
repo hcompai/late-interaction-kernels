@@ -51,19 +51,8 @@ setup: |
   # Uses the same torchvision mock as the bench scripts (ColQwen2 uses
   # qwen_vl_utils, not torchvision; the mock just satisfies transformers).
   uv run python -c "
-  import sys, types, enum as _enum, importlib.machinery as _im
-  _tv = types.ModuleType('torchvision'); _tv.__version__ = '0.0.0+mock'
-  _tv.__spec__ = _im.ModuleSpec('torchvision', loader=None, is_package=True); _tv.__path__ = []
-  for _s in ('extension','_meta_registrations','ops','io','transforms','models','datasets','utils'):
-      _m = types.ModuleType(f'torchvision.{_s}')
-      _m.__spec__ = _im.ModuleSpec(f'torchvision.{_s}', loader=None)
-      setattr(_tv, _s, _m); sys.modules[f'torchvision.{_s}'] = _m
-  class _IR(_enum.IntEnum): UNCHANGED=0; GRAY=1; GRAY_ALPHA=2; RGB=3; RGB_ALPHA=4
-  class _IM(_enum.Enum): NEAREST='nearest'; BILINEAR='bilinear'; BICUBIC='bicubic'; LANCZOS='lanczos'
-  sys.modules['torchvision.io'].ImageReadMode = _IR
-  sys.modules['torchvision.io'].decode_image = lambda *a, **kw: None
-  sys.modules['torchvision.transforms'].InterpolationMode = _IM
-  sys.modules['torchvision'] = _tv
+  import sys
+  sys.modules['torchvision'] = None
   import torch
   from colpali_engine.models import ColQwen2, ColQwen2Processor
   from colpali_engine.loss.late_interaction_losses import ColbertLoss
