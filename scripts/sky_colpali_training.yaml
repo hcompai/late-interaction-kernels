@@ -42,8 +42,8 @@ setup: |
   # PyPI torchvision 0.26.0 requires libcudart.so.13 (CUDA 13) and won't
   # load on this CUDA 12.9 container, but the +cu128 build uses
   # libcudart.so.12 (CUDA 12.8), which the container provides.
-  uv pip install "colpali-engine>=0.3.10" datasets pillow \
-      "torch==2.8.0+cu128" "torchvision==0.26.0+cu128" \
+  uv pip install "colpali-engine>=0.3.10" datasets pillow triton \
+      "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
       --extra-index-url https://download.pytorch.org/whl/cu128
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
