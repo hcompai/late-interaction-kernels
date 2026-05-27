@@ -1,0 +1,124 @@
+# E2E ColQwen2 training benchmark via colpali_engine: synthetic + real DocVQA.
+#
+#   sky launch scripts/sky_colpali_training.yaml -c lik-colpali-training -y
+#
+# Compares vanilla colpali_engine vs patch_colpali_engine() driving a real
+# ColQwen2-v1.0 forward + backward through ColbertLoss / ColbertPairwiseCELoss /
+# ColbertSigmoidLoss. Two scripts:
+#
+#   * benchmarks/bench_colpali_training.py  — synthetic PIL images + fake queries
+#   * benchmarks/bench_colpali_realdata.py  — vidore/docvqa_test_subsampled
+#     (a few hundred real document images + OCR-targeted queries)
+
+name: lik-colpali-training
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  # colpali-engine is not in the project's optional extras; install it
+  # directly. 0.3.10 is the first release with the patched-API surface
+  # (ColbertLoss / ColbertPairwiseCELoss / ColbertSigmoidLoss + the
+  # processing_utils.BaseVisualRetrieverProcessor.score_multi_vector helper).
+  uv pip install "colpali-engine>=0.3.10" datasets pillow
+  # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
+  # build — the bench falls back to torch SDPA automatically.
+  uv pip install flash-attn --no-build-isolation || true
+  # Sanity check the model + processor + loss patcher can all hydrate.
+  uv run python -c "
+  import torch
+  from colpali_engine.models import ColQwen2, ColQwen2Processor
+  from colpali_engine.loss.late_interaction_losses import ColbertLoss
+  from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
+  print('gpu', torch.cuda.get_device_name())
+  proc = ColQwen2Processor.from_pretrained('vidore/colqwen2-v1.0')
+  print('processor ok', type(proc).__name__)
+  patch_colpali_engine(); unpatch_colpali_engine()
+  print('patcher ok')
+  "
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  export LIK_SUPPRESS_NORM_WARN=1
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  ART=/tmp/colpali_training_${STAMP}
+  mkdir -p "${ART}"
+
+  MODEL="vidore/colqwen2-v1.0"
+
+  echo "=============================================================="
+  echo "  Synthetic ColQwen2 — ColbertLoss bs=4"
+  echo "=============================================================="
+  uv run python benchmarks/bench_colpali_training.py \
+      --model "${MODEL}" \
+      --loss colbert \
+      --batch-size 4 --image-size 448 --query-words 16 \
+      --iters 5 --warmup 2 \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/synth_colbert_bs4.log"
+
+  echo "=============================================================="
+  echo "  Synthetic ColQwen2 — ColbertLoss bs=8 + grad ckpt"
+  echo "=============================================================="
+  uv run python benchmarks/bench_colpali_training.py \
+      --model "${MODEL}" \
+      --loss colbert \
+      --batch-size 8 --image-size 448 --query-words 16 \
+      --iters 5 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/synth_colbert_bs8_ckpt.log"
+
+  echo "=============================================================="
+  echo "  Synthetic ColQwen2 — ColbertPairwiseCELoss bs=4"
+  echo "=============================================================="
+  uv run python benchmarks/bench_colpali_training.py \
+      --model "${MODEL}" \
+      --loss pairwise_ce \
+      --batch-size 4 --image-size 448 --query-words 16 \
+      --iters 5 --warmup 2 \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/synth_pairwise_bs4.log"
+
+  echo "=============================================================="
+  echo "  Real DocVQA — ColbertLoss bs=4"
+  echo "=============================================================="
+  uv run python benchmarks/bench_colpali_realdata.py \
+      --model "${MODEL}" \
+      --loss colbert \
+      --batch-size 4 --max-samples 64 \
+      --steps 10 --warmup 2 \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/real_colbert_bs4.log"
+
+  echo "=============================================================="
+  echo "  Real DocVQA — ColbertLoss bs=8 + grad ckpt"
+  echo "=============================================================="
+  uv run python benchmarks/bench_colpali_realdata.py \
+      --model "${MODEL}" \
+      --loss colbert \
+      --batch-size 8 --max-samples 96 \
+      --steps 8 --warmup 2 \
+      --grad-checkpoint \
+      --outdir "${ART}" \
+      2>&1 | tee "${ART}/real_colbert_bs8_ckpt.log"
+
+  echo "Artifacts: ${ART}"
+  ls -la "${ART}"
