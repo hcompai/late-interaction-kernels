@@ -1,0 +1,188 @@
+# All PyLate end-to-end training benchmarks on one H100 cluster.
+#
+# Consolidates the three previous per-shape yamls (sky_lateon_edge.yaml,
+# sky_pylate_realdata.yaml, sky_pylate_realdata_long.yaml) behind a
+# RUN_ONLY env var so you can launch the full sweep or any subset from
+# the same file.
+#
+# Tags:
+#   * lateon_contrastive  — synthetic bench_pylate_lateon, contrastive,
+#                           bs ∈ {16, 32}, Ld=2048
+#   * lateon_cached       — synthetic bench_pylate_lateon, cached,
+#                           bs ∈ {64, 128}, Ld ∈ {2048, 4096}
+#   * realdata_contrastive — real MS MARCO triplets, contrastive,
+#                            bs=16 Ld=256
+#   * realdata_reason     — real MS MARCO triplets, CachedContrastive,
+#                           bs ∈ {64, 128}, Ld ∈ {300, 512}
+#   * realdata_long_2k    — real MS MARCO triplets at Ld=2048
+#                           (LateOn-Code-edge max)
+#   * realdata_long_4k    — real MS MARCO triplets at Ld=4096
+#                           (LateOn-Code)
+#
+# Usage:
+#   sky launch -c lik-pylate scripts/sky_pylate_benchmark.yaml -y
+#   sky launch -c lik-pylate scripts/sky_pylate_benchmark.yaml -y \
+#       --env RUN_ONLY="lateon_cached realdata_long_2k"
+
+name: lik-pylate-benchmark
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+  # Space-separated subset of tags to run; empty means "run all".
+  RUN_ONLY: ""
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Bare CUDA image: bootstrap uv, install the project + pylate stack.
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda --extra pylate
+  # pylate 1.5+ broke patch_pylate's `(queries_mask, documents_mask)`
+  # signature; pin to the last working release.
+  uv pip install "pylate==1.3.3"
+  # Sanity-check the ColBERT loader can hydrate the edge model.
+  uv run python -c "
+  import torch, pylate
+  from pylate import models
+  print('gpu', torch.cuda.get_device_name())
+  print('pylate', pylate.__version__)
+  m = models.ColBERT('lightonai/LateOn-Code-edge', document_length=256, query_length=32)
+  print('model ok', type(m).__name__)
+  "
+
+run: |
+  set -uxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  source .venv/bin/activate
+  export LIK_SUPPRESS_NORM_WARN=1
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  ART=/tmp/pylate_benchmark_${STAMP}
+  mkdir -p "${ART}"
+
+  EDGE="lightonai/LateOn-Code-edge"
+  CODE="lightonai/LateOn-Code"
+
+  run() {
+    echo ""
+    echo "=================================================================="
+    echo "Running: $*"
+    echo "=================================================================="
+    ( "$@" ) || echo "WARN: $* failed (exit $?) — continuing"
+  }
+
+  should_run() {
+    [ -z "${RUN_ONLY}" ] || [[ " ${RUN_ONLY} " == *" $1 "* ]]
+  }
+
+  # --- Synthetic encoder-bound runs (bench_pylate_lateon) ----------------
+  if should_run lateon_contrastive; then
+    for bs in 16 32; do
+      run python benchmarks/bench_pylate_lateon.py \
+          --model "${EDGE}" --recipe contrastive \
+          --batch-size $bs --Lq 32 --Ld 2048 \
+          --iters 8 --warmup 2 --outdir "${ART}" \
+          2>&1 | tee "${ART}/lateon_contrastive_bs${bs}_ld2048.log"
+    done
+  fi
+
+  if should_run lateon_cached; then
+    # Three points along the in-batch-negatives curve where MaxSim shifts
+    # from "encoder dominates" to "MaxSim dominates":
+    #   * bs=64  mini=16 Ld=2048           (no grad-ckpt)
+    #   * bs=128 mini=16 Ld=2048 grad-ckpt (where vanilla starts to OOM)
+    #   * bs=64  mini=8  Ld=4096 grad-ckpt (long-doc regime)
+    run python benchmarks/bench_pylate_lateon.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+        --iters 8 --warmup 2 --outdir "${ART}" \
+        2>&1 | tee "${ART}/lateon_cached_bs64_mini16_ld2048.log"
+
+    run python benchmarks/bench_pylate_lateon.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+        --iters 5 --warmup 2 --outdir "${ART}" --grad-checkpoint \
+        2>&1 | tee "${ART}/lateon_cached_bs128_mini16_ld2048.log"
+
+    run python benchmarks/bench_pylate_lateon.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 64 --mini-batch-size 8 --Lq 32 --Ld 4096 \
+        --iters 5 --warmup 2 --outdir "${ART}" --grad-checkpoint \
+        2>&1 | tee "${ART}/lateon_cached_bs64_mini8_ld4096.log"
+  fi
+
+  # --- Real MS MARCO triplets (bench_pylate_realdata) --------------------
+  if should_run realdata_contrastive; then
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe contrastive \
+        --batch-size 16 --Lq 32 --Ld 256 \
+        --max-samples 512 --steps 25 --warmup 3 --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_contrastive_bs16_ld256.log"
+  fi
+
+  if should_run realdata_reason; then
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 300 \
+        --max-samples 512 --steps 20 --warmup 3 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_cached_bs64_ld300.log"
+
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 512 \
+        --max-samples 768 --steps 15 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_cached_bs128_ld512.log"
+  fi
+
+  if should_run realdata_long_2k; then
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe contrastive \
+        --batch-size 8 --Lq 32 --Ld 2048 \
+        --max-samples 256 --steps 12 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_long_contrastive_bs8_ld2048.log"
+
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+        --max-samples 384 --steps 10 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_long_cached_bs64_ld2048.log"
+
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 2048 \
+        --max-samples 512 --steps 8 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_long_cached_bs128_ld2048.log"
+
+    # Long queries (Lq=128) + long docs: stresses the kernel on both axes.
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${EDGE}" --recipe reason \
+        --batch-size 64 --mini-batch-size 8 --Lq 128 --Ld 2048 \
+        --max-samples 256 --steps 8 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_long_cached_bs64_lq128_ld2048.log"
+  fi
+
+  if should_run realdata_long_4k; then
+    # LateOn-Code (not the edge model) at its native long-doc context.
+    run python benchmarks/bench_pylate_realdata.py \
+        --model "${CODE}" --recipe reason \
+        --batch-size 32 --mini-batch-size 16 --Lq 32 --Ld 4096 \
+        --max-samples 256 --steps 6 --warmup 2 --grad-checkpoint --outdir "${ART}" \
+        2>&1 | tee "${ART}/realdata_long_cached_bs32_ld4096_lateon_code.log"
+  fi
+
+  echo ""
+  echo "=== artifacts ==="
+  ls -la "${ART}"
+  tar -czf /tmp/pylate_benchmark_artifacts.tgz -C /tmp "$(basename ${ART})"
+  ls -la /tmp/pylate_benchmark_artifacts.tgz

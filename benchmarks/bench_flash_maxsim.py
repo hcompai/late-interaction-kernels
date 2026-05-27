@@ -24,7 +24,7 @@ Usage::
     pip install "flash-maxsim==0.2.0"   # pinned to match the published numbers
     python benchmarks/bench_flash_maxsim.py
     python benchmarks/bench_flash_maxsim.py --quick      # skip biggest shapes
-    python benchmarks/bench_flash_maxsim.py --shape train-batch
+    python benchmarks/bench_flash_maxsim.py --only train-batch
     python benchmarks/bench_flash_maxsim.py --no-kd      # cross-product only
     python benchmarks/bench_flash_maxsim.py --no-pairs   # skip pairwise
 
@@ -304,7 +304,12 @@ def main():
     ap.add_argument("--dtype", choices=["bf16", "fp16"], default="bf16")
     ap.add_argument("--outdir", default="benchmarks/results")
     ap.add_argument("--quick", action="store_true", help="Skip the biggest shapes.")
-    ap.add_argument("--shape", default=None, help="Run only the shape with this name.")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help="subset of shape names to run (across SHAPES / KD_SHAPES / PAIR_SHAPES); default = all.",
+    )
     ap.add_argument(
         "--no-backward",
         action="store_true",
@@ -336,13 +341,15 @@ def main():
         print(f"  (import error: {_FM_IMPORT_ERR})")
     print()
 
-    shapes = SHAPES
-    if args.shape:
-        shapes = [s for s in shapes if s[0] == args.shape]
-        if not shapes:
-            sys.exit(f"no shape named {args.shape!r}")
-    if args.quick:
-        shapes = [s for s in shapes if s[1] * s[2] <= 1000]
+    wanted = set(args.only) if args.only else None
+    if wanted:
+        shapes = [s for s in SHAPES if s[0] in wanted]
+    elif args.quick:
+        shapes = [s for s in SHAPES if s[1] * s[2] <= 1000]
+    else:
+        shapes = SHAPES
+    if wanted and not shapes and not any(s[0] in wanted for s in KD_SHAPES + PAIR_SHAPES):
+        sys.exit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES + KD_SHAPES + PAIR_SHAPES]}")
 
     report = {"gpu": gpu, "dtype": args.dtype, "fm_version": FM_VERSION, "shapes": []}
 
@@ -385,11 +392,12 @@ def main():
     # --- KD layout (4-D D) -------------------------------------------------
     report["kd_shapes"] = []
     if not args.no_kd:
-        kd_shapes = KD_SHAPES
-        if args.shape:
-            kd_shapes = [s for s in kd_shapes if s[0] == args.shape]
-        if args.quick:
-            kd_shapes = [s for s in kd_shapes if s[1] * s[2] <= 256]
+        if wanted:
+            kd_shapes = [s for s in KD_SHAPES if s[0] in wanted]
+        elif args.quick:
+            kd_shapes = [s for s in KD_SHAPES if s[1] * s[2] <= 256]
+        else:
+            kd_shapes = KD_SHAPES
 
         for name, B, K, Lq, Ld, d in kd_shapes:
             print(f"== {name:25s}  B={B} K={K} Lq={Lq} Ld={Ld} d={d}  (KD: D is 4-D)")
@@ -415,11 +423,12 @@ def main():
     # --- Pairwise (K=1 KD) -------------------------------------------------
     report["pair_shapes"] = []
     if not args.no_pairs:
-        pair_shapes = PAIR_SHAPES
-        if args.shape:
-            pair_shapes = [s for s in pair_shapes if s[0] == args.shape]
-        if args.quick:
-            pair_shapes = [s for s in pair_shapes if s[1] <= 256]
+        if wanted:
+            pair_shapes = [s for s in PAIR_SHAPES if s[0] in wanted]
+        elif args.quick:
+            pair_shapes = [s for s in PAIR_SHAPES if s[1] <= 256]
+        else:
+            pair_shapes = PAIR_SHAPES
 
         for name, B, Lq, Ld, d in pair_shapes:
             print(f"== {name:25s}  B={B} Lq={Lq} Ld={Ld} d={d}  (pairwise diagonal)")

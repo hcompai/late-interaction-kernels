@@ -54,6 +54,14 @@ def cuda_time(fn, warmup=10, iters=50):
     return statistics.median(times), statistics.stdev(times) if len(times) > 1 else 0.0
 
 
+def _peak_mb(fn) -> float:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    fn()
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated() / 1024**2
+
+
 def bench(name, Nq, Nd, Lq, Ld, d, dtype):
     torch.manual_seed(0)
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
@@ -73,11 +81,14 @@ def bench(name, Nq, Nd, Lq, Ld, d, dtype):
     t_atom, sd_atom = cuda_time(run_two_pass_atomic)
     t_csr, sd_csr = cuda_time(run_two_pass_csr)
     t_uni, sd_uni = cuda_time(run_unified)
+    m_atom = _peak_mb(run_two_pass_atomic)
+    m_csr = _peak_mb(run_two_pass_csr)
+    m_uni = _peak_mb(run_unified)
 
     return {
-        "atomic": {"ms": t_atom, "sd": sd_atom},
-        "csr": {"ms": t_csr, "sd": sd_csr},
-        "unified": {"ms": t_uni, "sd": sd_uni},
+        "atomic": {"ms": t_atom, "sd": sd_atom, "peak_mb": m_atom},
+        "csr": {"ms": t_csr, "sd": sd_csr, "peak_mb": m_csr},
+        "unified": {"ms": t_uni, "sd": sd_uni, "peak_mb": m_uni},
     }
 
 
@@ -85,6 +96,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dtype", choices=["bf16", "fp16"], default="bf16")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -98,9 +115,15 @@ def main():
     print(f"Device: {torch.cuda.get_device_name()}   dtype: {args.dtype}")
     print()
 
-    shapes = SHAPES
-    if args.quick:
-        shapes = [s for s in shapes if s[1] <= 32]
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            sys.exit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    elif args.quick:
+        shapes = [s for s in SHAPES if s[1] <= 32]
+    else:
+        shapes = SHAPES
 
     results = []
     for name, Nq, Nd, Lq, Ld, d in shapes:
@@ -114,11 +137,17 @@ def main():
         base = r["atomic"]["ms"]
         speedup_uni = base / r["unified"]["ms"]
         speedup_csr = base / r["csr"]["ms"]
-        print(f"   atomic   {r['atomic']['ms']:6.2f} ± {r['atomic']['sd']:4.2f}  (baseline)")
-        print(f"   csr      {r['csr']['ms']:6.2f} ± {r['csr']['sd']:4.2f}  {speedup_csr:5.2f}x vs atomic")
+        print(
+            f"   atomic   {r['atomic']['ms']:6.2f} ± {r['atomic']['sd']:4.2f}  "
+            f"peak {r['atomic']['peak_mb']:7.1f} MB  (baseline)"
+        )
+        print(
+            f"   csr      {r['csr']['ms']:6.2f} ± {r['csr']['sd']:4.2f}  "
+            f"peak {r['csr']['peak_mb']:7.1f} MB  {speedup_csr:5.2f}x vs atomic"
+        )
         print(
             f"   unified  {r['unified']['ms']:6.2f} ± {r['unified']['sd']:4.2f}  "
-            f"{speedup_uni:5.2f}x vs atomic"
+            f"peak {r['unified']['peak_mb']:7.1f} MB  {speedup_uni:5.2f}x vs atomic"
         )
         print()
         results.append(
@@ -136,13 +165,17 @@ def main():
 
     md = [f"# Backward: two-pass vs unified — {gpu} ({args.dtype})\n"]
     md.append("50-iter median, CUDA events. Baseline = two-pass atomic.\n")
-    md.append("| shape | atomic (ms) | csr (ms) | unified (ms) | unified speedup |")
-    md.append("| --- | --- | --- | --- | --- |")
+    md.append(
+        "| shape | atomic (ms) | csr (ms) | unified (ms) | unified speedup | "
+        "atomic peak (MB) | csr peak (MB) | unified peak (MB) |"
+    )
+    md.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for r in results:
         md.append(
             f"| {r['name']} Nq={r['shape'][0]} Lq={r['shape'][2]} Ld={r['shape'][3]} d={r['shape'][4]} "
             f"| {r['atomic']['ms']:.2f} | {r['csr']['ms']:.2f} | {r['unified']['ms']:.2f} "
-            f"| **{r['speedup_unified_vs_atomic']:.2f}x** |"
+            f"| **{r['speedup_unified_vs_atomic']:.2f}x** "
+            f"| {r['atomic']['peak_mb']:.1f} | {r['csr']['peak_mb']:.1f} | {r['unified']['peak_mb']:.1f} |"
         )
     with open(out_md, "w") as f:
         f.write("\n".join(md))

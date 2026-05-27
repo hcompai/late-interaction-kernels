@@ -28,7 +28,8 @@ Metrics reported:
 Usage
 -----
     python benchmarks/bench_cached_maxsim.py
-    python benchmarks/bench_cached_maxsim.py --only flash   # skip vanilla when naive OOMs
+    python benchmarks/bench_cached_maxsim.py --variants flash       # skip vanilla when naive OOMs
+    python benchmarks/bench_cached_maxsim.py --only reason-bs64-2k  # one shape only
 """
 
 # ruff: noqa: F821  -- closures capture Q / D_ / d_mask from enclosing run_shape scope
@@ -229,14 +230,14 @@ def run_shape(name, batch, mini, Lq, Ld, variants, iters, warmup):
             fwd_ms = _timed(_fwd, iters=iters, warmup=warmup)
             torch.cuda.reset_peak_memory_stats()
             fwdbwd_ms = _timed(_fwdbwd, iters=iters, warmup=warmup)
-            peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+            peak_mb = torch.cuda.max_memory_allocated() / 1024**2
             row[f"{variant}_fwd"] = fwd_ms
             row[f"{variant}_fwdbwd"] = fwdbwd_ms
-            row[f"{variant}_peak"] = peak_gb
+            row[f"{variant}_peak_mb"] = peak_mb
         except torch.cuda.OutOfMemoryError:
             row[f"{variant}_fwd"] = float("nan")
             row[f"{variant}_fwdbwd"] = float("nan")
-            row[f"{variant}_peak"] = float("nan")
+            row[f"{variant}_peak_mb"] = float("nan")
             row[f"{variant}_err"] = "OOM"
 
         del Q, D_, d_mask
@@ -257,23 +258,37 @@ def main():
     ap.add_argument("--iters", type=int, default=50)
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument(
-        "--only",
+        "--variants",
         choices=["all", "vanilla", "compile", "flash"],
         default="all",
         help="Which baselines to run. `all` runs vanilla pylate + torch.compile + LIK.",
+    )
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
     )
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
 
-    variants = ["vanilla", "compile", "flash"] if args.only == "all" else [args.only]
+    variants = ["vanilla", "compile", "flash"] if args.variants == "all" else [args.variants]
+
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    else:
+        shapes = SHAPES
 
     print(
         f"{'shape':<20} {'tiles':>5} {'v_bwd':>8} {'c_bwd':>8} {'f_bwd':>8}  {'v/f':>6} {'c/f':>6} {'v/c':>6}"
     )
     rows = []
-    for name, batch, mini, Lq, Ld in SHAPES:
+    for name, batch, mini, Lq, Ld in shapes:
         row = run_shape(name, batch, mini, Lq, Ld, variants, iters=args.iters, warmup=args.warmup)
         rows.append(row)
 

@@ -225,3 +225,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code runtime state (consider moving to a user-global gitignore
+# instead — see https://git-scm.com/docs/gitignore#_configuration)
+.claude/scheduled_tasks.lock

@@ -57,6 +57,14 @@ def _bench(fn, warmup=5, iters=30):
     return s.elapsed_time(e) / iters
 
 
+def _peak_mb(fn) -> float:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    fn()
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated() / 1024**2
+
+
 def _make_step(Q, D, *, backward):
     def _step():
         if Q.grad is not None:
@@ -86,6 +94,12 @@ def main():
     p.add_argument(
         "--include-hot", action="store_true", help="add a synthetic hot-bucket shape (worst case for atomics)"
     )
+    p.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES] + ['hot-bucket']}",
+    )
     args = p.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
@@ -94,11 +108,16 @@ def main():
     shapes = list(SHAPES)
     if args.include_hot:
         shapes.append(("hot-bucket", 32, 32, 32, 128, 128))
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in shapes if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES] + ['hot-bucket']}")
 
     print(
         f"{'shape':<12} {'Nq':>4} {'Nd':>4} {'Lq':>4} {'Ld':>5} {'d':>4}   "
         f"{'auto ms':>8} {'unified':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
-        f"{'auto×':>5} {'pick':>8}"
+        f"{'auto MB':>8}  {'auto×':>5} {'pick':>8}"
     )
     for name, Nq, Nd, Lq, Ld, d in shapes:
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16, requires_grad=True)
@@ -122,6 +141,7 @@ def main():
         t_unified = _bench(_make_step(Q, D, backward="unified"), iters=args.iters)
         t_csr = _bench(_make_step(Q, D, backward="csr"), iters=args.iters)
         t_atomic = _bench(_make_step(Q, D, backward="atomic"), iters=args.iters)
+        peak_auto_mb = _peak_mb(_make_step(Q, D, backward="auto"))
 
         try:
             t_naive = _bench(naive, iters=max(5, args.iters // 3))
@@ -132,7 +152,7 @@ def main():
         print(
             f"{name:<12} {Nq:>4} {Nd:>4} {Lq:>4} {Ld:>5} {d:>4}   "
             f"{t_auto:>8.2f} {t_unified:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
-            f"{auto_sp:>5.2f} {pick:>8}"
+            f"{peak_auto_mb:>8.1f}  {auto_sp:>5.2f} {pick:>8}"
         )
         rows.append(
             {
@@ -147,6 +167,7 @@ def main():
                 "csr_ms": t_csr,
                 "atomic_ms": t_atomic,
                 "naive_ms": t_naive,
+                "auto_peak_mb": peak_auto_mb,
                 "csr_vs_atomic": t_atomic / t_csr if t_csr else None,
                 "unified_vs_csr": t_csr / t_unified if t_unified else None,
                 "auto_pick": pick,

@@ -20,8 +20,6 @@ Requires: ``pip install pylate datasets`` (see ``.[dev,pylate]`` extra).
 # ruff: noqa: F821  -- ruff loses ``loss_fn`` / ``optim`` across the trailing
 # ``del`` in ``run_realdata`` and false-positives on the ``step`` closure.
 
-from __future__ import annotations
-
 import argparse
 import gc
 import importlib.util
@@ -173,9 +171,9 @@ def run_realdata(
     is_flash = active_cbs is _flash_fn and _contrastive_mod.colbert_scores is _flash_fn
     _log(f"    [{variant}] patch active={is_flash}")
     if variant == "flash" and not is_flash:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch not active")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch not active")
     if variant == "vanilla" and is_flash:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch leaked")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch leaked")
 
     try:
         model = models.ColBERT(
@@ -184,7 +182,7 @@ def run_realdata(
             query_length=Lq,
         ).to(device)
     except Exception as e:  # noqa: BLE001
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"model load: {e}")
 
     if grad_checkpoint:
         try:
@@ -193,7 +191,7 @@ def run_realdata(
             if hasattr(transformer.config, "use_cache"):
                 transformer.config.use_cache = False
         except Exception as e:  # noqa: BLE001
-            return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"grad ckpt: {e}")
+            return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"grad ckpt: {e}")
 
     if recipe == "reason":
         loss_fn = losses.CachedContrastive(
@@ -209,7 +207,7 @@ def run_realdata(
     if batch_size > len(rows):
         return Measurement(
             step_ms=float("nan"),
-            peak_gb=float("nan"),
+            peak_mb=float("nan"),
             err=f"batch_size={batch_size} > dataset={len(rows)}",
         )
 
@@ -222,7 +220,7 @@ def run_realdata(
     for start in range(0, len(rows) - batch_size + 1, batch_size):
         windows.append(rows[start : start + batch_size])
     if not windows:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="no windows")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="no windows")
 
     step_idx = 0
 
@@ -240,13 +238,13 @@ def run_realdata(
     try:
         step_ms = _timed_step(step, iters=steps, warmup=warmup)
     except torch.cuda.OutOfMemoryError:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="OOM")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="OOM")
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+    peak_mb = torch.cuda.max_memory_allocated() / 1024**2
     del model, loss_fn, optim
     gc.collect()
     torch.cuda.empty_cache()
-    return Measurement(step_ms=step_ms, peak_gb=peak_gb)
+    return Measurement(step_ms=step_ms, peak_mb=peak_mb)
 
 
 def main():
@@ -265,7 +263,7 @@ def main():
     ap.add_argument("--recipe", choices=["contrastive", "reason"], default="contrastive")
     ap.add_argument("--mini-batch-size", type=int, default=16)
     ap.add_argument("--grad-checkpoint", action="store_true")
-    ap.add_argument("--only", choices=["both", "vanilla", "flash"], default="both")
+    ap.add_argument("--variants", choices=["both", "vanilla", "flash"], default="both")
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -282,7 +280,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "flash"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "flash"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_realdata(
@@ -303,7 +301,7 @@ def main():
         if m.err:
             _log(f"  {v:>8}: FAILED ({m.err})")
         else:
-            _log(f"  {v:>8}: {m.step_ms:8.2f} ms/step   peak {m.peak_gb:5.2f} GB")
+            _log(f"  {v:>8}: {m.step_ms:8.2f} ms/step   peak {m.peak_mb / 1024:5.2f} GB")
 
     if "vanilla" in results and "flash" in results:
         vr, fr = results["vanilla"], results["flash"]
@@ -313,7 +311,8 @@ def main():
                 f"  speedup:    {vr.step_ms / fr.step_ms:.2f}x  ({vr.step_ms:.2f} -> {fr.step_ms:.2f} ms/step)"
             )
             _log(
-                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  ({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
+                f"  mem delta:  {(vr.peak_mb - fr.peak_mb) / 1024:+.2f} GB  "
+                f"({vr.peak_mb / 1024:.2f} -> {fr.peak_mb / 1024:.2f} GB)"
             )
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -329,7 +328,7 @@ def main():
                 "n_triplets": len(rows),
                 "time_s": time.time(),
                 "results": {
-                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err} for k, v in results.items()
+                    k: {"step_ms": v.step_ms, "peak_mb": v.peak_mb, "err": v.err} for k, v in results.items()
                 },
             },
             f,

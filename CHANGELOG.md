@@ -4,53 +4,91 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-05-27
 
-### Known regressions in 0.3.0 (to investigate for 0.3.1)
+### Added
 
-The 0.3.0 H100 sweep (NGC 25.06 / torch 2.8 / triton 3.x) surfaced a
-small set of shape-specific perf regressions vs the 0.2.0 baseline.
-None are correctness issues — every parity assertion in
-`docs/benchmarks.md` still holds — and the wider story is a net
-improvement (`visual` ColPali +23 %, `text-medium` +35 %,
-cached-contrastive vs `torch.compile` 6.7-8.5× → 15-21×). The shapes
-below regressed and are queued for 0.3.1:
-
-- `bench_forward` `text-long` (Nq=1, Nd=1k, Lq=32, Ld=1024):
-  LIK 0.093 ms → 0.121 ms (+30 %). Plausibly an autotune winner that
-  the tighter `prune_forward` SRAM model (#73) now rejects on
-  consumer Ampere too — needs an explicit per-config check on H100.
-- `bench_inference_edge` `LateOn-Code-edge Nd=1k Ld=1024 d=48`:
-  0.072 ms → 0.114 ms (+58 %). Same autotune-shortlist suspicion;
-  `d=48` is the smallest embedding dim in the bench set.
-- `bench_pylate_realdata` `Contrastive bs=16 Lq=32 Ld=256`:
-  e2e step 52.3 ms → 61.6 ms (+18 %). Vanilla baseline unchanged
-  (66.3 ms → 64.2 ms), so the slowdown is in LIK's path. Save-argmax
-  is on (training), so the small-input bypass (#64) is *not* the
-  cause; first thing to check is whether the new `prune_forward`
-  drops a winning config for this Nq=Nd=16 shape.
+- `benchmarks/README.md` — operator's guide to the directory: per-script
+  one-line summary, CLI conventions (`--only`, `--variants`, `--outdir`,
+  `--dtype`, `--quick`), and how to drive one bench, the whole sweep, or
+  a `RUN_ONLY`-filtered subset on a SkyPilot cluster.
+- Peak VRAM now reported by every benchmark — scripts that previously
+  only timed steps (`bench_normalize`, `bench_fp8`, `bench_compile_cache`,
+  `bench_pylate_training`, `bench_backward_method`, `bench_backward_unified`,
+  `bench_backward_0_5`, `bench_fastplaid_e2e`) now call
+  `torch.cuda.reset_peak_memory_stats()` and record `max_memory_allocated()`
+  per variant in stdout and JSON.
+- `bench_fp8.py` and `bench_fused_head_train.py` now write `--outdir`
+  JSON + Markdown sidecars alongside the existing stdout table, matching
+  the rest of the benches in the directory. `sky_run_all_benchmarks.yaml`
+  passes `--outdir "$OUT"` to both.
 
 ### Changed
 
-- Headline benchmark ranges in `README.md` refreshed to match the
-  0.3.0 sweep in `docs/benchmarks.md`. See the per-table notes there.
-
-## [0.3.0] - 2026-05-26
+- **Benchmark CLI is now uniform.** Every script with a hard-coded shape
+  list accepts `--only NAME [NAME ...]` to run a subset (added to 14
+  benches; the legacy `--shape` / `--shapes` flags in `bench_flash_maxsim`,
+  `bench_mps`, `bench_inference_edge` are renamed to `--only` for the same
+  reason).
+- **Variant selection is now `--variants`.** Renamed from `--only` in
+  `bench_cached_maxsim`, `bench_pylate_lateon`, `bench_pylate_realdata`,
+  `bench_colpali_training`, `bench_colpali_realdata` so `--only` is
+  unambiguously about the experiment subset.
+- `scripts/sky_run_all_benchmarks.yaml` accepts a `RUN_ONLY` env (space-
+  separated bench tags) to run a subset. Same pattern as
+  `sky_colpali_benchmark.yaml`; replaces the standalone
+  `sky_bench_verify.yaml` smoke script.
+- **SkyPilot bench yamls consolidated and renamed.** Four user-facing
+  files now cover every operator-launched bench run:
+  - `sky_benchmark_smoke_test.yaml` (was `sky_run_benchmarks.yaml`) —
+    two-bench smoke check on a fresh CUDA host.
+  - `sky_run_all_benchmarks.yaml` — every headline table; `RUN_ONLY`
+    picks a subset.
+  - `sky_pylate_benchmark.yaml` (new) — folds the previous
+    `sky_lateon_edge.yaml`, `sky_pylate_realdata.yaml`, and
+    `sky_pylate_realdata_long.yaml` behind a `RUN_ONLY` env. Tags:
+    `lateon_contrastive`, `lateon_cached`, `realdata_contrastive`,
+    `realdata_reason`, `realdata_long_2k`, `realdata_long_4k`.
+  - `sky_colpali_benchmark.yaml` (was `sky_colpali_training.yaml`) —
+    ColQwen2 synthetic + real DocVQA; `RUN_ONLY` tags unchanged.
+- Headline benchmark ranges in `README.md` refreshed to match the 0.3.0
+  sweep in `docs/benchmarks.md`. See the per-table notes there.
+- **MPS range moved.** Apple M4 fp16 re-run on this PR's HEAD shows
+  `metal vs eager` **1.7–2.7×** (down from 1.9–3.2× in 0.2.0) and
+  `metal vs compile` **2.0–11.3×** (up from 1.1–2.0× in 0.2.0). The
+  metal kernel itself is unchanged; the eager and compile baselines
+  both moved. Eager got faster on M4 (compressing the metal-vs-eager
+  gap on short shapes); `torch.compile` on MPS regressed sharply on
+  long-Ld inputs (the `compile vs eager` cell on `edge-d48` is now
+  0.24× — compile is 4× *slower* than eager — opening the
+  metal-vs-compile gap to 11.3×). Captured in `docs/benchmarks.md`
+  Apple Silicon section.
+- **JSON peak-VRAM keys standardized.** Multi-variant rows now use
+  `<variant>_peak_mb` consistently (was a mix of `peak_gb`, `_peak`,
+  `mem_*_MB` across benches). Breaking for anyone parsing
+  `benchmarks/results/*.json` directly. Affected files:
+  `bench_pylate_lateon`, `bench_pylate_realdata`,
+  `bench_colpali_training`, `bench_colpali_realdata`,
+  `bench_cached_maxsim`, `bench_fastplaid`, `bench_lateon`. Stdout
+  still prints GB at training scale for readability.
+- Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
+  `_mask_as_bool`) and `mps.is_mps_tensor` (exported but unreferenced).
+- `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
+  `Q.contiguous()` directly; the previous `ensure_contiguous_last(Q).contiguous()`
+  pattern was a no-op pair.
 
 ### Removed
 
-- [breaking] **Experimental kernels.** The `late_interaction_kernels.experimental`
-  package and its three research variants (`soft_maxsim`, `smooth_maxsim`,
-  `maxsim_matryoshka`) are gone, along with `reference.maxsim_reference_soft`
-  and the matching `tests/test_{soft,smooth,matryoshka}.py` plus the two
-  soft-maxsim cases in `tests/test_robustness.py`. None of them shipped to
-  PyLate, colpali_engine, FastPlaid, or NextPlaid; folding research kernels
-  into prod was the same mistake as `maxsim_xtr` in 0.2.0. Users on a
-  research path can vendor the kernel source from the pre-0.3.0 git
-  history.
+- [breaking] **Experimental kernels.** `late_interaction_kernels.experimental`
+  and its three research variants (`soft_maxsim`, `smooth_maxsim`,
+  `maxsim_matryoshka`) are gone, along with `reference.maxsim_reference_soft`,
+  `tests/test_{soft,smooth,matryoshka}.py`, and the two soft-maxsim cases
+  in `tests/test_robustness.py`. None of them shipped to PyLate,
+  colpali_engine, FastPlaid, or NextPlaid; folding research kernels into
+  prod was the same mistake as `maxsim_xtr` in 0.2.0. Users on a research
+  path can vendor the kernel source from the pre-0.3.0 git history.
 - [breaking] **Deprecated `*_inference` shims and `maxsim_from_hidden_train`.**
-  The four shims marked `DeprecationWarning` in 0.2.0 ("will be removed in
-  the next breaking release") are removed:
+  The four `DeprecationWarning` shims from 0.2.0 are removed:
   - `late_interaction_kernels.maxsim_inference` → `maxsim(...)`
   - `late_interaction_kernels.fused_head.maxsim_from_hidden_train` →
     `maxsim_from_hidden(...)`
@@ -61,31 +99,62 @@ below regressed and are queued for 0.3.1:
 
   Each surviving function already auto-skips the saved argmax buffer
   when no input has `requires_grad=True`, so behaviour is unchanged.
-- [breaking] **`set_backward_method` / `get_backward_method`** removed.
-  They were deprecated in 0.2.0 and carried no expressivity over the
-  per-call `backward=` kwarg on `maxsim(...)` / `MaxSimScorer(...)`.
-  Migration: replace `set_backward_method("csr")` with
-  `maxsim(..., backward="csr")` (or `MaxSimScorer(backward="csr")`).
-  `maxsim()`'s `backward=None` now resolves directly to `"auto"`
-  instead of reading a module-level global.
-- [breaking] `reference.xtr_reference` and its three CPU-only tests
-  in `tests/test_reference_cpu.py`. The XTR Triton kernel was already
-  deleted in 0.2.0; the orphaned PyTorch helper is now gone too.
-
-### Changed
-
-- Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
-  `_mask_as_bool`) and `mps.is_mps_tensor` (exported but unreferenced).
-- `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
-  `Q.contiguous()` directly; the previous `ensure_contiguous_last(Q).contiguous()`
-  pattern was a no-op pair (the unconditional `.contiguous()` already
-  covered every stride layout).
+- [breaking] **`set_backward_method` / `get_backward_method`** removed
+  (deprecated in 0.2.0). Migration: replace `set_backward_method("csr")`
+  with `maxsim(..., backward="csr")` (or `MaxSimScorer(backward="csr")`).
+  `maxsim()`'s `backward=None` now resolves directly to `"auto"` instead
+  of reading a module-level global.
+- [breaking] `reference.xtr_reference` and its three CPU-only tests in
+  `tests/test_reference_cpu.py` — the XTR Triton kernel was already
+  deleted in 0.2.0.
+- Dropped the `synth bs=16, 1024px` rows from the ColPali e2e bench in
+  `docs/benchmarks.md` and the matching `synth-colbert-bs16-1024[-ckpt]`
+  blocks in `scripts/sky_colpali_benchmark.yaml` (renamed from
+  `sky_colpali_training.yaml` — see Changed). Both rows were 1.00×
+  (encoder-bound) and added nothing the 448px rows didn't already cover.
+- `scripts/sky_bench_verify.yaml`. The smoke-test path is now
+  `sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" scripts/sky_run_all_benchmarks.yaml`.
+- `scripts/sky_lateon_edge.yaml`, `scripts/sky_pylate_realdata.yaml`,
+  and `scripts/sky_pylate_realdata_long.yaml` — folded into
+  `scripts/sky_pylate_benchmark.yaml` (see entry above).
 
 ### Fixed
 
 - `docs/benchmarks.md` Apple Silicon section now points at
   `late_interaction_kernels.mps.metal.maxsim_inference_metal` (the
   module was relocated under `mps/` in 0.2.0).
+
+### Known regressions (queued for 0.3.1)
+
+The 0.3.0 H100 sweep (NGC 25.06 / torch 2.8 / triton 3.x) surfaced a
+small set of shape-specific perf regressions vs the 0.2.0 baseline.
+None are correctness issues — every parity assertion in
+`docs/benchmarks.md` still holds — and the wider story is a net
+improvement (`visual` ColPali +23 %, `text-medium` +35 %,
+cached-contrastive vs `torch.compile` 6.7–8.5× → 15–21×). The shapes
+below regressed:
+
+- `bench_forward` `text-long` (Nq=1, Nd=1k, Lq=32, Ld=1024): LIK
+  0.093 ms → 0.121 ms (+30 %). Plausibly an autotune winner the tighter
+  `prune_forward` SRAM model (#73) now rejects on consumer Ampere too —
+  needs an explicit per-config check on H100.
+- `bench_inference_edge` `LateOn-Code-edge Nd=1k Ld=1024 d=48`:
+  0.072 ms → 0.114 ms (+58 %). Same autotune-shortlist suspicion;
+  `d=48` is the smallest embedding dim in the bench set.
+- `bench_pylate_realdata` `Contrastive bs=16 Lq=32 Ld=256`: e2e step
+  52.3 ms → 61.6 ms (+18 %). Vanilla baseline unchanged (66.3 ms →
+  64.2 ms), so the slowdown is in LIK's path. Save-argmax is on
+  (training), so the small-input bypass (#64) is *not* the cause; first
+  thing to check is whether the new `prune_forward` drops a winning
+  config for this Nq=Nd=16 shape.
+- `bench_pylate_realdata` `CachedContrastive bs=64 mini=16 Lq=32 Ld=300
+  grad-ckpt`: e2e step 305.5 ms (0.3.0 release sweep) → 318.5 ms
+  (re-measured this PR), vs vanilla 351.1 → 317.2 ms. Net effect: the
+  former 1.15× win at this shape collapsed to 1.00×. Both vanilla and
+  LIK got faster on the encoder side, but LIK lost more on the MaxSim
+  slice — likely a chunked-call autotune miss against the new
+  `prune_forward`. Highest-priority of the four since it was a
+  headline-table win.
 
 ## [0.2.0] - 2026-05-22
 

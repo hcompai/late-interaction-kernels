@@ -65,10 +65,25 @@ Results land in `benchmarks/results/*.{json,md}`.
 ## On a SkyPilot cluster
 
 ```bash
-sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y   # every table on this page in one shot (1×H100, ~25 min)
-sky launch -c lik-bench scripts/sky_bench_verify.yaml -y   # forward + cached + fused head + fp8 (the README numbers)
-sky jobs launch scripts/sky_test.yaml             # CI-style: tests + bench_forward + bench_backward
-sky jobs launch scripts/sky_lateon_edge.yaml      # LateOn-Code-edge end-to-end
+# Every table on this page in one shot (1×H100, ~25 min):
+sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y
+
+# Subsets of the full sweep via RUN_ONLY (tags: forward, inference_edge,
+# normalize, backward_method, lateon, cached_maxsim, flash_maxsim, fp8,
+# fused_head_train, pylate_training, pylate_lateon, decompress_maxsim,
+# fastplaid_e2e, pylate_realdata):
+sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y \
+    --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"
+
+# Per-stack deep-dives (each with its own RUN_ONLY tag set):
+sky launch -c lik-pylate  scripts/sky_pylate_benchmark.yaml  -y  # all e2e pylate shapes
+sky launch -c lik-colpali scripts/sky_colpali_benchmark.yaml -y  # ColQwen2 synth + real DocVQA
+
+# Two-bench smoke test (just bench_forward + bench_backward_method):
+sky jobs launch scripts/sky_benchmark_smoke_test.yaml
+
+# PLAID-specific benches (kept separate; will likely be folded into a
+# sky_plaid_benchmark.yaml in a follow-up):
 sky jobs launch scripts/sky_decompress_bench.yaml # PLAID decompress + MaxSim
 sky jobs launch scripts/sky_fastplaid_e2e.yaml    # vs `fast_plaid.engine.search()`
 ```
@@ -102,25 +117,30 @@ CUDA events):
 
 | shape                                                   | LIK      | eager (fp32 acc) | `torch.compile` (fp32 acc) | LIK vs eager | LIK vs compile | naive scratch |
 | ------------------------------------------------------- | -------- | ---------------- | -------------------------- | ------------ | -------------- | ------------- |
-| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.104 ms | 0.261 ms         | 0.272 ms                   | 2.5×         | 2.6×           | 183 MB → 0    |
-| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.121 ms | 0.791 ms         | 0.878 ms                   | **6.5×**     | **7.3×**       | 626 MB → 0    |
-| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.107 ms | 1.538 ms         | 1.602 ms                   | **14.4×**    | **15.0×**      | 1.0 GB → 0    |
-| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.731 ms | 9.356 ms         | 9.172 ms                   | **12.8×**    | **12.5×**      | 4.5 GB → 0    |
-| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.128 ms | 1.189 ms         | 1.190 ms                   | 9.3×         | 9.3×           | 916 MB → 0    |
-| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.349 ms         | 2.351 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
-| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.103 ms | 0.125 ms         | 0.169 ms                   | 1.2×         | 1.6×           | 43 MB → 0     |
-| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.549 ms         | 1.539 ms                   | **6.9×**     | **6.8×**       | 621 MB → 0    |
-| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.106 ms | 0.829 ms         | 0.830 ms                   | 7.8×         | 7.8×           | 623 MB → 0    |
-| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.820 ms         | 0.821 ms                   | 7.3×         | 7.3×           | 604 MB → 0    |
-| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.099 ms | 0.766 ms         | 0.767 ms                   | **7.7×**     | **7.7×**       | 626 MB → 0    |
-| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.277 ms | 2.957 ms         | 2.959 ms                   | **10.7×**    | **10.7×**      | 2.5 GB → 0    |
-| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.102 ms | 0.167 ms         | 0.169 ms                   | 1.6×         | 1.7×           | 110 MB → 0    |
-| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.397 ms         | 1.397 ms                   | **10.7×**    | **10.7×**      | 1.1 GB → 0    |
+| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.105 ms | 0.262 ms         | 0.273 ms                   | 2.5×         | 2.6×           | 183 MB → 0    |
+| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.106 ms | 0.793 ms         | 0.880 ms                   | **7.5×**     | **8.3×**       | 626 MB → 0    |
+| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.103 ms | 1.538 ms         | 1.604 ms                   | **14.9×**    | **15.5×**      | 1.0 GB → 0    |
+| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.738 ms | 9.354 ms         | 9.178 ms                   | **12.7×**    | **12.4×**      | 4.5 GB → 0    |
+| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.136 ms | 1.190 ms         | 1.192 ms                   | 8.7×         | 8.8×           | 916 MB → 0    |
+| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.351 ms         | 2.354 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
+| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.125 ms | 0.126 ms         | 0.172 ms                   | 1.0×         | 1.4×           | 43 MB → 0     |
+| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.540 ms         | 1.541 ms                   | **6.8×**     | **6.8×**       | 621 MB → 0    |
+| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.109 ms | 0.840 ms         | 0.841 ms                   | 7.7×         | 7.7×           | 623 MB → 0    |
+| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.805 ms         | 0.806 ms                   | 7.2×         | 7.2×           | 604 MB → 0    |
+| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.099 ms | 0.768 ms         | 0.768 ms                   | **7.8×**     | **7.8×**       | 626 MB → 0    |
+| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.260 ms | 2.961 ms         | 2.959 ms                   | **11.4×**    | **11.4×**      | 2.5 GB → 0    |
+| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.099 ms | 0.168 ms         | 0.171 ms                   | 1.7×         | 1.7×           | 110 MB → 0    |
+| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.398 ms         | 1.400 ms                   | **10.8×**    | **10.8×**      | 1.1 GB → 0    |
 
 
 On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-15×; the
 HBM round-trip on the similarity tile dominates. On tiny shapes the
 kernel-launch + autotune overhead caps the win at ~1.5-2.5×.
+
+The `naive scratch` column shows naive peak → LIK peak; LIK never
+materialises the `[Nq · Nd · Lq · Ld]` similarity tile, so its peak
+working set is bounded by the output and ranges from a few KB to
+~64 KB across the table — effectively zero next to the naive scratch.
 
 
 ### vs `flash-maxsim` (same Triton MaxSim math)
@@ -135,23 +155,25 @@ plain forward only.
 
 | shape                                             | ours  | flash-maxsim | speedup |
 | ------------------------------------------------- | ----- | ------------ | ------- |
-| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.136 | 0.135        | 0.99×   |
-| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.191 | 0.194        | 1.02×   |
-| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.253 | 0.299        | 1.18×   |
-| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.473 | 0.571        | 1.21×   |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.349 | 0.354        | 1.01×   |
-| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.129 | 0.132        | 1.02×   |
+| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.138 | 0.132        | 0.96×   |
+| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.191 | 0.189        | 0.99×   |
+| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.252 | 0.296        | 1.17×   |
+| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.481 | 0.567        | 1.18×   |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.348 | 0.353        | 1.01×   |
+| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.127 | 0.127        | 1.00×   |
 | `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.297 | 0.322        | 1.08×   |
-| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.114 | 0.111        | 0.97×   |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.359 | 0.368        | 1.02×   |
-| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.227 | 0.230        | 1.01×   |
+| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.114 | 0.108        | 0.95×   |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.358 | 0.369        | 1.03×   |
+| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.231 | 0.229        | 0.99×   |
 
 
 The two kernels are within ±3% on tight rerank / short-context shapes
 and LIK pulls ahead by 1.08–1.21× on the wide ones (`rerank-very-long`,
 `rerank-colpali`, `train-in-batch-128`); on `rerank-short` and
 `train-long-doc` both are saturated by L2-normalized HBM traffic and
-LIK loses by a fraction of a percent. The real differentiators are
+LIK loses by a fraction of a percent. Both kernels are fused (neither
+materialises the score tile), so peak working set is sub-100 KB on
+every shape and there's no memory column to compare. The real differentiators are
 elsewhere: a fused `normalize=True` (no extra HBM round-trip), a real
 autograd-aware backward (`unified` / `csr` / `atomic`), packed/varlen,
 PLAID residual decompression, and a fused D-side projection head —
@@ -166,14 +188,19 @@ The fused path normalizes in SRAM, eliminating two HBM round-trips, and
 the backward correctly applies the L2-norm Jacobian.
 
 
-| shape                                  | `F.normalize` + maxsim | fused    | speedup   |
-| -------------------------------------- | ---------------------- | -------- | --------- |
-| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.464 ms               | 0.109 ms | 4.3×      |
-| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.467 ms               | 0.122 ms | **12.0×** |
-| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.288 ms               | 0.106 ms | 2.7×      |
-| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.234 ms               | 0.080 ms | 2.9×      |
-| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.289 ms               | 0.127 ms | 2.3×      |
-| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.283 ms | **14.8×** |
+| shape                                  | `F.normalize` + maxsim | fused    | speedup   | explicit peak | fused peak | mem ratio |
+| -------------------------------------- | ---------------------- | -------- | --------- | ------------- | ---------- | --------- |
+| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.463 ms               | 0.099 ms | 4.7×      |   368 MB      |   74 MB    | **5.0×**  |
+| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.465 ms               | 0.104 ms | **14.1×** |  1254 MB      |  250 MB    | **5.0×**  |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.272 ms               | 0.102 ms | 2.7×      |    12 MB      |    3 MB    | **4.8×**  |
+| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.248 ms               | 0.090 ms | 2.8×      |    40 MB      |    8 MB    | **5.0×**  |
+| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.283 ms               | 0.132 ms | 2.1×      |   161 MB      |   32 MB    | **5.0×**  |
+| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.285 ms | **14.7×** |  3674 MB      |  733 MB    | **5.0×**  |
+
+The explicit path writes a normalized copy of `D` to HBM and re-reads
+it during the matmul; the fused path streams the same data through
+threadgroup memory and never writes the intermediate, so peak working
+set drops by a steady ~5× across the whole sweep.
 
 
 ## PLAID / ColBERTv2
@@ -197,13 +224,13 @@ We report two LIK variants:
   fast-plaid currently does in Rust and we don't.
 
 
-| corpus shape (nbits)    | `engine.search()` | `lik_full + top-k` | `lik_partial + top-k` | full speedup | partial speedup |
-| ----------------------- | ----------------- | ------------------ | --------------------- | ------------ | --------------- |
-| 5 000 docs × 200, nb=2  | 22.95 ms          | 1.48 ms            | 1.25 ms               | **15.5×**    | **18.3×**       |
-| 10 000 docs × 300, nb=2 | 45.69 ms          | 3.82 ms            | 1.74 ms               | **12.0×**    | **26.3×**       |
-| 10 000 docs × 512, nb=2 | 77.15 ms          | 5.59 ms            | 2.50 ms               | **13.8×**    | **30.9×**       |
-| 10 000 docs × 512, nb=4 | 129.59 ms         | 6.02 ms            | 2.75 ms               | **21.5×**    | **47.1×**       |
-| 25 000 docs × 300, nb=2 | 73.36 ms          | 9.35 ms            | 1.72 ms               | **7.8×**     | **42.6×**       |
+| corpus shape (nbits)    | `engine.search()` | `lik_full + top-k` | `lik_partial + top-k` | full speedup | partial speedup | lik_full peak | lik_partial peak |
+| ----------------------- | ----------------- | ------------------ | --------------------- | ------------ | --------------- | ------------- | ---------------- |
+| 5 000 docs × 200, nb=2  | 23.50 ms          | 1.48 ms            | 1.28 ms               | **15.9×**    | **18.3×**       |   72 MB       |   95 MB          |
+| 10 000 docs × 300, nb=2 | 47.27 ms          | 3.78 ms            | 1.73 ms               | **12.5×**    | **27.3×**       |  145 MB       |  180 MB          |
+| 10 000 docs × 512, nb=2 | 79.73 ms          | 5.61 ms            | 2.49 ms               | **14.2×**    | **32.0×**       |  217 MB       |  277 MB          |
+| 10 000 docs × 512, nb=4 | 138.43 ms         | 6.04 ms            | 2.71 ms               | **22.9×**    | **51.0×**       |  334 MB       |  442 MB          |
+| 25 000 docs × 300, nb=2 | 77.24 ms          | 9.25 ms            | 1.71 ms               | **8.3×**     | **45.1×**       |  306 MB       |  341 MB          |
 
 
 Reading: even with the top-k argmax folded into the LIK side, the
@@ -227,15 +254,15 @@ Both columns use the same LIK MaxSim — the only difference is whether
 the projection / normalize step is folded in:
 
 
-| shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   |
-| ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- |
-| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.95 ms                                       |  1.02 ms | 0.93×     |
-| LateOn `Nd=32, Lq=32, Ld=1024`                         |  1.21 ms                                       |  1.05 ms | 1.15×     |
-| LateOn-Code `Nd=128, Ld=1024`                          |  1.50 ms                                       |  1.01 ms | 1.49×     |
-| LateOn-Code `Nd=256, Ld=1024`                          |  2.27 ms                                       |  1.21 ms | **1.88×** |
-| LateOn-Code `Nd=512, Ld=2048`                          |  7.40 ms                                       |  1.74 ms | **4.27×** |
-| LateOn-Code `Nd=1024, Ld=2048`                         | 14.09 ms                                       |  3.14 ms | **4.49×** |
-| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.24 ms                                       |  1.31 ms | **4.01×** |
+| shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   | unfused peak | fused peak |
+| ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- | ------------ | ---------- |
+| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.93 ms                                       |  0.98 ms | 0.95×     |    84 MB     |   86 MB    |
+| LateOn `Nd=32, Lq=32, Ld=1024`                         |  0.93 ms                                       |  0.99 ms | 0.94×     |   201 MB     |  189 MB    |
+| LateOn-Code `Nd=128, Ld=1024`                          |  1.47 ms                                       |  1.04 ms | 1.42×     |   608 MB     |  505 MB    |
+| LateOn-Code `Nd=256, Ld=1024`                          |  2.34 ms                                       |  1.09 ms | **2.15×** |  1028 MB     |  889 MB    |
+| LateOn-Code `Nd=512, Ld=2048`                          |  7.31 ms                                       |  1.71 ms | **4.28×** |  3524 MB     | 3193 MB    |
+| LateOn-Code `Nd=1024, Ld=2048`                         | 14.08 ms                                       |  3.15 ms | **4.47×** |  6852 MB     | 6321 MB    |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.23 ms                                       |  1.33 ms | **3.93×** |  1988 MB     | 1631 MB    |
 
 
 The win grows with `Nd · Ld` (more positions for the fused linear to
@@ -257,13 +284,13 @@ H100 80 GB SXM, NGC 25.06, `bench_fp8.py`:
 
 | shape                                       | bf16     | fp8      | speedup   | label              |
 | ------------------------------------------- | -------- | -------- | --------- | ------------------ |
-| `Nd=1k, Lq=32, Ld=128, d=128`               | 0.125 ms | 0.130 ms | 0.96×     | pylate-rerank-1k   |
-| `Nd=4k, Lq=32, Ld=128, d=128`               | 0.152 ms | 0.158 ms | 0.96×     | pylate-rerank-4k   |
-| `Nd=8k, Lq=32, Ld=256, d=128`               | 0.279 ms | 0.237 ms | 1.18×     | colbert-rerank-8k  |
-| `Nd=4k, Lq=32, Ld=256, d=128`               | 0.448 ms | 0.348 ms | **1.29×** | batched-rerank-16k |
-| `Nd=2k, Lq=32, Ld=512, d=128`               | 0.198 ms | 0.176 ms | 1.12×     | long-docs-2k       |
-| `Nd=1k, Lq=32, Ld=128, d=96`                | 0.123 ms | 0.139 ms | 0.89×     | lateon-edge-1k     |
-| `Nd=4k, Lq=32, Ld=128, d=96`                | 0.149 ms | 0.152 ms | 0.98×     | lateon-edge-4k     |
+| `Nd=1k, Lq=32, Ld=128, d=128`               | 0.124 ms | 0.133 ms | 0.94×     | pylate-rerank-1k   |
+| `Nd=4k, Lq=32, Ld=128, d=128`               | 0.154 ms | 0.158 ms | 0.98×     | pylate-rerank-4k   |
+| `Nd=8k, Lq=32, Ld=256, d=128`               | 0.278 ms | 0.234 ms | 1.19×     | colbert-rerank-8k  |
+| `Nd=4k, Lq=32, Ld=256, d=128`               | 0.442 ms | 0.346 ms | **1.28×** | batched-rerank-16k |
+| `Nd=2k, Lq=32, Ld=512, d=128`               | 0.194 ms | 0.173 ms | 1.13×     | long-docs-2k       |
+| `Nd=1k, Lq=32, Ld=128, d=96`                | 0.123 ms | 0.137 ms | 0.90×     | lateon-edge-1k     |
+| `Nd=4k, Lq=32, Ld=128, d=96`                | 0.148 ms | 0.155 ms | 0.96×     | lateon-edge-4k     |
 
 
 On rerank-sized shapes the bf16 kernel got fast enough in 0.3.0 that
@@ -274,18 +301,26 @@ behind — kernel-launch and the e4m3 packing pay back only once
 bf16 stays inside 5e-3 absolute on every shape we tested — fine for
 top-k retrieval where ordering, not exact scores, is what matters.
 
+Peak working set is identical between the two columns (same Q/D
+tensors live in HBM either way; both kernels are fused so neither
+allocates score-tile scratch). The memory win of fp8 is upstream of
+this bench — if the index is *stored* fp8 (PyLate's PLAID index can
+ship that way), `D` itself is 2× smaller in HBM and the corpus
+fits in half the RAM.
+
 ## End-to-end LateOn-Code-edge training (17 M encoder)
 
 `losses.Contrastive`, in-batch negatives, bf16, grad-checkpointing,
-1×H100. Reproduce with `scripts/sky_lateon_edge.yaml`.
+1×H100. Reproduce with
+`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="lateon_contrastive lateon_cached"`.
 
 
 | setup                  | vanilla  | fused    | speedup   | peak (v → f)   |
 | ---------------------- | -------- | -------- | --------- | -------------- |
-| bs=256, Lq=32, Ld=256  | 115.1 ms |  90.3 ms | **1.27×** | 11.5 → 9.6 GB  |
-| bs=192, Lq=32, Ld=512  | 153.1 ms | 126.2 ms | **1.21×** | 16.6 → 14.7 GB |
-| bs=128, Lq=32, Ld=1024 | 229.9 ms | 205.5 ms | **1.12×** | 22.6 → 21.4 GB |
-| bs=64, Lq=32, Ld=2048  | 324.3 ms | 313.6 ms | 1.03×     | 25.8 GB        |
+| bs=256, Lq=32, Ld=256  | 116.2 ms |  90.8 ms | **1.28×** | 11.5 → 9.6 GB  |
+| bs=192, Lq=32, Ld=512  | 152.2 ms | 127.9 ms | **1.19×** | 16.6 → 14.7 GB |
+| bs=128, Lq=32, Ld=1024 | 231.7 ms | 208.3 ms | **1.11×** | 22.6 → 21.4 GB |
+| bs=64, Lq=32, Ld=2048  | 322.5 ms | 318.5 ms | 1.01×     | 25.8 GB        |
 
 
 Smaller encoder + bigger effective batch ⇒ bigger MaxSim slice ⇒ bigger
@@ -304,12 +339,12 @@ batches (e.g. `Nd ≥ 256` with `Ld = 128`).
 
 | shape                            | atomic | csr  | unified | auto | auto picks |
 | -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.62   | 0.77 | 0.44    | 0.45 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.60   | 0.77 | 0.54    | 0.55 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 1.80   | 1.18 | 1.63    | 1.18 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.53   | 0.71 | 0.77    | 0.77 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 0.86   | 0.79 | 0.45    | 0.45 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 0.81   | 0.79 | 1.25    | 1.25 | unified    |
+| `train-32` (32 × 32, Ld=128)     | 0.60   | 0.78 | 0.46    | 0.50 | unified    |
+| `train-128` (128 × 128, Ld=128)  | 0.51   | 0.70 | 0.54    | 0.54 | unified    |
+| `train-256` (256 × 256, Ld=128)  | 1.78   | 1.17 | 1.62    | 1.17 | **csr**    |
+| `retrieval` (16 × 512, Ld=300)   | 0.59   | 0.77 | 0.77    | 0.77 | unified    |
+| `long-Lq` (Lq=1024, Ld=64)       | 0.87   | 0.78 | 0.45    | 0.45 | unified    |
+| `huge-Nd` (16 × 1024, Ld=128)    | 0.81   | 0.78 | 1.25    | 1.25 | unified    |
 
 
 CSR is bitwise-reproducible across runs (no atomics); `atomic` /
@@ -330,9 +365,9 @@ maxsim(Q, D, normalize=True, backward="csr")   # | "atomic" | "unified" | "auto"
 
 | batch × negs | vanilla PyLate | fused   | speedup   |
 | ------------ | -------------- | ------- | --------- |
-| 64 × 1       |  1.18 ms       | 1.14 ms | 1.04×     |
-| 128 × 2      |  4.75 ms       | 1.85 ms | **2.56×** |
-| 256 × 3      | 24.31 ms       | 5.88 ms | **4.13×** |
+| 64 × 1       |  1.36 ms       | 1.16 ms | 1.17×     |
+| 128 × 2      |  4.75 ms       | 1.85 ms | **2.57×** |
+| 256 × 3      | 24.28 ms       | 5.91 ms | **4.11×** |
 
 
 ## LateOn / ModernColBERT (long documents)
@@ -350,13 +385,13 @@ is asserted before timing on every shape that fits in HBM:
 
 | shape                                     | fwd LIK | fwd naive | bwd LIK | bwd naive | peak LIK | peak naive |
 | ----------------------------------------- | ------- | --------- | ------- | --------- | -------- | ---------- |
-| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.09 ms | 0.15 ms   | 0.56 ms | 0.57 ms   |  96 MB   | 152 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.11 ms | 0.21 ms   | 0.45 ms | 0.59 ms   | 128 MB   | 240 MB     |
-| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.13**| 0.65      |**0.52** | 1.82      |**193 MB**|**672 MB**  |
-| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.10 ms | 0.24 ms   | 0.55 ms | 0.77 ms   | 320 MB   | 416 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.12 ms | **OOM**   | 0.51 ms | **OOM**   | 192 MB   | OOM        |
-| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.56 ms | **OOM**   | 321 MB   | OOM        |
-| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.18 ms | **OOM**   | 1.55 ms | **OOM**   |  2.1 GB  | OOM        |
+| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.09 ms | 0.15 ms   | 0.57 ms | 0.56 ms   |  96 MB   | 152 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.09 ms | 0.21 ms   | 0.44 ms | 0.58 ms   | 128 MB   | 240 MB     |
+| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.12**| 0.65      |**0.57** | 1.82      |**193 MB**|**672 MB**  |
+| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.10 ms | 0.24 ms   | 0.58 ms | 0.78 ms   | 320 MB   | 416 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.14 ms | **OOM**   | 0.56 ms | **OOM**   | 192 MB   | OOM        |
+| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.57 ms | **OOM**   | 321 MB   | OOM        |
+| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.19 ms | **OOM**   | 1.56 ms | **OOM**   |  2.1 GB  | OOM        |
 | `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 1.05 ms | **OOM**   | 576 MB   | OOM        |
 
 
@@ -392,15 +427,15 @@ trips on the pending-backward state pylate's loss leaves behind:
 
 | shape                          | tiles | vanilla fwd+bwd | `torch.compile` fwd+bwd | LIK fwd+bwd | LIK vs vanilla | LIK vs compile |
 | ------------------------------ | ----- | --------------- | ----------------------- | ----------- | -------------- | -------------- |
-| `bs=64, Ld=2048`               |   4   |   7.64 ms       |  25.84 ms               |   1.52 ms   | **5.04×**      | **17.03×**     |
-| `bs=64, Ld=4096`               |   4   |  14.69 ms       |  51.52 ms               |   2.66 ms   | **5.52×**      | **19.36×**     |
-| `bs=64, Ld=8192`               |   4   |  31.73 ms       | 101.97 ms               |   4.84 ms   | **6.55×**      | **21.06×**     |
-| `bs=128, Ld=2048`              |  16   |  31.33 ms       | 104.14 ms               |   6.02 ms   | **5.20×**      | **17.30×**     |
-| `bs=128, Ld=4096`              |  16   |  60.25 ms       | 207.90 ms               |  12.01 ms   | **5.02×**      | **17.31×**     |
-| `bs=128, Ld=8192`              |  16   | 130.91 ms       | 412.87 ms               |  22.17 ms   | **5.91×**      | **18.62×**     |
-| `bs=256, Ld=2048`              |  64   | 131.00 ms       | 425.52 ms               |  27.98 ms   | **4.68×**      | **15.21×**     |
-| `bs=256, Ld=4096`              |  64   | 254.03 ms       | 844.74 ms               |  49.99 ms   | **5.08×**      | **16.90×**     |
-| **`bs=256, Ld=8192`** (real recipe) | 64 | **546.51 ms** | **1683.95 ms**       | **93.55 ms**| **5.84×**      | **18.00×**     |
+| `bs=64, Ld=2048`               |   4   |   7.63 ms       |  25.85 ms               |   1.51 ms   | **5.04×**      | **17.07×**     |
+| `bs=64, Ld=4096`               |   4   |  14.68 ms       |  51.54 ms               |   2.66 ms   | **5.52×**      | **19.40×**     |
+| `bs=64, Ld=8192`               |   4   |  31.67 ms       | 101.93 ms               |   4.80 ms   | **6.60×**      | **21.25×**     |
+| `bs=128, Ld=2048`              |  16   |  31.37 ms       | 104.65 ms               |   5.96 ms   | **5.26×**      | **17.56×**     |
+| `bs=128, Ld=4096`              |  16   |  60.18 ms       | 207.61 ms               |  11.76 ms   | **5.12×**      | **17.65×**     |
+| `bs=128, Ld=8192`              |  16   | 130.01 ms       | 408.54 ms               |  21.84 ms   | **5.95×**      | **18.71×**     |
+| `bs=256, Ld=2048`              |  64   | 131.01 ms       | 424.31 ms               |  27.80 ms   | **4.71×**      | **15.26×**     |
+| `bs=256, Ld=4096`              |  64   | 252.46 ms       | 837.62 ms               |  49.87 ms   | **5.06×**      | **16.80×**     |
+| **`bs=256, Ld=8192`** (real recipe) | 64 | **545.10 ms** | **1676.17 ms**       | **93.41 ms**| **5.84×**      | **17.95×**     |
 
 
 LIK is a steady **5-6.5×** over vanilla and **15-21×** over the
@@ -421,25 +456,26 @@ Real `pylate.models.ColBERT("lightonai/LateOn-Code-edge")` (`d=48`,
 loaded through `datasets`. We swap `patch_pylate()` on/off and time
 full optimizer steps (encoder forward + loss + backward + step). The
 kernel is a drop-in — no other code changes between the two columns.
-Reproduce with `scripts/sky_pylate_realdata.yaml` and
-`benchmarks/bench_pylate_realdata.py`.
+Reproduce with
+`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="realdata_contrastive realdata_reason realdata_long_2k realdata_long_4k"`
+(or `benchmarks/bench_pylate_realdata.py` directly).
 
 
 | recipe              | setup                              | vanilla PyLate | + LIK    | speedup   |
 | ------------------- | ---------------------------------- | -------------- | -------- | --------- |
-| `Contrastive`       | bs=16, Lq=32, Ld=256               |  64.2 ms       |  61.6 ms | 1.04×     |
-| `CachedContrastive` | bs=64, mini=16, Ld=300, grad-ckpt  | 351.1 ms       | 305.5 ms | **1.15×** |
-| `CachedContrastive` | bs=128, mini=16, Ld=512, grad-ckpt | 716.4 ms       | 680.0 ms | 1.05×     |
+| `Contrastive`       | bs=16, Lq=32, Ld=256               |  64.3 ms       |  60.9 ms | 1.06×     |
+| `CachedContrastive` | bs=64, mini=16, Ld=300, grad-ckpt  | 317.2 ms       | 318.5 ms | 1.00×     |
+| `CachedContrastive` | bs=128, mini=16, Ld=512, grad-ckpt | 692.9 ms       | 687.5 ms | 1.01×     |
 
 
-Reading: on a 17 M encoder where the transformer forward isn't yet
-swallowing the whole step, LIK moves the wall-clock by **~15 %** at
-`bs=64, Ld=300` where the MaxSim chunked-loss slice still matters.
-At `bs=16, Ld=256` the encoder forward is the entire step and LIK
-buys ~4 %; at `bs=128, Ld=512` the encoder + grad-checkpointing
-dominates again. Same bottleneck story as the LateOn 149 M numbers
-from v0.1.0 (`bench_pylate_lateon.py`), just shifted up the batch
-axis because the encoder is 9× smaller.
+Reading: on a 17 M encoder the transformer forward already swallows
+most of the step, so LIK lands in the 1.00–1.06× band across all three
+shapes. `bs=16, Ld=256` buys ~6 %; the two larger batches sit flat at
+~1×. Same bottleneck story as the LateOn 149 M numbers from v0.1.0
+(`bench_pylate_lateon.py`), just shifted up the batch axis because the
+encoder is 9× smaller. The `bs=64, Ld=300` shape used to be the
+headline win (1.15× in 0.3.0); it regressed to ~1.00× in this sweep
+and is queued for investigation in 0.3.1 (see CHANGELOG).
 
 ## End-to-end ColQwen2 / ColPali training
 
@@ -449,34 +485,31 @@ LoRA-only training (37 M of 2 246 M params trainable — the official
 ColPali recipe via `peft.get_peft_model`), AdamW + bf16 weights. We
 swap `patch_colpali_engine()` on/off and time full optimizer steps
 (vision tower + text encoder forward + ColbertLoss + backward + step).
-Reproduce with `scripts/sky_colpali_training.yaml` and
-`benchmarks/bench_colpali_training.py` (synthetic) /
-`bench_colpali_realdata.py` (real `vidore/docvqa_test_subsampled`).
+Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
+`benchmarks/bench_colpali_training.py` on synthetic shapes and
+`benchmarks/bench_colpali_realdata.py` on `vidore/docvqa_test_subsampled`).
 
 
 | loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak     |
 | ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------- |
-| `ColbertLoss`       | synth bs=4, 448px                  |  386.9 ms              |  370.4 ms | **1.04×** |  9.10 GB |
-| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  895.4 ms              |  882.4 ms | 1.01×     |  5.74 GB |
-| `ColbertPairwiseCE` | synth bs=4, 448px                  |  366.9 ms              |  363.8 ms | 1.01×     |  9.10 GB |
-| `ColbertLoss`       | synth bs=16, 1024px                |  831.8 ms              |  831.7 ms | 1.00×     | 49.61 GB |
-| `ColbertLoss`       | synth bs=16, 1024px, grad-ckpt     | 2099.5 ms              | 2093.5 ms | 1.00×     | 11.54 GB |
-| `ColbertLoss`       | real DocVQA bs=4                   |  770.7 ms              |  723.6 ms | **1.07×** | 16.20 GB |
-| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 1941.3 ms              | 1865.7 ms | 1.04×     |  8.05 GB |
+| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 GB |
+| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 GB |
+| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 GB |
+| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 GB |
+| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 GB |
 
 
 Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
 forward+backward than a ModernBERT-149 M ColBERT, and the image
 modality blows up Ld (≈1 030 visual tokens at the default 448 px
-resolution; ≈3 060 at 1 024 px). So even with LoRA-only training
-shrinking AdamW state by ~60×, the *encoder activation-grad
-backward* is what dominates the step — LIK lands in the 1.00–1.07×
-range here. Best win is the 448 px / bs=4 real-data step (**1.07×**)
-where the encoder share is smallest; at 1 024 px the encoder fully
-swallows the step. The kernel is a drop-in — no other code changes
-between the two columns. Same takeaway as the PyLate `Contrastive`
-recipe on the 149 M encoder: when the transformer is the bottleneck,
-LIK doesn't move the needle, it just doesn't hurt.
+resolution). So even with LoRA-only training shrinking AdamW state
+by ~60×, the *encoder activation-grad backward* is what dominates
+the step — LIK lands in the 0.97–1.02× range here. The kernel is a
+drop-in — no other code changes between the two columns. Same
+takeaway as the PyLate `Contrastive` recipe on the 149 M encoder:
+when the transformer is the bottleneck, LIK doesn't move the needle,
+it just doesn't hurt. The 0.97× `ColbertPairwiseCE bs=4` cell is at
+the edge of run-to-run noise on a step this encoder-dominated.
 
 ## Edge models (`d ∈ {48, 64}`)
 
@@ -486,26 +519,27 @@ fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
 
 | shape                                       | fused    | naive (fp32) | speedup   | fused mem | naive mem |
 | ------------------------------------------- | -------- | ------------ | --------- | --------- | --------- |
-| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.114 ms | 0.398 ms     | **3.5×**  | 0.0 MB    | 314 MB    |
-| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.492 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
-| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.053 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
-| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.253 ms | 3.037 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
-| mxbai-edge `Nd=1 000, Ld=4 096, d=64`       | 0.266 ms | 1.755 ms     | **6.6×**  | 0.0 MB    | 1.5 GB    |
-| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.332 ms | 3.565 ms     | **10.7×** | 0.1 MB    | 3.0 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.116 ms | 0.397 ms     | **3.4×**  | 0.0 MB    | 314 MB    |
+| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.491 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.050 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
+| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.253 ms | 3.039 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
+| mxbai-edge `Nd=1 000, Ld=4 096, d=64`       | 0.172 ms | 1.754 ms     | **10.2×** | 0.0 MB    | 1.5 GB    |
+| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.332 ms | 3.577 ms     | **10.8×** | 0.1 MB    | 3.0 GB    |
 
 
 ## Where this kernel actually moves the e2e needle
 
 1. **Inference / reranking** — no encoder backward → MaxSim *is* the
-  step. **1.5–15×** at matched numerics, biggest wins on wide
+  step. **1.7–15×** at matched numerics, biggest wins on wide
   `Lq · Ld` shapes.
 2. **Small-encoder training** — encoder small enough that MaxSim is
-  material; LateOn-Code-edge moves **1.04–1.15×** end-to-end on real
-  MS MARCO triplets.
+  material; LateOn-Code-edge moves **1.00–1.06×** end-to-end on real
+  MS MARCO triplets in this sweep (was 1.04–1.15× pre-0.3.0; the
+  `bs=64, Ld=300` headline is queued for 0.3.1 — see CHANGELOG).
 3. **Long-context regimes** (`Ld ≥ 8k`) — fused kernels run, naive
   doesn't.
 4. **Compressed indices** — PLAID rerank vs `engine.search()` is
-  **8–22×** on full corpus scoring and **18–47×** on the partial
+  **8–23×** on full corpus scoring and **18–51×** on the partial
   rerank workload that matches fast-plaid's IVF probe.
 5. **KD / offline scoring** — teacher + student both do MaxSim, no
   per-step encoder cost to hide behind.
@@ -523,7 +557,7 @@ keeps the `Nq · Nd` result plus — only if autograd is on — a
 | scenario                          | naive scratch | fused fwd | fused fwd + argmax |
 | --------------------------------- | ------------- | --------- | ------------------ |
 | `Nq=1, Nd=1000, Lq=32, Ld=300`    | 183 MB        | 4 KB      | 128 KB             |
-| `Nq=128, Nd=128, Lq=32, Ld=300`   | 623 MB        | 64 KB     | 2 MB               |
+| `Nq=128, Nd=128, Lq=32, Ld=300`   | 621 MB        | 64 KB     | 2 MB               |
 | `Nq=1, Nd=1000, Lq=1024, Ld=1024` | 4.5 GB        | 4 KB      | 4 MB               |
 | `Nq=16, Nd=32, Lq=32, Ld=8192`    | 2.1 GB        | 64 KB     | 64 KB              |
 
@@ -550,29 +584,29 @@ falls back to `compile`.
 
 | shape                                          | metal    | compile  | eager    | metal vs eager | metal vs compile | compile vs eager |
 | ---------------------------------------------- | -------- | -------- | -------- | -------------- | ---------------- | ---------------- |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.42 ms  | 10.87 ms | 18.68 ms | **2.22×**      | 1.29×            | 1.72×            |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.43 ms | 18.28 ms | 31.13 ms | **1.89×**      | 1.11×            | 1.70×            |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 55.5 ms  | 93.9 ms  | 170.5 ms | **3.07×**      | 1.69×            | 1.82×            |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.11 ms  | 3.37 ms  | 6.51 ms  | **2.10×**      | 1.09×            | 1.93×            |
-| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 9.84 ms  | 17.27 ms | 28.89 ms | **2.94×**      | 1.76×            | 1.67×            |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 33.3 ms  | 67.2 ms  | 107.2 ms | **3.22×**      | 2.02×            | 1.59×            |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.82 ms  | 5.40 ms  | 13.06 ms | **2.71×**      | 1.12×            | 2.42×            |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 1.64 ms  | 2.33 ms  | 0.41× → 1.42×  | 0.29× (compile)  | 1.42×            |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.60 ms  | 17.41 ms | 17.13 ms | **1.99×**      | 2.02×            | 0.98×            |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.16 ms | 64.34 ms | 28.24 ms | **1.75×**      | 3.98×            | 0.44×            |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 65.3 ms  | 171.7 ms | 167.7 ms | **2.57×**      | 2.63×            | 0.98×            |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.09 ms  | 13.22 ms | 5.82 ms  | **1.88×**      | 4.28×            | 0.44×            |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 16.18 ms | 64.76 ms | 28.19 ms | **1.74×**      | 4.00×            | 0.44×            |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 39.21 ms | 441.1 ms | 105.7 ms | **2.70×**      | 11.25×           | 0.24×            |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.83 ms  | 13.86 ms | 9.66 ms  | **2.00×**      | 2.87×            | 0.70×            |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 9.27 ms  | 2.29 ms  | 0.40× → 1.62×  | 0.62× (compile)  | 0.25×            |
 
 
 For someone moving from plain PyTorch to this library, the headline is
-`metal vs eager`: **1.9–3.2×** on every realistic inference shape. On
-`train-batch` the Metal kernel's launch overhead dominates, so the
-dispatch heuristic (`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) routes it to `compile`
-automatically — the user still gets 1.42× over eager via that path.
-Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}` or
-`LIK_DISABLE_COMPILE=1` if you need explicit control.
+`metal vs eager`: **1.7–2.7×** on every realistic inference shape. On
+`train-batch` the Metal kernel's launch overhead dominates and eager
+actually wins (2.29 ms vs metal's 5.73 ms) — the dispatch heuristic
+(`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) is tuned to route this regime away from
+metal. Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`
+or `LIK_DISABLE_COMPILE=1` if you need explicit control.
 
 Memory is the second story: because `metal` streams `D` in 32-row tiles
 through threadgroup memory, peak working-set is one output tensor
 (8 MB) regardless of the corpus size. On `rerank-10k` and `edge-d48`
-the compile / eager paths materialise 2.5 GB / 750 MB intermediates —
-**~300×** memory reduction.
+the compile / eager paths materialise 2.5–4 GB intermediates —
+**~300–500×** memory reduction.
 
 The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
 analogue of CUDA tensor cores) on top of a *persistent* threadgroup

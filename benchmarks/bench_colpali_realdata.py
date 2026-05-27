@@ -153,9 +153,9 @@ def run_realdata(
     is_patched = _is_patched(loss_cls)
     _log(f"    [{variant}] {loss_cls.__name__}.forward patched={is_patched}")
     if variant == "lik" and not is_patched:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch not active")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch not active")
     if variant == "vanilla" and is_patched:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch leaked")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch leaked")
 
     from colpali_engine.collators import VisualRetrieverCollator
     from colpali_engine.models import ColQwen2, ColQwen2Processor
@@ -178,7 +178,7 @@ def run_realdata(
         total = sum(p.numel() for p in model.parameters())
         _log(f"    [{variant}] trainable params: {trainable / 1e6:.1f}M / {total / 1e6:.1f}M")
     except Exception as e:  # noqa: BLE001
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"model load: {e}")
 
     if grad_checkpoint:
         try:
@@ -186,12 +186,12 @@ def run_realdata(
             if hasattr(model, "config") and hasattr(model.config, "use_cache"):
                 model.config.use_cache = False
         except Exception as e:  # noqa: BLE001
-            return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"grad ckpt: {e}")
+            return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"grad ckpt: {e}")
 
     try:
         processor = ColQwen2Processor.from_pretrained(model_name)
     except Exception as e:  # noqa: BLE001
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"processor load: {e}")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"processor load: {e}")
 
     collator = VisualRetrieverCollator(processor=processor)
     loss_fn = loss_cls(temperature=0.02, normalize_scores=True)
@@ -200,7 +200,7 @@ def run_realdata(
     if batch_size > len(rows):
         return Measurement(
             step_ms=float("nan"),
-            peak_gb=float("nan"),
+            peak_mb=float("nan"),
             err=f"batch_size={batch_size} > dataset={len(rows)}",
         )
 
@@ -209,7 +209,7 @@ def run_realdata(
     for start in range(0, len(rows) - batch_size + 1, batch_size):
         windows.append(rows[start : start + batch_size])
     if not windows:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="no windows")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="no windows")
 
     step_idx = 0
 
@@ -232,14 +232,14 @@ def run_realdata(
     try:
         step_ms = _timed_step(step, iters=steps, warmup=warmup)
     except torch.cuda.OutOfMemoryError:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="OOM")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="OOM")
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+    peak_mb = torch.cuda.max_memory_allocated() / 1024**2
 
     del model, loss_fn, optim, collator
     gc.collect()
     torch.cuda.empty_cache()
-    return Measurement(step_ms=step_ms, peak_gb=peak_gb)
+    return Measurement(step_ms=step_ms, peak_mb=peak_mb)
 
 
 def main():
@@ -263,7 +263,7 @@ def main():
             "is for measuring an upper-bound encoder-dominated regime."
         ),
     )
-    ap.add_argument("--only", choices=["both", "vanilla", "lik"], default="both")
+    ap.add_argument("--variants", choices=["both", "vanilla", "lik"], default="both")
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -284,7 +284,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "lik"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "lik"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_realdata(
@@ -304,7 +304,7 @@ def main():
         if m.err:
             _log(f"  {v:>8}: FAILED ({m.err})")
         else:
-            _log(f"  {v:>8}: {m.step_ms:8.2f} ms/step   peak {m.peak_gb:5.2f} GB")
+            _log(f"  {v:>8}: {m.step_ms:8.2f} ms/step   peak {m.peak_mb / 1024:5.2f} GB")
 
     if "vanilla" in results and "lik" in results:
         vr, fr = results["vanilla"], results["lik"]
@@ -315,7 +315,8 @@ def main():
                 f"({vr.step_ms:.2f} -> {fr.step_ms:.2f} ms/step)"
             )
             _log(
-                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  ({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
+                f"  mem delta:  {(vr.peak_mb - fr.peak_mb) / 1024:+.2f} GB  "
+                f"({vr.peak_mb / 1024:.2f} -> {fr.peak_mb / 1024:.2f} GB)"
             )
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -333,7 +334,7 @@ def main():
                 "n_samples": len(rows),
                 "time_s": time.time(),
                 "results": {
-                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err} for k, v in results.items()
+                    k: {"step_ms": v.step_ms, "peak_mb": v.peak_mb, "err": v.err} for k, v in results.items()
                 },
             },
             f,

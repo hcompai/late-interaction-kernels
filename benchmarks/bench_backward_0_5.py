@@ -35,6 +35,14 @@ def _time(fn, warmup=5, iters=30):
     return s.elapsed_time(e) / iters
 
 
+def _peak_mb(fn) -> float:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    fn()
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated() / 1024**2
+
+
 # -----------------------------------------------------------------------------
 # 1. Residual forward+backward (nbits=2/4/8, training on compressed embeddings)
 # -----------------------------------------------------------------------------
@@ -108,10 +116,13 @@ def bench_residual_backward(rows):
 
             t_fast = _time(step_fast)
             t_ref = _time(step_ref)
+            m_fast = _peak_mb(step_fast)
+            m_ref = _peak_mb(step_ref)
 
             print(
                 f"[residual-bwd {tag} nbits={nbits}] Nq={Nq} Nd={Nd} Lq={Lq} Ld={max_Ld} d={d} | "
-                f"fused {t_fast:.2f} ms  |  unpack+maxsim {t_ref:.2f} ms  |  "
+                f"fused {t_fast:.2f} ms / {m_fast:.1f} MB  |  "
+                f"unpack+maxsim {t_ref:.2f} ms / {m_ref:.1f} MB  |  "
                 f"speedup {t_ref / t_fast:.2f}x  |  dense emb scratch avoided = "
                 f"{Nd * max_Ld * d * 4 / 1e9:.2f} GB"
             )
@@ -128,6 +139,8 @@ def bench_residual_backward(rows):
                     "fused_ms": t_fast,
                     "unpack_maxsim_ms": t_ref,
                     "speedup": t_ref / t_fast,
+                    "fused_peak_mb": m_fast,
+                    "unpack_maxsim_peak_mb": m_ref,
                     "dense_emb_gb": Nd * max_Ld * d * 4 / 1e9,
                 }
             )
@@ -178,11 +191,13 @@ def _bench_varlen_once(rows, Nq, Nd, d, q_lens, d_lens, tag):
 
     t_var = _time(step_var)
     t_pad = _time(step_pad)
+    m_var = _peak_mb(step_var)
+    m_pad = _peak_mb(step_pad)
     waste = 1.0 - sum(d_lens) / (Nd * max_ld)
     print(
         f"[varlen-bwd {tag}] Nq={Nq} Nd={Nd} d={d} max_ld={max_ld} "
         f"padding_waste={waste:.0%} | "
-        f"varlen {t_var:.2f} ms  |  padded {t_pad:.2f} ms  |  "
+        f"varlen {t_var:.2f} ms / {m_var:.1f} MB  |  padded {t_pad:.2f} ms / {m_pad:.1f} MB  |  "
         f"speedup {t_pad / t_var:.2f}x"
     )
     rows.append(
@@ -197,6 +212,8 @@ def _bench_varlen_once(rows, Nq, Nd, d, q_lens, d_lens, tag):
             "varlen_ms": t_var,
             "padded_ms": t_pad,
             "speedup": t_pad / t_var,
+            "varlen_peak_mb": m_var,
+            "padded_peak_mb": m_pad,
         }
     )
 
@@ -224,21 +241,31 @@ def bench_varlen_backward(rows):
     _bench_varlen_once(rows, Nq, Nd, d, q_lens, d_lens, tag="long-doc")
 
 
-def main(out_dir: str):
+SECTIONS = ("residual", "varlen")
+
+
+def main(out_dir: str, only: list[str] | None):
     assert torch.cuda.is_available(), "CUDA required"
+    sections = set(only) if only else set(SECTIONS)
+    unknown = sections - set(SECTIONS)
+    if unknown:
+        raise SystemExit(f"unknown section(s) {sorted(unknown)}; pick from: {list(SECTIONS)}")
+
     gpu = torch.cuda.get_device_name(0).replace(" ", "_")
     rows: list[dict] = []
 
-    print("=" * 78)
-    print("Residual backward (fused grad_Q through 2/4/8-bit PLAID compression)")
-    print("=" * 78)
-    bench_residual_backward(rows)
+    if "residual" in sections:
+        print("=" * 78)
+        print("Residual backward (fused grad_Q through 2/4/8-bit PLAID compression)")
+        print("=" * 78)
+        bench_residual_backward(rows)
 
-    print()
-    print("=" * 78)
-    print("Varlen backward (packed grad_Q / grad_D — no repad)")
-    print("=" * 78)
-    bench_varlen_backward(rows)
+    if "varlen" in sections:
+        print()
+        print("=" * 78)
+        print("Varlen backward (packed grad_Q / grad_D — no repad)")
+        print("=" * 78)
+        bench_varlen_backward(rows)
 
     os.makedirs(out_dir, exist_ok=True)
     with open(f"{out_dir}/backward_0_5_{gpu}.json", "w") as f:
@@ -274,5 +301,12 @@ def main(out_dir: str):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", default="benchmarks/results")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        choices=SECTIONS,
+        default=None,
+        help="subset of sections to run; default = both",
+    )
     args = ap.parse_args()
-    main(args.outdir)
+    main(args.outdir, args.only)

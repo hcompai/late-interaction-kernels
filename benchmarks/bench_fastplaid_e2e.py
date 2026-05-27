@@ -161,6 +161,14 @@ def time_cuda(fn, warmup: int = 2, iters: int = 5) -> float:
     return ts[len(ts) // 2]
 
 
+def _peak_mb(fn) -> float:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    fn()
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated() / 1024**2
+
+
 def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
     from late_interaction_kernels.plaid import maxsim_residual_varlen
 
@@ -242,7 +250,8 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
     lik_full_ms = time_cuda(_lik_full, warmup=args.warmup, iters=args.iters)
-    print(f"  lik varlen (all docs + top-k)  : {lik_full_ms:.2f} ms/query")
+    lik_full_peak_mb = _peak_mb(_lik_full)
+    print(f"  lik varlen (all docs + top-k)  : {lik_full_ms:.2f} ms/query  peak {lik_full_peak_mb:.1f} MB")
 
     # --- Partial rerank (n_full_scores random docs — fast-plaid shape) ---
     n_cand = min(args.n_full_scores, idx["n_docs"])
@@ -279,7 +288,11 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         return torch.topk(scores, k=min(TOP_K, scores.numel())).indices
 
     lik_partial_ms = time_cuda(_lik_partial, warmup=args.warmup, iters=args.iters)
-    print(f"  lik varlen ({n_cand} cands + top-k)  : {lik_partial_ms:.2f} ms/query")
+    lik_partial_peak_mb = _peak_mb(_lik_partial)
+    print(
+        f"  lik varlen ({n_cand} cands + top-k)  : {lik_partial_ms:.2f} ms/query  "
+        f"peak {lik_partial_peak_mb:.1f} MB"
+    )
 
     if e2e_ms_per_q is not None:
         speedup_full = e2e_ms_per_q / lik_full_ms
@@ -296,6 +309,8 @@ def run_corpus(name: str, n_docs: int, ld_max: int, nbits: int, args):
         "engine_search_ms_per_query": e2e_ms_per_q,
         "lik_full_rerank_ms": lik_full_ms,
         "lik_partial_rerank_ms": lik_partial_ms,
+        "lik_full_peak_mb": lik_full_peak_mb,
+        "lik_partial_peak_mb": lik_partial_peak_mb,
         "n_tokens_total": idx["total_tokens"],
     }
 
@@ -315,6 +330,16 @@ def main():
     ap.add_argument("--n-full-scores", type=int, default=4096)
     ap.add_argument("--small", action="store_true")
     ap.add_argument("--skip-fastplaid", action="store_true")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=(
+            "subset of corpus names to run; default = all "
+            "(or 3 with --small). choices: 5k-200-nb2 10k-300-nb2 10k-512-nb2 "
+            "10k-512-nb4 25k-300-nb2"
+        ),
+    )
     args = ap.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -329,6 +354,15 @@ def main():
     if not args.small:
         corpora.append(("10k-512-nb4", 10_000, 512, 4))
         corpora.append(("25k-300-nb2", 25_000, 300, 2))
+
+    if args.only:
+        wanted = set(args.only)
+        corpora = [c for c in corpora if c[0] in wanted]
+        if not corpora:
+            raise SystemExit(
+                "unknown corpus name(s); pick from: "
+                "5k-200-nb2 10k-300-nb2 10k-512-nb2 10k-512-nb4 25k-300-nb2"
+            )
 
     rows = []
     for name, n_docs, ld, nbits in corpora:

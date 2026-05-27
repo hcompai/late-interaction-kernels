@@ -135,7 +135,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dtype", choices=["fp16", "bf16", "fp32"], default="fp16")
     ap.add_argument("--quick", action="store_true", help="Skip the biggest shapes.")
-    ap.add_argument("--shape", default=None, help="Run only the named shape.")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help="subset of shape names to run; default = all.",
+    )
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -152,13 +157,15 @@ def main():
     print(f"metal kernel: {'enabled' if metal_ok else 'disabled (dtype/build)'}")
     print()
 
-    shapes = SHAPES
-    if args.shape:
-        shapes = [s for s in shapes if s[0] == args.shape]
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
         if not shapes:
-            sys.exit(f"no shape named {args.shape!r}")
-    if args.quick:
-        shapes = [s for s in shapes if s[1] * s[3] <= 10_000]
+            sys.exit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    elif args.quick:
+        shapes = [s for s in SHAPES if s[1] * s[3] <= 10_000]
+    else:
+        shapes = SHAPES
 
     report = {"chip": chip, "dtype": args.dtype, "shapes": []}
 

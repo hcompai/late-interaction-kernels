@@ -1,7 +1,10 @@
-# One-shot benchmark run on 1×H100. Tests live in GitHub Actions (gpu-ci.yml).
-#   sky jobs launch scripts/sky_run_benchmarks.yaml
+# Smoke-test benchmark run on 1×H100: bench_forward + bench_backward_method only.
+# Cheapest sanity check that the bench scripts still run on a fresh CUDA host.
+# Full sweep: sky_run_all_benchmarks.yaml. Tests live in GitHub Actions (gpu-ci.yml).
+#
+#   sky jobs launch scripts/sky_benchmark_smoke_test.yaml
 
-name: late-interaction-kernels-bench
+name: lik-benchmark-smoke-test
 
 resources:
   infra: kubernetes

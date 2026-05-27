@@ -5,15 +5,20 @@ unfused ``F.linear + F.normalize + maxsim`` on realistic LateOn /
 LateOn-Code / LateOn-Code-edge shapes.
 
 Wall-clock + peak HBM (from the fused head forward + loss + backward
-on a fresh allocator each iteration) are printed side by side.
+on a fresh allocator each iteration) are printed side by side and
+written to ``<outdir>/fused_head_train_<gpu>.{json,md}``.
 
 Usage
 -----
 ::
 
     python benchmarks/bench_fused_head_train.py
+    python benchmarks/bench_fused_head_train.py --only lateon-B4-Ld300
 """
 
+import argparse
+import json
+import os
 import statistics
 import time
 
@@ -77,14 +82,37 @@ def _step_unfused(Q, H_d, W, b, *, normalize):
     scores.sum().backward()
 
 
+def _filter_shapes(only: list[str] | None) -> list[tuple]:
+    if not only:
+        return list(SHAPES)
+    wanted = set(only)
+    out = [s for s in SHAPES if s[0] in wanted]
+    if not out:
+        raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    return out
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
+    ap.add_argument("--outdir", default="benchmarks/results")
+    args = ap.parse_args()
+
+    gpu = torch.cuda.get_device_name(0).replace(" ", "_")
     print(f"device: {torch.cuda.get_device_name(0)}")
     print(
         f"{'shape':<34} {'unfused ms':>12} {'fused ms':>12} "
         f"{'speedup':>9}   {'unfused MB':>12} {'fused MB':>12}   label"
     )
     print("-" * 116)
-    for label, Nq, Nd, Lq, Ld, d_model, d_out in SHAPES:
+
+    rows: list[dict] = []
+    for label, Nq, Nd, Lq, Ld, d_model, d_out in _filter_shapes(args.only):
         torch.manual_seed(0)
         dtype = torch.bfloat16
         H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype, requires_grad=True)
@@ -103,6 +131,44 @@ def main():
             f"{shape_str:<34} {t_unf:>12.3f} {t_fus:>12.3f} "
             f"{t_unf / t_fus:>8.2f}x  {m_unf:>12.1f} {m_fus:>12.1f}   {label}"
         )
+        rows.append(
+            {
+                "label": label,
+                "Nq": Nq,
+                "Nd": Nd,
+                "Lq": Lq,
+                "Ld": Ld,
+                "d_model": d_model,
+                "d_out": d_out,
+                "unfused_ms": t_unf,
+                "fused_ms": t_fus,
+                "speedup": t_unf / t_fus,
+                "unfused_peak_mb": m_unf,
+                "fused_peak_mb": m_fus,
+            }
+        )
+
+    os.makedirs(args.outdir, exist_ok=True)
+    out_json = os.path.join(args.outdir, f"fused_head_train_{gpu}.json")
+    out_md = os.path.join(args.outdir, f"fused_head_train_{gpu}.md")
+    with open(out_json, "w") as f:
+        json.dump({"gpu": gpu, "rows": rows}, f, indent=2)
+    with open(out_md, "w") as f:
+        f.write(f"# Fused D-side head (training) — {gpu}\n\n")
+        f.write(
+            "| label | Nq | Nd | Lq | Ld | d_model | d_out | unfused (ms) | "
+            "fused (ms) | speedup | unfused peak (MB) | fused peak (MB) |\n"
+        )
+        f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+        for r in rows:
+            f.write(
+                f"| {r['label']} | {r['Nq']} | {r['Nd']} | {r['Lq']} | {r['Ld']} | "
+                f"{r['d_model']} | {r['d_out']} | "
+                f"{r['unfused_ms']:.3f} | {r['fused_ms']:.3f} | {r['speedup']:.2f}× | "
+                f"{r['unfused_peak_mb']:.1f} | {r['fused_peak_mb']:.1f} |\n"
+            )
+    print(f"\n→ wrote {out_json}")
+    print(f"→ wrote {out_md}")
 
 
 if __name__ == "__main__":
