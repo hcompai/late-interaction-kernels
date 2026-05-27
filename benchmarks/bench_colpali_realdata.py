@@ -94,10 +94,7 @@ def _load_samples(dataset: str, split: str, max_samples: int, seed: int) -> list
 
 def _to_collator_samples(rows: list[Sample]) -> list[dict]:
     """colpali_engine's VisualRetrieverCollator expects a list of dicts."""
-    return [
-        {"query": r.query, "pos_target": [r.image], "neg_target": None}
-        for r in rows
-    ]
+    return [{"query": r.query, "pos_target": [r.image], "neg_target": None} for r in rows]
 
 
 def _split_collated(batch: dict, device: torch.device) -> tuple[dict, dict]:
@@ -256,10 +253,7 @@ def main():
     _log(f"Loading {args.dataset} split={args.split}, max={args.max_samples}")
     rows = _load_samples(args.dataset, args.split, args.max_samples, args.seed)
     _log(f"  -> {len(rows)} samples")
-    _log(
-        f"model={args.model}  loss={args.loss}  bs={args.batch_size}  "
-        f"grad_ckpt={args.grad_checkpoint}"
-    )
+    _log(f"model={args.model}  loss={args.loss}  bs={args.batch_size}  grad_ckpt={args.grad_checkpoint}")
     _log(f"steps={args.steps}  warmup={args.warmup}")
     _log("-" * 72)
 
@@ -293,8 +287,7 @@ def main():
                 f"({vr.step_ms:.2f} -> {fr.step_ms:.2f} ms/step)"
             )
             _log(
-                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  "
-                f"({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
+                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  ({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
             )
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -311,8 +304,7 @@ def main():
                 "n_samples": len(rows),
                 "time_s": time.time(),
                 "results": {
-                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err}
-                    for k, v in results.items()
+                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err} for k, v in results.items()
                 },
             },
             f,

@@ -55,10 +55,7 @@ LOSS_CHOICES = ("colbert", "pairwise_ce", "sigmoid")
 
 def _random_query(n_words: int) -> str:
     """Pseudo-query of ~``n_words`` random ascii words."""
-    vocab = [
-        "".join(random.choices(string.ascii_lowercase, k=random.randint(3, 8)))
-        for _ in range(256)
-    ]
+    vocab = ["".join(random.choices(string.ascii_lowercase, k=random.randint(3, 8))) for _ in range(256)]
     return " ".join(random.choice(vocab) for _ in range(n_words))
 
 
@@ -282,8 +279,7 @@ def main():
                 f"({vr.step_ms:.2f} -> {fr.step_ms:.2f} ms/step)"
             )
             _log(
-                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  "
-                f"({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
+                f"  mem delta:  {vr.peak_gb - fr.peak_gb:+.2f} GB  ({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)"
             )
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -299,8 +295,7 @@ def main():
                 "config": vars(args),
                 "time_s": time.time(),
                 "results": {
-                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err}
-                    for k, v in results.items()
+                    k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err} for k, v in results.items()
                 },
             },
             f,
