@@ -66,7 +66,7 @@ Results land in `benchmarks/results/*.{json,md}`.
 
 ```bash
 sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y   # every table on this page in one shot (1×H100, ~25 min)
-sky launch -c lik-bench scripts/sky_bench_verify.yaml -y   # forward + cached + fused head + fp8 (the README numbers)
+sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"  # README numbers only (~5 min)
 sky jobs launch scripts/sky_test.yaml             # CI-style: tests + bench_forward + bench_backward
 sky jobs launch scripts/sky_lateon_edge.yaml      # LateOn-Code-edge end-to-end
 sky jobs launch scripts/sky_decompress_bench.yaml # PLAID decompress + MaxSim

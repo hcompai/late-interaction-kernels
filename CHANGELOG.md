@@ -52,8 +52,12 @@ below regressed and are queued for 0.3.1:
   `--only` is unambiguously about the experiment subset. Affects
   `bench_cached_maxsim`, `bench_pylate_lateon`,
   `bench_pylate_realdata`, `bench_colpali_training`,
-  `bench_colpali_realdata`. `scripts/sky_bench_verify.yaml` and
-  `scripts/sky_run_all_benchmarks.yaml` updated to match.
+  `bench_colpali_realdata`. `scripts/sky_run_all_benchmarks.yaml`
+  updated to match.
+- `scripts/sky_run_all_benchmarks.yaml` now accepts a `RUN_ONLY` env
+  (space-separated bench tags — `forward cached_maxsim fp8 ...`) to
+  run a subset. Same pattern as `sky_colpali_training.yaml`; replaces
+  the dedicated `sky_bench_verify.yaml` smoke script.
 
 ### Added
 
@@ -74,6 +78,8 @@ below regressed and are queued for 0.3.1:
   in `scripts/sky_colpali_training.yaml`. These shapes were
   encoder-bound (1.00× vs vanilla in both rows) and contributed
   nothing the 448px rows didn't already cover.
+- `scripts/sky_bench_verify.yaml`. The smoke-test path is now
+  `sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" scripts/sky_run_all_benchmarks.yaml`.
 
 ## [0.3.0] - 2026-05-26
 
