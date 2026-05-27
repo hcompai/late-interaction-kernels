@@ -45,6 +45,37 @@ setup: |
   uv pip install "colpali-engine>=0.3.10" datasets pillow triton \
       "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
       --extra-index-url https://download.pytorch.org/whl/cu128
+  # torchvision 0.26.0+cu128: the _C.so is compiled against PyPI torch (CUDA 13
+  # ABI), not torch +cu128, so it fails to load with "undefined symbol".
+  # torchvision.transforms.v2 (what ColQwen2 actually uses) is pure Python
+  # and doesn't need _C.so. Only _meta_registrations.py fails because it
+  # tries to register fake NMS ops via the missing C++ extension.
+  # Patch __init__.py to make that import optional so torchvision loads fine.
+  uv run python - << 'PYEOF'
+  import glob
+  tv_init = glob.glob(
+      "/root/sky_workdir/.venv/lib/python3.10/site-packages/torchvision/__init__.py"
+  )[0]
+  with open(tv_init) as f:
+      src = f.read()
+  old = (
+      "from torchvision import _meta_registrations, datasets, io, models, "
+      "ops, transforms, utils  # usort:skip"
+  )
+  new = (
+      "from torchvision import datasets, io, models, ops, transforms, utils  # usort:skip\n"
+      "try:\n"
+      "    from torchvision import _meta_registrations  # noqa: F401\n"
+      "except Exception:\n"
+      "    pass  # _C.so ABI mismatch: NMS meta registration unavailable"
+  )
+  if old in src:
+      with open(tv_init, "w") as f:
+          f.write(src.replace(old, new, 1))
+      print("patched torchvision/__init__.py: _meta_registrations import is optional")
+  else:
+      print("WARNING: expected __init__.py line not found — torchvision version differs")
+  PYEOF
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
   uv pip install flash-attn --no-build-isolation || true
