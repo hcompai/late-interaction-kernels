@@ -45,6 +45,7 @@ jobs:
     # so the gate is effectively "any internal collaborator can trigger."
     if: >-
       github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
     # Silence the unnormalized-input warning: many parity tests deliberately
     # feed unnormalized vectors, so the warning is expected noise here.
