@@ -148,6 +148,10 @@ def run_one(
             attn_implementation=attn_impl,
         ).to(device)
         model.train()
+        # ColQwen2 uses PEFT/LoRA; base model weights are frozen by default.
+        # For benchmarking purposes we need gradients everywhere to measure a
+        # realistic backward pass cost.
+        model.requires_grad_(True)
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
 
