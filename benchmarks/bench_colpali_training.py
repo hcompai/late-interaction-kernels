@@ -96,17 +96,27 @@ def _is_patched(loss_cls) -> bool:
 
 
 def _apply_lora(model):
-    """Wrap a ColQwen2 with PEFT/LoRA matching the official ColPali training recipe.
+    """Make the LoRA adapters the only trainable params (realistic ColPali training).
 
-    This is the realistic training mode: only the LoRA adapters (~7 M params)
-    are trainable, base weights stay frozen, AdamW state is ~30× smaller, and
-    the encoder backward computes activation gradients only (no weight grads
-    through the frozen base). Without this, ``model.requires_grad_(True)``
-    would force a full fine-tune (~2 B trainable params), which is roughly 2×
-    the backward cost and makes the MaxSim slice look artificially small.
+    ColQwen2 ships with PEFT/LoRA already wired in: ``vidore/colqwen2-v1.0``
+    has ``peft_config`` baked into the checkpoint, with LoRA adapters on
+    every q/k/v/o/gate/up/down/custom_text_proj. We just need to freeze
+    the base and unfreeze the adapters, mirroring what
+    ``ColModelTraining`` does on top of a pre-LoRA'd model.
 
-    Config copied from the colpali-engine README's ``ColModelTraining`` example.
+    If the model has no peft_config we fall back to wrapping it with the
+    official ColPali LoraConfig (still ~7 M trainable params).
+
+    Either way: encoder backward computes activation gradients only (no
+    weight grads through the frozen base), AdamW state is ~30× smaller
+    than full fine-tune, and the MaxSim share of step time is realistic.
     """
+    if getattr(model, "peft_config", None):
+        # Already adapted — just toggle requires_grad to LoRA-only.
+        for name, param in model.named_parameters():
+            param.requires_grad = "lora_" in name
+        return model
+
     from peft import LoraConfig, get_peft_model
 
     lora_config = LoraConfig(
@@ -187,10 +197,14 @@ def run_one(
             model.requires_grad_(True)
         else:
             # Realistic training mode: only LoRA adapters (~7 M params) update.
-            # ``get_peft_model`` automatically freezes the base and marks the
-            # adapter weights as ``requires_grad=True``.
             model = _apply_lora(model)
         model.train()
+        # Sanity log: confirms the trainable-params count matches expectation
+        # (~7 M for LoRA, ~2 B for full fine-tune) so the headline numbers
+        # can't silently regress to the wrong regime.
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        _log(f"    [{variant}] trainable params: {trainable / 1e6:.1f}M / {total / 1e6:.1f}M")
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
 

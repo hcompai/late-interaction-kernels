@@ -174,6 +174,9 @@ def run_realdata(
         else:
             model = _apply_lora(model)
         model.train()
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        _log(f"    [{variant}] trainable params: {trainable / 1e6:.1f}M / {total / 1e6:.1f}M")
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
 
