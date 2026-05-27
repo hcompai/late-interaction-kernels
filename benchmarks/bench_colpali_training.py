@@ -152,7 +152,7 @@ def run_one(
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
 
-    # Reseed every variant so vanilla and flash see the exact same synthetic
+    # Reseed every variant so vanilla and lik see the exact same synthetic
     # images / queries / param init — otherwise step time wobbles from input
     # variance, not from the patch.
     random.seed(seed)
@@ -163,7 +163,7 @@ def run_one(
     from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
 
     unpatch_colpali_engine()
-    if variant == "flash":
+    if variant == "lik":
         os.environ.pop("LIK_DISABLE", None)
         # Importing colpali_engine first lets the patcher find the classes.
         import colpali_engine.loss.late_interaction_losses  # noqa: F401
@@ -175,7 +175,7 @@ def run_one(
     loss_cls = _resolve_loss_cls(loss_kind)
     is_patched = _is_patched(loss_cls)
     _log(f"    [{variant}] {loss_cls.__name__}.forward patched={is_patched}")
-    if variant == "flash" and not is_patched:
+    if variant == "lik" and not is_patched:
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch not active")
     if variant == "vanilla" and is_patched:
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch leaked")
@@ -294,7 +294,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--only",
-        choices=["both", "vanilla", "flash"],
+        choices=["both", "vanilla", "lik"],
         default="both",
         help="run a subset of variants (useful when vanilla OOMs)",
     )
@@ -317,7 +317,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "flash"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "lik"] if args.only == "both" else [args.only]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_one(
@@ -340,8 +340,8 @@ def main():
         else:
             _log(f"  {v:>8}: {m.step_ms:8.2f} ms/step   peak {m.peak_gb:5.2f} GB")
 
-    if "vanilla" in results and "flash" in results:
-        vr, fr = results["vanilla"], results["flash"]
+    if "vanilla" in results and "lik" in results:
+        vr, fr = results["vanilla"], results["lik"]
         if vr.err is None and fr.err is None:
             _log("-" * 72)
             _log(
