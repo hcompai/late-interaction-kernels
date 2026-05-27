@@ -95,6 +95,34 @@ def _is_patched(loss_cls) -> bool:
     return loss_cls.forward is expected
 
 
+def _apply_lora(model):
+    """Wrap a ColQwen2 with PEFT/LoRA matching the official ColPali training recipe.
+
+    This is the realistic training mode: only the LoRA adapters (~7 M params)
+    are trainable, base weights stay frozen, AdamW state is ~30× smaller, and
+    the encoder backward computes activation gradients only (no weight grads
+    through the frozen base). Without this, ``model.requires_grad_(True)``
+    would force a full fine-tune (~2 B trainable params), which is roughly 2×
+    the backward cost and makes the MaxSim slice look artificially small.
+
+    Config copied from the colpali-engine README's ``ColModelTraining`` example.
+    """
+    from peft import LoraConfig, get_peft_model
+
+    lora_config = LoraConfig(
+        r=32,
+        lora_alpha=32,
+        lora_dropout=0.1,
+        bias="none",
+        task_type="FEATURE_EXTRACTION",
+        target_modules=(
+            r"(.*(model).*(down_proj|gate_proj|up_proj|k_proj|q_proj|v_proj|o_proj).*$"
+            r"|.*(custom_text_proj).*$)"
+        ),
+    )
+    return get_peft_model(model, lora_config)
+
+
 def run_one(
     variant: str,
     model_name: str,
@@ -105,12 +133,21 @@ def run_one(
     iters: int,
     warmup: int,
     grad_checkpoint: bool,
+    full_finetune: bool,
     device: torch.device,
+    seed: int = 0,
 ) -> Measurement:
     """Run ``iters`` training steps and report ms/step + peak GB."""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
+
+    # Reseed every variant so vanilla and flash see the exact same synthetic
+    # images / queries / param init — otherwise step time wobbles from input
+    # variance, not from the patch.
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     # Make sure no prior patch state leaks across variants.
     from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
@@ -144,11 +181,16 @@ def run_one(
             torch_dtype=torch.bfloat16,
             attn_implementation=attn_impl,
         ).to(device)
+        if full_finetune:
+            # All params trainable — what naive backward looks like, and what
+            # nobody actually trains for ColPali. Useful as an upper bound only.
+            model.requires_grad_(True)
+        else:
+            # Realistic training mode: only LoRA adapters (~7 M params) update.
+            # ``get_peft_model`` automatically freezes the base and marks the
+            # adapter weights as ``requires_grad=True``.
+            model = _apply_lora(model)
         model.train()
-        # ColQwen2 uses PEFT/LoRA; base model weights are frozen by default.
-        # For benchmarking purposes we need gradients everywhere to measure a
-        # realistic backward pass cost.
-        model.requires_grad_(True)
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
 
@@ -223,9 +265,19 @@ def main():
         default="colbert",
         help="which in-batch late-interaction loss to drive",
     )
-    ap.add_argument("--iters", type=int, default=5)
+    ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--grad-checkpoint", action="store_true")
+    ap.add_argument(
+        "--full-finetune",
+        action="store_true",
+        help=(
+            "make every parameter trainable (no LoRA). Default is LoRA-only, "
+            "which matches the real ColPali training recipe; --full-finetune "
+            "is for measuring an upper-bound encoder-dominated regime."
+        ),
+    )
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--only",
         choices=["both", "vanilla", "flash"],
@@ -241,11 +293,13 @@ def main():
     device = torch.device("cuda:0")
     _log(f"GPU: {torch.cuda.get_device_name()}")
     _log(f"model={args.model}  loss={args.loss}")
+    train_mode = "full-finetune" if args.full_finetune else "lora"
     _log(
         f"bs={args.batch_size}  image_size={args.image_size}  "
-        f"query_words={args.query_words}  grad_ckpt={args.grad_checkpoint}"
+        f"query_words={args.query_words}  grad_ckpt={args.grad_checkpoint}  "
+        f"train_mode={train_mode}"
     )
-    _log(f"iters={args.iters}  warmup={args.warmup}")
+    _log(f"iters={args.iters}  warmup={args.warmup}  seed={args.seed}")
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
@@ -262,7 +316,9 @@ def main():
             iters=args.iters,
             warmup=args.warmup,
             grad_checkpoint=args.grad_checkpoint,
+            full_finetune=args.full_finetune,
             device=device,
+            seed=args.seed,
         )
         results[v] = m
         if m.err:
@@ -285,9 +341,10 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
     ckpt_tag = "_ckpt" if args.grad_checkpoint else ""
+    mode_tag = "_full" if args.full_finetune else "_lora"
     fn = os.path.join(
         args.outdir,
-        f"colpali_{args.loss}_{gpu}_bs{args.batch_size}_img{args.image_size}{ckpt_tag}.json",
+        f"colpali_{args.loss}_{gpu}_bs{args.batch_size}_img{args.image_size}{mode_tag}{ckpt_tag}.json",
     )
     with open(fn, "w") as f:
         json.dump(

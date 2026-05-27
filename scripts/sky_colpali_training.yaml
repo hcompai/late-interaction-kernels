@@ -113,7 +113,7 @@ run: |
       --model "${MODEL}" \
       --loss colbert \
       --batch-size 4 --image-size 448 --query-words 16 \
-      --iters 5 --warmup 2 \
+      --iters 10 --warmup 2 \
       --outdir "${ART}" \
       2>&1 | tee "${ART}/synth_colbert_bs4.log"
 
@@ -124,7 +124,7 @@ run: |
       --model "${MODEL}" \
       --loss colbert \
       --batch-size 8 --image-size 448 --query-words 16 \
-      --iters 5 --warmup 2 \
+      --iters 10 --warmup 2 \
       --grad-checkpoint \
       --outdir "${ART}" \
       2>&1 | tee "${ART}/synth_colbert_bs8_ckpt.log"
@@ -136,7 +136,7 @@ run: |
       --model "${MODEL}" \
       --loss pairwise_ce \
       --batch-size 4 --image-size 448 --query-words 16 \
-      --iters 5 --warmup 2 \
+      --iters 10 --warmup 2 \
       --outdir "${ART}" \
       2>&1 | tee "${ART}/synth_pairwise_bs4.log"
 
@@ -158,7 +158,7 @@ run: |
       --model "${MODEL}" \
       --loss colbert \
       --batch-size 8 --max-samples 96 \
-      --steps 8 --warmup 2 \
+      --steps 10 --warmup 2 \
       --grad-checkpoint \
       --outdir "${ART}" \
       2>&1 | tee "${ART}/real_colbert_bs8_ckpt.log"

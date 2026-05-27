@@ -53,6 +53,7 @@ assert _spec2.loader is not None
 _spec2.loader.exec_module(_mod2)
 _resolve_loss_cls = _mod2._resolve_loss_cls
 _is_patched = _mod2._is_patched
+_apply_lora = _mod2._apply_lora
 
 
 MODEL_DEFAULT = "vidore/colqwen2-v1.0"
@@ -121,12 +122,21 @@ def run_realdata(
     steps: int,
     warmup: int,
     grad_checkpoint: bool,
+    full_finetune: bool,
     device: torch.device,
+    seed: int = 0,
 ) -> Measurement:
     """Train for ``steps`` optimizer steps, cycling over real DocVQA pairs."""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
+
+    # Reseed every variant so vanilla and flash see identical param init.
+    # Batch contents are deterministic (real DocVQA windows), so once init
+    # is fixed both variants run on the same data.
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
 
@@ -159,11 +169,11 @@ def run_realdata(
             torch_dtype=torch.bfloat16,
             attn_implementation=attn_impl,
         ).to(device)
+        if full_finetune:
+            model.requires_grad_(True)
+        else:
+            model = _apply_lora(model)
         model.train()
-        # ColQwen2 uses PEFT/LoRA; base model weights are frozen by default.
-        # For benchmarking purposes we need gradients everywhere to measure a
-        # realistic backward pass cost.
-        model.requires_grad_(True)
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
 
@@ -241,6 +251,15 @@ def main():
     ap.add_argument("--steps", type=int, default=10, help="timed optimizer steps per variant")
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--grad-checkpoint", action="store_true")
+    ap.add_argument(
+        "--full-finetune",
+        action="store_true",
+        help=(
+            "make every parameter trainable (no LoRA). Default is LoRA-only, "
+            "which matches the real ColPali training recipe; --full-finetune "
+            "is for measuring an upper-bound encoder-dominated regime."
+        ),
+    )
     ap.add_argument("--only", choices=["both", "vanilla", "flash"], default="both")
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
@@ -253,8 +272,12 @@ def main():
     _log(f"Loading {args.dataset} split={args.split}, max={args.max_samples}")
     rows = _load_samples(args.dataset, args.split, args.max_samples, args.seed)
     _log(f"  -> {len(rows)} samples")
-    _log(f"model={args.model}  loss={args.loss}  bs={args.batch_size}  grad_ckpt={args.grad_checkpoint}")
-    _log(f"steps={args.steps}  warmup={args.warmup}")
+    train_mode = "full-finetune" if args.full_finetune else "lora"
+    _log(
+        f"model={args.model}  loss={args.loss}  bs={args.batch_size}  "
+        f"grad_ckpt={args.grad_checkpoint}  train_mode={train_mode}"
+    )
+    _log(f"steps={args.steps}  warmup={args.warmup}  seed={args.seed}")
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
@@ -270,7 +293,9 @@ def main():
             steps=args.steps,
             warmup=args.warmup,
             grad_checkpoint=args.grad_checkpoint,
+            full_finetune=args.full_finetune,
             device=device,
+            seed=args.seed,
         )
         results[v] = m
         if m.err:
@@ -293,9 +318,10 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
     ckpt_tag = "_ckpt" if args.grad_checkpoint else ""
+    mode_tag = "_full" if args.full_finetune else "_lora"
     fn = os.path.join(
         args.outdir,
-        f"colpali_realdata_{args.loss}_{gpu}_bs{args.batch_size}{ckpt_tag}.json",
+        f"colpali_realdata_{args.loss}_{gpu}_bs{args.batch_size}{mode_tag}{ckpt_tag}.json",
     )
     with open(fn, "w") as f:
         json.dump(
