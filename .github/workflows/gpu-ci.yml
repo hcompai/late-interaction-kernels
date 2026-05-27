@@ -7,7 +7,7 @@ permissions:
 # Triggered:
 #   - on PRs carrying the `run-gpu-tests` label, when GPU-relevant code changed
 #     (label apply requires triage+);
-#   - manually via workflow_dispatch — launch from
+#   - manually via workflow_dispatch. Launch from
 #     https://github.com/hcompai/late-interaction-kernels/actions/workflows/gpu-ci.yml
 #     (no automatic run on pushes to main, to keep CodeBuild spend predictable).
 on:
@@ -32,10 +32,7 @@ jobs:
     # A10G (g5-class), ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
     runs-on: codebuild-late-interaction-kernels-${{ github.run_id }}-${{ github.run_attempt }}-linux-5.0-gpu_small
     # On PRs, only when the `run-gpu-tests` label is attached (so new commits
-    # on a labeled PR also re-run). Label apply requires triage+ — every
-    # current collaborator on this repo has that, so the gate is effectively
-    # "any internal collaborator can trigger." Manual workflow_dispatch runs
-    # always pass.
+    # on a labeled PR also re-run).
     if: >-
       github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
