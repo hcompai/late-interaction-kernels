@@ -66,6 +66,16 @@ KD_SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
     ("kd-bs1-K100-long", 1, 100, 32, 1024, 128),
 )
 
+# Training shapes: smaller corpora, gradient time matters more than peak
+# throughput. (name, Nq, Nd, Lq, Ld, d)
+TRAIN_SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
+    ("train-bs8", 8, 8, 32, 64, 128),
+    ("train-bs16", 16, 16, 32, 128, 128),
+    ("train-bs32", 32, 32, 32, 200, 128),
+    ("train-bs8-long", 8, 8, 32, 512, 128),
+    ("train-d64", 16, 16, 32, 256, 64),
+)
+
 
 def _sync() -> None:
     torch.mps.synchronize()
@@ -112,6 +122,77 @@ def _kd_eager_call(Q, D):
 
 
 _kd_compile_call = _compile_call
+
+
+def _train_step(maxsim_fn, Q, D, gs):
+    """Forward + backward; resets ``.grad`` so re-runs don't accumulate."""
+    if Q.grad is not None:
+        Q.grad = None
+    if D.grad is not None:
+        D.grad = None
+    scores = maxsim_fn(Q, D)
+    scores.backward(gs)
+
+
+def _metal_train_call():
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_mps
+
+    def f(Q, D):
+        return maxsim_mps(Q, D, normalize=True)
+
+    return f
+
+
+def _compile_train_call():
+    from late_interaction_kernels.mps import compile_dispatch as cd
+
+    def f(Q, D):
+        return cd._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
+
+    return f
+
+
+def _eager_train_call():
+    def f(Q, D):
+        return maxsim_reference(Q, D, normalize=True)
+
+    return f
+
+
+def bench_one_train(name, Nq, Nd, Lq, Ld, d, dtype):
+    """Forward + backward bench. Same shape set / runner as ``bench_one``."""
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype, requires_grad=True)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype, requires_grad=True)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+
+    rows: list[tuple[str, float, float, float]] = []
+
+    metal_fn = _metal_train_call()
+    if _metal.is_available() and _metal.supports(Q, D):
+        # Force the Metal autograd path so we measure the kernel and not
+        # whichever path the heuristic happens to pick.
+        os.environ["LIK_FORCE_MPS_BACKEND"] = "metal"
+        t, sd = _time_op(lambda: _train_step(metal_fn, Q, D, gs))
+        m = _peak_mb(lambda: _train_step(metal_fn, Q, D, gs))
+        rows.append(("metal", t, sd, m))
+        os.environ.pop("LIK_FORCE_MPS_BACKEND", None)
+    else:
+        rows.append(("metal", float("nan"), float("nan"), float("nan")))
+
+    compile_fn = _compile_train_call()
+    try:
+        t, sd = _time_op(lambda: _train_step(compile_fn, Q, D, gs))
+        m = _peak_mb(lambda: _train_step(compile_fn, Q, D, gs))
+        rows.append(("compile", t, sd, m))
+    except Exception:
+        rows.append(("compile", float("nan"), float("nan"), float("nan")))
+
+    eager_fn = _eager_train_call()
+    t, sd = _time_op(lambda: _train_step(eager_fn, Q, D, gs))
+    m = _peak_mb(lambda: _train_step(eager_fn, Q, D, gs))
+    rows.append(("eager", t, sd, m))
+
+    return rows
 
 
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
@@ -197,6 +278,13 @@ def main():
         default="all",
         help="Which shape set to run: cross-product, KD, or both.",
     )
+    ap.add_argument(
+        "--mode",
+        choices=["fwd", "train"],
+        default="fwd",
+        help="``fwd`` (default) times the forward only; ``train`` times "
+        "forward + backward on the TRAIN_SHAPES set.",
+    )
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -214,10 +302,16 @@ def main():
     print()
 
     layouts: list[tuple[str, tuple]] = []
-    if args.layout in ("xprod", "all"):
-        layouts.append(("xprod", SHAPES))
-    if args.layout in ("kd", "all"):
-        layouts.append(("kd", KD_SHAPES))
+    if args.mode == "train":
+        # Train mode runs a fixed set of shapes — KD/pairs autograd is
+        # routed through the compile path today, so only cross-product
+        # shapes belong here.
+        layouts.append(("train", TRAIN_SHAPES))
+    else:
+        if args.layout in ("xprod", "all"):
+            layouts.append(("xprod", SHAPES))
+        if args.layout in ("kd", "all"):
+            layouts.append(("kd", KD_SHAPES))
 
     if args.only:
         wanted = set(args.only)
@@ -238,11 +332,17 @@ def main():
 
     for layout, shape in flat:
         name, Nq, Nd, Lq, Ld, d = shape
-        kd_tag = " [KD]" if layout == "kd" else ""
-        axis = "K" if layout == "kd" else "Nd"
-        print(f"== {name:20s}{kd_tag}  Nq={Nq} {axis}={Nd} Lq={Lq} Ld={Ld} d={d}")
+        if layout == "kd":
+            tag, axis = " [KD]", "K"
+        elif layout == "train":
+            tag, axis = " [train]", "Nd"
+        else:
+            tag, axis = "", "Nd"
+        print(f"== {name:20s}{tag}  Nq={Nq} {axis}={Nd} Lq={Lq} Ld={Ld} d={d}")
         if layout == "kd":
             rows = bench_one_kd(name, Nq, Nd, Lq, Ld, d, dtype)
+        elif layout == "train":
+            rows = bench_one_train(name, Nq, Nd, Lq, Ld, d, dtype)
         else:
             rows = bench_one(name, Nq, Nd, Lq, Ld, d, dtype)
         timings = {impl: (t, sd, m) for impl, t, sd, m in rows}
@@ -282,7 +382,8 @@ def main():
     def _ratio(v: float | None) -> str:
         return f"{v:.2f}x" if v is not None else "n/a"
 
-    md = [f"# MPS forward benchmark — {chip} ({args.dtype})\n"]
+    title = "training" if args.mode == "train" else "forward"
+    md = [f"# MPS {title} benchmark — {chip} ({args.dtype})\n"]
     md.append("30-iter median, `torch.mps.synchronize` between calls.\n")
 
     def _write_section(label: str, entries: list[dict]) -> None:
@@ -311,9 +412,14 @@ def main():
         "KD / pairs (4-D D)",
         [e for e in report["shapes"] if e.get("layout") == "kd"],
     )
+    _write_section(
+        "Training (forward + backward)",
+        [e for e in report["shapes"] if e.get("layout") == "train"],
+    )
 
-    out_md = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.md")
-    out_json = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.json")
+    suffix = "_train" if args.mode == "train" else ""
+    out_md = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}{suffix}.md")
+    out_json = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}{suffix}.json")
     with open(out_md, "w") as f:
         f.write("\n".join(md))
     with open(out_json, "w") as f:
