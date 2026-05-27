@@ -36,6 +36,12 @@ setup: |
   # (ColbertLoss / ColbertPairwiseCELoss / ColbertSigmoidLoss + the
   # processing_utils.BaseVisualRetrieverProcessor.score_multi_vector helper).
   uv pip install "colpali-engine>=0.3.10" datasets pillow
+  # colpali-engine pulls torchvision from PyPI which may be built for a
+  # different torch ABI than our cu124 wheel — force-reinstall from the
+  # pytorch CUDA index so the C++ extensions match.
+  TORCH_VER=$(python -c "import torch; print(torch.__version__.split('+')[0])")
+  uv pip install --index-url https://download.pytorch.org/whl/cu124 \
+      --reinstall "torch==${TORCH_VER}" torchvision
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
   uv pip install flash-attn --no-build-isolation || true
