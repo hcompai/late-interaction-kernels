@@ -35,13 +35,14 @@ setup: |
   # directly. 0.3.10 is the first release with the patched-API surface
   # (ColbertLoss / ColbertPairwiseCELoss / ColbertSigmoidLoss + the
   # processing_utils.BaseVisualRetrieverProcessor.score_multi_vector helper).
-  # Install colpali-engine while pinning torch + torchvision to CUDA-12 builds
-  # from the pytorch-cu124 index. Without the pins, uv would pull PyPI wheels
-  # compiled against CUDA 13 (libcudart.so.13) which won't load on this CUDA
-  # 12.x container. torch 2.6.0+cu124 and torchvision 0.21.0+cu124 are a
-  # compatible pair and satisfy colpali-engine's torch>=2.0 requirement.
+  # Install colpali-engine.
+  # Problem: newer PyPI torchvision (0.26+) bundles CUDA 13 (libcudart.so.13)
+  # which won't load on this CUDA 12.x container. We pin torchvision to 0.21.0
+  # (the PyPI wheel for the torch-2.6 era, compiled against CUDA 12) and keep
+  # torch at the lockfile 2.6.0+cu124 build. colpali-engine only requires
+  # torch>=2.0 so this is fine.
   uv pip install "colpali-engine>=0.3.10" datasets pillow \
-      "torch==2.6.0+cu124" "torchvision==0.21.0+cu124" \
+      "torch==2.6.0+cu124" "torchvision==0.21.0" \
       --extra-index-url https://download.pytorch.org/whl/cu124
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
