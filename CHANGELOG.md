@@ -6,6 +6,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Known regressions in 0.3.0 (to investigate for 0.3.1)
+
+The 0.3.0 H100 sweep (NGC 25.06 / torch 2.8 / triton 3.x) surfaced a
+small set of shape-specific perf regressions vs the 0.2.0 baseline.
+None are correctness issues — every parity assertion in
+`docs/benchmarks.md` still holds — and the wider story is a net
+improvement (`visual` ColPali +23 %, `text-medium` +35 %,
+cached-contrastive vs `torch.compile` 6.7-8.5× → 15-21×). The shapes
+below regressed and are queued for 0.3.1:
+
+- `bench_forward` `text-long` (Nq=1, Nd=1k, Lq=32, Ld=1024):
+  LIK 0.093 ms → 0.121 ms (+30 %). Plausibly an autotune winner that
+  the tighter `prune_forward` SRAM model (#73) now rejects on
+  consumer Ampere too — needs an explicit per-config check on H100.
+- `bench_inference_edge` `LateOn-Code-edge Nd=1k Ld=1024 d=48`:
+  0.072 ms → 0.114 ms (+58 %). Same autotune-shortlist suspicion;
+  `d=48` is the smallest embedding dim in the bench set.
+- `bench_pylate_realdata` `Contrastive bs=16 Lq=32 Ld=256`:
+  e2e step 52.3 ms → 61.6 ms (+18 %). Vanilla baseline unchanged
+  (66.3 ms → 64.2 ms), so the slowdown is in LIK's path. Save-argmax
+  is on (training), so the small-input bypass (#64) is *not* the
+  cause; first thing to check is whether the new `prune_forward`
+  drops a winning config for this Nq=Nd=16 shape.
+
+### Changed
+
+- Headline benchmark ranges in `README.md` refreshed to match the
+  0.3.0 sweep in `docs/benchmarks.md`. See the per-table notes there.
+
 ## [0.3.0] - 2026-05-26
 
 ### Removed
