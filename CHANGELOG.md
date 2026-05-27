@@ -18,6 +18,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `bench_backward_0_5`, `bench_fastplaid_e2e`) now call
   `torch.cuda.reset_peak_memory_stats()` and record `max_memory_allocated()`
   per variant in stdout and JSON.
+- `bench_fp8.py` and `bench_fused_head_train.py` now write `--outdir`
+  JSON + Markdown sidecars alongside the existing stdout table, matching
+  the rest of the benches in the directory. `sky_run_all_benchmarks.yaml`
+  passes `--outdir "$OUT"` to both.
 
 ### Changed
 

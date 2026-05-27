@@ -79,9 +79,9 @@ run: |
   should_run cached_maxsim   && run python benchmarks/bench_cached_maxsim.py    --outdir "$OUT" --variants all
   should_run flash_maxsim    && run python benchmarks/bench_flash_maxsim.py     --outdir "$OUT"
 
-  # --- standalone benches without --outdir (table 4 / 5 / 6) -----------------
-  should_run fp8              && run python benchmarks/bench_fp8.py              2>&1 | tee "$OUT/fp8.log"
-  should_run fused_head_train && run python benchmarks/bench_fused_head_train.py 2>&1 | tee "$OUT/fused_head_train.log"
+  # --- FP8 + fused head (both now write JSON + MD alongside the log) ---------
+  should_run fp8              && run python benchmarks/bench_fp8.py              --outdir "$OUT" 2>&1 | tee "$OUT/fp8.log"
+  should_run fused_head_train && run python benchmarks/bench_fused_head_train.py --outdir "$OUT" 2>&1 | tee "$OUT/fused_head_train.log"
 
   # --- end-to-end PyLate Contrastive sweep (table 9) -------------------------
   if should_run pylate_training; then
