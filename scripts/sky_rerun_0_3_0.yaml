@@ -1,0 +1,128 @@
+# Rerun every benchmark behind docs/benchmarks.md on a single 1×H100 cluster.
+# Tars the result directory back to the controller for download.
+#
+#   sky launch -c lik-rerun-0.3.0 scripts/sky_rerun_0_3_0.yaml -y
+#   sky logs lik-rerun-0.3.0
+#   sky down lik-rerun-0.3.0 -y
+#
+# Skipped sections (kept as-is in docs):
+#   * Apple Silicon (MPS) — needs an Apple device, not H100.
+#   * 8-GPU DDP cached-contrastive — single-cluster budget.
+
+name: lik-rerun-0.3.0
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+envs:
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda --extra pylate
+  # pylate 1.5+ broke patch_pylate's `(queries_mask, documents_mask)` signature.
+  uv pip install "pylate==1.3.3"
+  # Optional baselines; failure to install is non-fatal — each bench probes
+  # via `import` and skips itself if the dep is missing.
+  uv pip install "flash-maxsim==0.2.0" || true
+  uv pip install "fast-plaid==1.4.6.280" || true
+
+run: |
+  set -uxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  source .venv/bin/activate
+  export LIK_SUPPRESS_NORM_WARN=1
+
+  python -c "import torch; print('GPU:', torch.cuda.get_device_name()); print('torch:', torch.__version__)"
+
+  OUT=/tmp/bench
+  mkdir -p "$OUT"
+
+  run() {
+    echo ""
+    echo "=================================================================="
+    echo "Running: $*"
+    echo "=================================================================="
+    ( "$@" ) || echo "WARN: $* failed (exit $?) — continuing"
+  }
+
+  # --- microbenchmarks (docs/benchmarks.md tables 1, 2, 3, 5, 6, 8, 10) -------
+  run python benchmarks/bench_forward.py          --outdir "$OUT"
+  run python benchmarks/bench_inference_edge.py   --outdir "$OUT"
+  run python benchmarks/bench_normalize.py        --outdir "$OUT"
+  run python benchmarks/bench_backward_method.py  --outdir "$OUT"
+  run python benchmarks/bench_lateon.py           --outdir "$OUT"
+  run python benchmarks/bench_cached_maxsim.py    --outdir "$OUT" --only all
+  run python benchmarks/bench_flash_maxsim.py     --outdir "$OUT"
+
+  # --- standalone benches without --outdir (table 4 / 5 / 6) -----------------
+  run python benchmarks/bench_fp8.py              2>&1 | tee "$OUT/fp8.log"
+  run python benchmarks/bench_fused_head_train.py 2>&1 | tee "$OUT/fused_head_train.log"
+
+  # --- end-to-end PyLate Contrastive sweep (table 9) -------------------------
+  for bs_neg in "64 1" "128 2" "256 3"; do
+    set -- $bs_neg
+    bs=$1; neg=$2
+    run python benchmarks/bench_pylate_training.py \
+        --batch-size $bs --neg $neg --lq 32 --ld 200 --d 128 \
+        2>&1 | tee "$OUT/pylate_training_bs${bs}_neg${neg}.log"
+  done
+
+  # --- end-to-end LateOn-Code-edge training (table 7) ------------------------
+  for shape in "256 256" "192 512" "128 1024" "64 2048"; do
+    set -- $shape
+    bs=$1; ld=$2
+    run python benchmarks/bench_pylate_lateon.py \
+        --model lightonai/LateOn-Code-edge \
+        --recipe contrastive \
+        --batch-size $bs --Lq 32 --Ld $ld \
+        --iters 8 --warmup 2 --outdir "$OUT" \
+        2>&1 | tee "$OUT/lateon_edge_bs${bs}_ld${ld}.log"
+  done
+
+  # --- PLAID decompress + maxsim (memory/perf table in PLAID section) --------
+  run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "$OUT" \
+      2>&1 | tee "$OUT/decompress_nb2_bf16.log"
+
+  # --- end-to-end fast-plaid comparison (PLAID main table) -------------------
+  run python benchmarks/bench_fastplaid_e2e.py --outdir "$OUT" \
+      2>&1 | tee "$OUT/fastplaid_e2e.log"
+
+  # --- LateOn-Code-edge real-data training (real MS MARCO table) -------------
+  run python benchmarks/bench_pylate_realdata.py \
+      --model lightonai/LateOn-Code-edge \
+      --recipe contrastive \
+      --batch-size 16 --Lq 32 --Ld 256 \
+      --steps 20 --warmup 3 --outdir "$OUT" \
+      2>&1 | tee "$OUT/realdata_contrastive_bs16_ld256.log"
+
+  run python benchmarks/bench_pylate_realdata.py \
+      --model lightonai/LateOn-Code-edge \
+      --recipe reason \
+      --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 300 \
+      --steps 12 --warmup 3 --grad-checkpoint --outdir "$OUT" \
+      2>&1 | tee "$OUT/realdata_cached_bs64_ld300.log"
+
+  run python benchmarks/bench_pylate_realdata.py \
+      --model lightonai/LateOn-Code-edge \
+      --recipe reason \
+      --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 512 \
+      --steps 8 --warmup 2 --grad-checkpoint --outdir "$OUT" \
+      2>&1 | tee "$OUT/realdata_cached_bs128_ld512.log"
+
+  echo ""
+  echo "=== artifacts ==="
+  ls -la "$OUT"
+  tar -czf /tmp/bench_artifacts.tgz -C /tmp bench
+  ls -la /tmp/bench_artifacts.tgz
