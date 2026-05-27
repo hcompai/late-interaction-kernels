@@ -29,20 +29,9 @@ import importlib.util
 import json
 import os
 import random
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-# ColQwen2 uses qwen_vl_utils for image preprocessing — not torchvision.
-# Setting sys.modules["torchvision"] = None makes find_spec() return None,
-# which causes transformers.is_torchvision_available() → False, which
-# skips the conditional torchvision imports in image_utils.py. This lets
-# the Gemma3 import chain inside colpali_engine succeed without needing
-# the torchvision C++ extension (which fails on CUDA 12.x containers
-# when newer PyPI torchvision wheels require libcudart.so.13).
-if "torchvision" not in sys.modules:
-    sys.modules["torchvision"] = None  # type: ignore[assignment]
 
 import torch
 

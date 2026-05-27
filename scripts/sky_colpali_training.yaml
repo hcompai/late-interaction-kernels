@@ -35,15 +35,16 @@ setup: |
   # directly. 0.3.10 is the first release with the patched-API surface
   # (ColbertLoss / ColbertPairwiseCELoss / ColbertSigmoidLoss + the
   # processing_utils.BaseVisualRetrieverProcessor.score_multi_vector helper).
-  # Install colpali-engine.
-  # Problem: newer PyPI torchvision (0.26+) bundles CUDA 13 (libcudart.so.13)
-  # which won't load on this CUDA 12.x container. We pin torchvision to 0.21.0
-  # (the PyPI wheel for the torch-2.6 era, compiled against CUDA 12) and keep
-  # torch at the lockfile 2.6.0+cu124 build. colpali-engine only requires
-  # torch>=2.0 so this is fine.
+  # Install colpali-engine, pinning torch+torchvision to cu128 builds.
+  # The cu124 pytorch index serves torch 2.8.0+cu128 as its latest wheel.
+  # We must use the matching torchvision 0.26.0+cu128 (from the cu128 index)
+  # so the torchvision C++ extension ABI matches torch and loads correctly.
+  # PyPI torchvision 0.26.0 requires libcudart.so.13 (CUDA 13) and won't
+  # load on this CUDA 12.9 container, but the +cu128 build uses
+  # libcudart.so.12 (CUDA 12.8), which the container provides.
   uv pip install "colpali-engine>=0.3.10" datasets pillow \
-      "torch==2.6.0+cu124" "torchvision==0.21.0" \
-      --extra-index-url https://download.pytorch.org/whl/cu124
+      "torch==2.8.0+cu128" "torchvision==0.26.0+cu128" \
+      --extra-index-url https://download.pytorch.org/whl/cu128
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
   uv pip install flash-attn --no-build-isolation || true
@@ -51,8 +52,6 @@ setup: |
   # Uses the same torchvision mock as the bench scripts (ColQwen2 uses
   # qwen_vl_utils, not torchvision; the mock just satisfies transformers).
   uv run python -c "
-  import sys
-  sys.modules['torchvision'] = None
   import torch
   from colpali_engine.models import ColQwen2, ColQwen2Processor
   from colpali_engine.loss.late_interaction_losses import ColbertLoss
