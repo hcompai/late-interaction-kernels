@@ -230,14 +230,14 @@ def run_shape(name, batch, mini, Lq, Ld, variants, iters, warmup):
             fwd_ms = _timed(_fwd, iters=iters, warmup=warmup)
             torch.cuda.reset_peak_memory_stats()
             fwdbwd_ms = _timed(_fwdbwd, iters=iters, warmup=warmup)
-            peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+            peak_mb = torch.cuda.max_memory_allocated() / 1024**2
             row[f"{variant}_fwd"] = fwd_ms
             row[f"{variant}_fwdbwd"] = fwdbwd_ms
-            row[f"{variant}_peak"] = peak_gb
+            row[f"{variant}_peak_mb"] = peak_mb
         except torch.cuda.OutOfMemoryError:
             row[f"{variant}_fwd"] = float("nan")
             row[f"{variant}_fwdbwd"] = float("nan")
-            row[f"{variant}_peak"] = float("nan")
+            row[f"{variant}_peak_mb"] = float("nan")
             row[f"{variant}_err"] = "OOM"
 
         del Q, D_, d_mask

@@ -232,8 +232,8 @@ def main():
                 "bwd_csr_ms": t_bwd_csr,
                 "bwd_auto_ms": t_bwd_auto,
                 "bwd_naive_ms": t_bwd_naive,
-                "mem_flash_MB": mem_flash,
-                "mem_naive_MB": mem_naive,
+                "flash_peak_mb": mem_flash,
+                "naive_peak_mb": mem_naive,
                 "auto_pick": pick,
             }
         )

@@ -137,6 +137,11 @@ On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-15×; the
 HBM round-trip on the similarity tile dominates. On tiny shapes the
 kernel-launch + autotune overhead caps the win at ~1.5-2.5×.
 
+The `naive scratch` column shows naive peak → LIK peak; LIK never
+materialises the `[Nq · Nd · Lq · Ld]` similarity tile, so its peak
+working set is bounded by the output and ranges from a few KB to
+~64 KB across the table — effectively zero next to the naive scratch.
+
 
 ### vs `flash-maxsim` (same Triton MaxSim math)
 
@@ -166,7 +171,9 @@ The two kernels are within ±3% on tight rerank / short-context shapes
 and LIK pulls ahead by 1.08–1.21× on the wide ones (`rerank-very-long`,
 `rerank-colpali`, `train-in-batch-128`); on `rerank-short` and
 `train-long-doc` both are saturated by L2-normalized HBM traffic and
-LIK loses by a fraction of a percent. The real differentiators are
+LIK loses by a fraction of a percent. Both kernels are fused (neither
+materialises the score tile), so peak working set is sub-100 KB on
+every shape and there's no memory column to compare. The real differentiators are
 elsewhere: a fused `normalize=True` (no extra HBM round-trip), a real
 autograd-aware backward (`unified` / `csr` / `atomic`), packed/varlen,
 PLAID residual decompression, and a fused D-side projection head —
@@ -181,14 +188,19 @@ The fused path normalizes in SRAM, eliminating two HBM round-trips, and
 the backward correctly applies the L2-norm Jacobian.
 
 
-| shape                                  | `F.normalize` + maxsim | fused    | speedup   |
-| -------------------------------------- | ---------------------- | -------- | --------- |
-| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.463 ms               | 0.099 ms | 4.7×      |
-| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.465 ms               | 0.104 ms | **14.1×** |
-| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.272 ms               | 0.102 ms | 2.7×      |
-| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.248 ms               | 0.090 ms | 2.8×      |
-| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.283 ms               | 0.132 ms | 2.1×      |
-| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.285 ms | **14.7×** |
+| shape                                  | `F.normalize` + maxsim | fused    | speedup   | explicit peak | fused peak | mem ratio |
+| -------------------------------------- | ---------------------- | -------- | --------- | ------------- | ---------- | --------- |
+| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.463 ms               | 0.099 ms | 4.7×      |   368 MB      |   74 MB    | **5.0×**  |
+| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.465 ms               | 0.104 ms | **14.1×** |  1254 MB      |  250 MB    | **5.0×**  |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.272 ms               | 0.102 ms | 2.7×      |    12 MB      |    3 MB    | **4.8×**  |
+| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.248 ms               | 0.090 ms | 2.8×      |    40 MB      |    8 MB    | **5.0×**  |
+| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.283 ms               | 0.132 ms | 2.1×      |   161 MB      |   32 MB    | **5.0×**  |
+| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.285 ms | **14.7×** |  3674 MB      |  733 MB    | **5.0×**  |
+
+The explicit path writes a normalized copy of `D` to HBM and re-reads
+it during the matmul; the fused path streams the same data through
+threadgroup memory and never writes the intermediate, so peak working
+set drops by a steady ~5× across the whole sweep.
 
 
 ## PLAID / ColBERTv2
@@ -212,13 +224,13 @@ We report two LIK variants:
   fast-plaid currently does in Rust and we don't.
 
 
-| corpus shape (nbits)    | `engine.search()` | `lik_full + top-k` | `lik_partial + top-k` | full speedup | partial speedup |
-| ----------------------- | ----------------- | ------------------ | --------------------- | ------------ | --------------- |
-| 5 000 docs × 200, nb=2  | 23.50 ms          | 1.48 ms            | 1.28 ms               | **15.9×**    | **18.3×**       |
-| 10 000 docs × 300, nb=2 | 47.27 ms          | 3.78 ms            | 1.73 ms               | **12.5×**    | **27.3×**       |
-| 10 000 docs × 512, nb=2 | 79.73 ms          | 5.61 ms            | 2.49 ms               | **14.2×**    | **32.0×**       |
-| 10 000 docs × 512, nb=4 | 138.43 ms         | 6.04 ms            | 2.71 ms               | **22.9×**    | **51.0×**       |
-| 25 000 docs × 300, nb=2 | 77.24 ms          | 9.25 ms            | 1.71 ms               | **8.3×**     | **45.1×**       |
+| corpus shape (nbits)    | `engine.search()` | `lik_full + top-k` | `lik_partial + top-k` | full speedup | partial speedup | lik_full peak | lik_partial peak |
+| ----------------------- | ----------------- | ------------------ | --------------------- | ------------ | --------------- | ------------- | ---------------- |
+| 5 000 docs × 200, nb=2  | 23.50 ms          | 1.48 ms            | 1.28 ms               | **15.9×**    | **18.3×**       |   72 MB       |   95 MB          |
+| 10 000 docs × 300, nb=2 | 47.27 ms          | 3.78 ms            | 1.73 ms               | **12.5×**    | **27.3×**       |  145 MB       |  180 MB          |
+| 10 000 docs × 512, nb=2 | 79.73 ms          | 5.61 ms            | 2.49 ms               | **14.2×**    | **32.0×**       |  217 MB       |  277 MB          |
+| 10 000 docs × 512, nb=4 | 138.43 ms         | 6.04 ms            | 2.71 ms               | **22.9×**    | **51.0×**       |  334 MB       |  442 MB          |
+| 25 000 docs × 300, nb=2 | 77.24 ms          | 9.25 ms            | 1.71 ms               | **8.3×**     | **45.1×**       |  306 MB       |  341 MB          |
 
 
 Reading: even with the top-k argmax folded into the LIK side, the
@@ -242,15 +254,15 @@ Both columns use the same LIK MaxSim — the only difference is whether
 the projection / normalize step is folded in:
 
 
-| shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   |
-| ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- |
-| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.93 ms                                       |  0.98 ms | 0.95×     |
-| LateOn `Nd=32, Lq=32, Ld=1024`                         |  0.93 ms                                       |  0.99 ms | 0.94×     |
-| LateOn-Code `Nd=128, Ld=1024`                          |  1.47 ms                                       |  1.04 ms | 1.42×     |
-| LateOn-Code `Nd=256, Ld=1024`                          |  2.34 ms                                       |  1.09 ms | **2.15×** |
-| LateOn-Code `Nd=512, Ld=2048`                          |  7.31 ms                                       |  1.71 ms | **4.28×** |
-| LateOn-Code `Nd=1024, Ld=2048`                         | 14.08 ms                                       |  3.15 ms | **4.47×** |
-| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.23 ms                                       |  1.33 ms | **3.93×** |
+| shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   | unfused peak | fused peak |
+| ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- | ------------ | ---------- |
+| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.93 ms                                       |  0.98 ms | 0.95×     |    84 MB     |   86 MB    |
+| LateOn `Nd=32, Lq=32, Ld=1024`                         |  0.93 ms                                       |  0.99 ms | 0.94×     |   201 MB     |  189 MB    |
+| LateOn-Code `Nd=128, Ld=1024`                          |  1.47 ms                                       |  1.04 ms | 1.42×     |   608 MB     |  505 MB    |
+| LateOn-Code `Nd=256, Ld=1024`                          |  2.34 ms                                       |  1.09 ms | **2.15×** |  1028 MB     |  889 MB    |
+| LateOn-Code `Nd=512, Ld=2048`                          |  7.31 ms                                       |  1.71 ms | **4.28×** |  3524 MB     | 3193 MB    |
+| LateOn-Code `Nd=1024, Ld=2048`                         | 14.08 ms                                       |  3.15 ms | **4.47×** |  6852 MB     | 6321 MB    |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.23 ms                                       |  1.33 ms | **3.93×** |  1988 MB     | 1631 MB    |
 
 
 The win grows with `Nd · Ld` (more positions for the fused linear to
@@ -288,6 +300,13 @@ behind — kernel-launch and the e4m3 packing pay back only once
 `Ld ≥ 256` and corpus ≥ 4k, where fp8 lands 1.12-1.29×. Tolerance vs
 bf16 stays inside 5e-3 absolute on every shape we tested — fine for
 top-k retrieval where ordering, not exact scores, is what matters.
+
+Peak working set is identical between the two columns (same Q/D
+tensors live in HBM either way; both kernels are fused so neither
+allocates score-tile scratch). The memory win of fp8 is upstream of
+this bench — if the index is *stored* fp8 (PyLate's PLAID index can
+ship that way), `D` itself is 2× smaller in HBM and the corpus
+fits in half the RAM.
 
 ## End-to-end LateOn-Code-edge training (17 M encoder)
 

@@ -126,7 +126,7 @@ def _peak(fn) -> float:
     torch.cuda.reset_peak_memory_stats()
     fn()
     torch.cuda.synchronize()
-    return torch.cuda.max_memory_allocated() / 1024**3
+    return torch.cuda.max_memory_allocated() / 1024**2
 
 
 def run_isolated(args) -> list[dict]:
@@ -188,7 +188,7 @@ def run_isolated(args) -> list[dict]:
             if rel > 1e-2:
                 print(f"  WARNING: {name} rel err = {rel:.3e} (max abs {max_abs:.3e})")
 
-        row.update(dict(fp_ms=fp_ms, flash_ms=fl_ms, fp_peak_gb=fp_peak, flash_peak_gb=fl_peak))
+        row.update(dict(fp_ms=fp_ms, flash_ms=fl_ms, fp_peak_mb=fp_peak, flash_peak_mb=fl_peak))
         rows.append(row)
 
         def r(a, b):
@@ -198,7 +198,7 @@ def run_isolated(args) -> list[dict]:
 
         print(
             f"{name:<22} {fp_ms:>8.3f} {fl_ms:>10.3f} {r(fp_ms, fl_ms):>7.2f}x "
-            f"{fp_peak:>9.2f}G {fl_peak:>11.2f}G {r(fp_peak, fl_peak):>6.1f}x"
+            f"{fp_peak:>8.1f}M {fl_peak:>10.1f}M {r(fp_peak, fl_peak):>6.1f}x"
         )
 
         del Q, D_, d_mask

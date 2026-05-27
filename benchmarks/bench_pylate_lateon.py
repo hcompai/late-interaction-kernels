@@ -137,7 +137,7 @@ def _build_batch(model, tokenizer, batch_size: int, Lq: int, Ld: int, device: to
 @dataclass
 class Measurement:
     step_ms: float
-    peak_gb: float
+    peak_mb: float
     err: str | None = None
 
 
@@ -215,9 +215,9 @@ def run_one(
         f"pylate.losses.contrastive.colbert_scores is flash={is_flash_loss}"
     )
     if variant == "flash" and not (is_flash_top and is_flash_loss):
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch not active")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch not active")
     if variant == "vanilla" and (is_flash_top or is_flash_loss):
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="patch leaked into vanilla")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="patch leaked into vanilla")
 
     try:
         model = models.ColBERT(
@@ -226,7 +226,7 @@ def run_one(
             query_length=Lq,
         ).to(device)
     except Exception as e:  # noqa: BLE001
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"model load: {e}")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"model load: {e}")
 
     if grad_checkpoint:
         try:
@@ -238,7 +238,7 @@ def run_one(
                 transformer.config.use_cache = False
             assert transformer.is_gradient_checkpointing, "gradient checkpointing did not enable"
         except Exception as e:  # noqa: BLE001
-            return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"grad ckpt: {e}")
+            return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"grad ckpt: {e}")
 
     if use_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -264,7 +264,7 @@ def run_one(
     try:
         batch = _build_batch(model, tokenizer, batch_size, Lq, Ld, device)
     except Exception as e:  # noqa: BLE001
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err=f"build batch: {e}")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"build batch: {e}")
 
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4)
     # Match LightOn's training: bf16=True in SentenceTransformerTrainingArguments runs the
@@ -281,15 +281,15 @@ def run_one(
     try:
         step_ms = _timed_step(step, iters=iters, warmup=warmup)
     except torch.cuda.OutOfMemoryError:
-        return Measurement(step_ms=float("nan"), peak_gb=float("nan"), err="OOM")
+        return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err="OOM")
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1024**3
+    peak_mb = torch.cuda.max_memory_allocated() / 1024**2
 
     del model, loss_fn, optim, batch
     gc.collect()
     torch.cuda.empty_cache()
 
-    return Measurement(step_ms=step_ms, peak_gb=peak_gb)
+    return Measurement(step_ms=step_ms, peak_mb=peak_mb)
 
 
 # --------------------------------------------------------------------------- #
@@ -369,15 +369,17 @@ def main():
         if m.err:
             _log(f"  {tag}: FAILED ({m.err})")
         else:
-            _log(f"  {tag}: {m.step_ms:8.2f} ms/step   peak {m.peak_gb:5.2f} GB")
+            _log(f"  {tag}: {m.step_ms:8.2f} ms/step   peak {m.peak_mb / 1024:5.2f} GB")
 
     if "vanilla" in results and "flash" in results and all(r.err is None for r in results.values()):
         vr, fr = results["vanilla"], results["flash"]
         speed_ratio = vr.step_ms / fr.step_ms
-        mem_delta = vr.peak_gb - fr.peak_gb
+        mem_delta_gb = (vr.peak_mb - fr.peak_mb) / 1024
         _log("-" * 70)
         _log(f"  speedup:     {speed_ratio:.2f}x  ({vr.step_ms:.2f} -> {fr.step_ms:.2f} ms)")
-        _log(f"  memory won:  {mem_delta:+.2f} GB  ({vr.peak_gb:.2f} -> {fr.peak_gb:.2f} GB)")
+        _log(
+            f"  memory won:  {mem_delta_gb:+.2f} GB  ({vr.peak_mb / 1024:.2f} -> {fr.peak_mb / 1024:.2f} GB)"
+        )
 
     if _rank() == 0:
         os.makedirs(args.outdir, exist_ok=True)
@@ -393,7 +395,7 @@ def main():
             "total_batch_size": total_batch,
             "time_s": time.time(),
             "results": {
-                k: {"step_ms": v.step_ms, "peak_gb": v.peak_gb, "err": v.err} for k, v in results.items()
+                k: {"step_ms": v.step_ms, "peak_mb": v.peak_mb, "err": v.err} for k, v in results.items()
             },
         }
         with open(fn, "w") as f:
