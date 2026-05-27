@@ -47,17 +47,17 @@ setup: |
   uv pip install flash-attn --no-build-isolation || true
   # Sanity check the model + processor + loss patcher can all hydrate.
   uv run python -c "
-import torch
-from colpali_engine.models import ColQwen2, ColQwen2Processor
-from colpali_engine.loss.late_interaction_losses import ColbertLoss
-from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
-print('gpu', torch.cuda.get_device_name())
-print('torch', torch.__version__, 'cuda', torch.version.cuda)
-proc = ColQwen2Processor.from_pretrained('vidore/colqwen2-v1.0')
-print('processor ok', type(proc).__name__)
-patch_colpali_engine(); unpatch_colpali_engine()
-print('patcher ok')
-"
+  import torch
+  from colpali_engine.models import ColQwen2, ColQwen2Processor
+  from colpali_engine.loss.late_interaction_losses import ColbertLoss
+  from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
+  print('gpu', torch.cuda.get_device_name())
+  print('torch', torch.__version__, 'cuda', torch.version.cuda)
+  proc = ColQwen2Processor.from_pretrained('vidore/colqwen2-v1.0')
+  print('processor ok', type(proc).__name__)
+  patch_colpali_engine(); unpatch_colpali_engine()
+  print('patcher ok')
+  "
 
 run: |
   set -euxo pipefail
