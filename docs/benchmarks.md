@@ -441,6 +441,43 @@ dominates again. Same bottleneck story as the LateOn 149 M numbers
 from v0.1.0 (`bench_pylate_lateon.py`), just shifted up the batch
 axis because the encoder is 9× smaller.
 
+## End-to-end ColQwen2 / ColPali training
+
+Real `colpali_engine.models.ColQwen2("vidore/colqwen2-v1.0")` (Qwen2-VL
+2 B backbone + LoRA, `d=128`, multi-vector image / query embeddings),
+LoRA-only training (37 M of 2 246 M params trainable — the official
+ColPali recipe via `peft.get_peft_model`), AdamW + bf16 weights. We
+swap `patch_colpali_engine()` on/off and time full optimizer steps
+(vision tower + text encoder forward + ColbertLoss + backward + step).
+Reproduce with `scripts/sky_colpali_training.yaml` and
+`benchmarks/bench_colpali_training.py` (synthetic) /
+`bench_colpali_realdata.py` (real `vidore/docvqa_test_subsampled`).
+
+
+| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak     |
+| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------- |
+| `ColbertLoss`       | synth bs=4, 448px                  |  386.9 ms              |  370.4 ms | **1.04×** |  9.10 GB |
+| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  895.4 ms              |  882.4 ms | 1.01×     |  5.74 GB |
+| `ColbertPairwiseCE` | synth bs=4, 448px                  |  366.9 ms              |  363.8 ms | 1.01×     |  9.10 GB |
+| `ColbertLoss`       | synth bs=16, 1024px                |  831.8 ms              |  831.7 ms | 1.00×     | 49.61 GB |
+| `ColbertLoss`       | synth bs=16, 1024px, grad-ckpt     | 2099.5 ms              | 2093.5 ms | 1.00×     | 11.54 GB |
+| `ColbertLoss`       | real DocVQA bs=4                   |  770.7 ms              |  723.6 ms | **1.07×** | 16.20 GB |
+| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 1941.3 ms              | 1865.7 ms | 1.04×     |  8.05 GB |
+
+
+Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
+forward+backward than a ModernBERT-149 M ColBERT, and the image
+modality blows up Ld (≈1 030 visual tokens at the default 448 px
+resolution; ≈3 060 at 1 024 px). So even with LoRA-only training
+shrinking AdamW state by ~60×, the *encoder activation-grad
+backward* is what dominates the step — LIK lands in the 1.00–1.07×
+range here. Best win is the 448 px / bs=4 real-data step (**1.07×**)
+where the encoder share is smallest; at 1 024 px the encoder fully
+swallows the step. The kernel is a drop-in — no other code changes
+between the two columns. Same takeaway as the PyLate `Contrastive`
+recipe on the 149 M encoder: when the transformer is the bottleneck,
+LIK doesn't move the needle, it just doesn't hurt.
+
 ## Edge models (`d ∈ {48, 64}`)
 
 Edge ColBERT models (`d ∈ {48, 64}`) are more memory-bound, so the
