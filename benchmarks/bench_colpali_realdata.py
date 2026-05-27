@@ -65,13 +65,22 @@ if "torchvision" not in sys.modules:
         RGB = 3
         RGB_ALPHA = 4
 
+    class _InterpolationMode(enum.Enum):
+        NEAREST = "nearest"
+        BILINEAR = "bilinear"
+        BICUBIC = "bicubic"
+        BOX = "box"
+        HAMMING = "hamming"
+        LANCZOS = "lanczos"
+
     def _decode_image_stub(*args, **kwargs):
         raise RuntimeError("torchvision mock: decode_image not available")
 
     sys.modules["torchvision.io"].ImageReadMode = _ImageReadMode
     sys.modules["torchvision.io"].decode_image = _decode_image_stub
+    sys.modules["torchvision.transforms"].InterpolationMode = _InterpolationMode
     sys.modules["torchvision"] = _tv
-    del _tv, _m, _s, _ImageReadMode, _decode_image_stub, _im
+    del _tv, _m, _s, _ImageReadMode, _InterpolationMode, _decode_image_stub, _im
 
 import torch
 
