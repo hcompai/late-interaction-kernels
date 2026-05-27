@@ -44,12 +44,19 @@ from pathlib import Path
 # PyPI torchvision wheels require libcudart.so.13 while this container
 # has CUDA 12.x. Inject a minimal mock before any colpali_engine import
 # so the chain succeeds without the C++ extension ever loading.
+# __spec__ must be set on the mock; transformers calls find_spec("torchvision")
+# which raises ValueError if __spec__ is None.
 if "torchvision" not in sys.modules:
+    import importlib.machinery as _im
+
     _tv = types.ModuleType("torchvision")
     _tv.__version__ = "0.0.0+mock"
+    _tv.__spec__ = _im.ModuleSpec("torchvision", loader=None, is_package=True)
+    _tv.__path__ = []
     for _s in ("extension", "_meta_registrations", "ops", "io",
                "transforms", "models", "datasets", "utils"):
         _m = types.ModuleType(f"torchvision.{_s}")
+        _m.__spec__ = _im.ModuleSpec(f"torchvision.{_s}", loader=None)
         setattr(_tv, _s, _m)
         sys.modules[f"torchvision.{_s}"] = _m
 
@@ -66,7 +73,7 @@ if "torchvision" not in sys.modules:
     sys.modules["torchvision.io"].ImageReadMode = _ImageReadMode
     sys.modules["torchvision.io"].decode_image = _decode_image_stub
     sys.modules["torchvision"] = _tv
-    del _tv, _m, _s, _ImageReadMode, _decode_image_stub
+    del _tv, _m, _s, _ImageReadMode, _decode_image_stub, _im
 
 import torch
 
