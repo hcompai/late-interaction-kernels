@@ -40,6 +40,27 @@ def _ref(Q, D, q_mask=None, d_mask=None, normalize=True):
     )
 
 
+def _kd_ref(Q, D, q_mask=None, d_mask=None, normalize=True):
+    """Dense KD reference: ``Q[Nq, Lq, d] × D[Nq, K, Ld, d] -> [Nq, K]``."""
+    import torch.nn.functional as F
+
+    from late_interaction_kernels.reference import NEG_INF
+
+    Qf = Q.cpu().float()
+    Df = D.cpu().float()
+    if normalize:
+        Qf = F.normalize(Qf, p=2, dim=-1, eps=1e-12)
+        Df = F.normalize(Df, p=2, dim=-1, eps=1e-12)
+    S = torch.einsum("ild,iktd->iklt", Qf, Df)  # [Nq, K, Lq, Ld]
+    if d_mask is not None:
+        S = S.masked_fill(~d_mask.cpu().bool().unsqueeze(2), NEG_INF)
+    row_max = S.max(dim=-1).values
+    row_max = torch.where(torch.isfinite(row_max), row_max, torch.zeros_like(row_max))
+    if q_mask is not None:
+        row_max = row_max * q_mask.cpu().to(row_max.dtype).unsqueeze(1)
+    return row_max.sum(dim=-1)
+
+
 def _rel(out: torch.Tensor, ref: torch.Tensor) -> float:
     return (out - ref).abs().max().item() / max(1e-6, ref.abs().max().item())
 
@@ -149,6 +170,163 @@ def test_metal_kernel_full_d_mask_is_zero():
     dm = torch.zeros(3, 16, dtype=torch.bool, device="mps")
     out = _metal.maxsim_inference_metal(Q, D, d_mask=dm, normalize=True)
     assert torch.all(out == 0)
+
+
+# --------------------------------------------------------------------------- #
+# KD / pairs layout (4-D D)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # (Nq, K, Lq, Ld, d) — covers the typical PyLate-KD inference envelope
+        # and the K=1 (pairs) corner case.
+        (1, 1, 32, 256, 128),    # pairs: single query, single candidate
+        (1, 10, 32, 300, 128),   # rerank: top-10 candidates
+        (4, 8, 32, 256, 128),    # batched-KD typical
+        (8, 32, 32, 200, 128),   # PyLate KD-bs8 with 32 negatives
+        (2, 4, 32, 64, 48),      # edge: d=48
+        (1, 16, 16, 512, 96),    # edge: d=96, long Ld
+        (1, 32, 32, 1024, 128),  # large per-query slab
+        (2, 3, 12, 23, 64),      # Lq/Ld non-aligned
+    ],
+    ids=lambda s: f"Nq{s[0]}_K{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}",
+)
+@pytest.mark.parametrize("normalize", [True, False])
+@pytest.mark.parametrize(
+    "dtype,tol",
+    [(torch.float16, 5e-3), (torch.bfloat16, 3e-2)],
+    ids=["fp16", "bf16"],
+)
+def test_metal_kd_matches_reference(shape, normalize, dtype, tol):
+    """KD layout (D 4-D) matches the dense einsum reference within fp16/bf16 tolerance."""
+    Nq, K, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, dtype=dtype, device="mps")
+    D = torch.randn(Nq, K, Ld, d, dtype=dtype, device="mps")
+    out = _metal.maxsim_inference_metal(Q, D, normalize=normalize)
+    assert out.shape == (Nq, K)
+    assert out.dtype == torch.float32
+    rel = _rel(out.cpu(), _kd_ref(Q, D, normalize=normalize))
+    assert rel < tol, f"rel err {rel:.2e} exceeds {tol}"
+
+
+def test_metal_kd_with_d_mask_matches_reference():
+    """KD layout with a 3-D ``d_mask`` of shape ``[Nq, K, Ld]``."""
+    torch.manual_seed(0)
+    Nq, K, Lq, Ld, d = 2, 4, 16, 32, 64
+    Q = torch.randn(Nq, Lq, d, dtype=torch.float16, device="mps")
+    D = torch.randn(Nq, K, Ld, d, dtype=torch.float16, device="mps")
+    dm = torch.ones(Nq, K, Ld, dtype=torch.bool, device="mps")
+    dm[:, :, -5:] = False  # last 5 doc tokens masked across every slab
+    out = _metal.maxsim_inference_metal(Q, D, d_mask=dm, normalize=True)
+    rel = _rel(out.cpu(), _kd_ref(Q, D, d_mask=dm, normalize=True))
+    assert rel < 5e-3
+
+
+def test_metal_kd_with_q_mask_matches_reference():
+    """KD layout with a 2-D ``q_mask`` ``[Nq, Lq]`` (one mask per query)."""
+    torch.manual_seed(0)
+    Nq, K, Lq, Ld, d = 3, 5, 12, 24, 64
+    Q = torch.randn(Nq, Lq, d, dtype=torch.float16, device="mps")
+    D = torch.randn(Nq, K, Ld, d, dtype=torch.float16, device="mps")
+    qm = torch.ones(Nq, Lq, dtype=torch.bool, device="mps")
+    qm[:, -3:] = False
+    out = _metal.maxsim_inference_metal(Q, D, q_mask=qm, normalize=True)
+    rel = _rel(out.cpu(), _kd_ref(Q, D, q_mask=qm, normalize=True))
+    assert rel < 5e-3
+
+
+def test_metal_kd_matches_cross_product_diagonal():
+    """K=1 KD layout equals cross-product diagonal — same kernel, same answer."""
+    torch.manual_seed(0)
+    Nq, Lq, Ld, d = 4, 8, 16, 64
+    Q = torch.randn(Nq, Lq, d, dtype=torch.float16, device="mps")
+    D_pairs = torch.randn(Nq, Ld, d, dtype=torch.float16, device="mps")
+    # KD with K=1
+    kd_out = _metal.maxsim_inference_metal(Q, D_pairs.unsqueeze(1), normalize=True)
+    # Cross-product, take the diagonal
+    xp_out = _metal.maxsim_inference_metal(Q, D_pairs, normalize=True)
+    assert kd_out.shape == (Nq, 1)
+    assert torch.allclose(kd_out.cpu().squeeze(-1), xp_out.cpu().diagonal(), atol=1e-3)
+
+
+def test_supports_accepts_4d_kd_shape():
+    Q = torch.randn(4, 32, 128, dtype=torch.float16, device="mps")
+    D = torch.randn(4, 16, 256, 128, dtype=torch.float16, device="mps")
+    assert _metal.supports(Q, D)
+
+
+def test_supports_rejects_4d_mismatched_batch():
+    """KD layout requires ``Q.shape[0] == D.shape[0]`` (one slab per query)."""
+    Q = torch.randn(4, 32, 128, dtype=torch.float16, device="mps")
+    D = torch.randn(3, 16, 256, 128, dtype=torch.float16, device="mps")
+    assert not _metal.supports(Q, D)
+
+
+def test_metal_kd_rejects_wrong_q_dim():
+    """KD layout needs Q to be 3-D; reject 2-D Q (ambiguous Nq)."""
+    Q = torch.randn(32, 128, dtype=torch.float16, device="mps")
+    D = torch.randn(1, 8, 256, 128, dtype=torch.float16, device="mps")
+    with pytest.raises(ValueError, match="KD layout"):
+        _metal.maxsim_inference_metal(Q, D, normalize=True)
+
+
+def test_metal_kd_rejects_d_mask_wrong_shape():
+    """KD ``d_mask`` must be ``[Nq, K, Ld]`` — flat 2-D mask is rejected."""
+    Q = torch.randn(2, 8, 64, dtype=torch.float16, device="mps")
+    D = torch.randn(2, 3, 16, 64, dtype=torch.float16, device="mps")
+    dm = torch.ones(6, 16, dtype=torch.bool, device="mps")  # flat [Nq*K, Ld]
+    with pytest.raises(ValueError, match="d_mask"):
+        _metal.maxsim_inference_metal(Q, D, d_mask=dm, normalize=True)
+
+
+# --------------------------------------------------------------------------- #
+# KD dispatch (4-D D routes through `maxsim_inference_mps`)                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_dispatch_routes_4d_d_through_metal_when_worthwhile():
+    """A typical PyLate-KD inference shape (Nq=4, K=32, Ld=300) goes to Metal."""
+    from late_interaction_kernels.mps import compile_dispatch as _mps_mod
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_inference_mps
+
+    _mps_mod._compiled_cache.clear()
+    Q = torch.randn(4, 32, 128, dtype=torch.float16, device="mps")
+    D = torch.randn(4, 32, 300, 128, dtype=torch.float16, device="mps")
+    out = maxsim_inference_mps(Q, D, normalize=True)
+    assert out.shape == (4, 32)
+    # Metal path doesn't touch the compile cache.
+    assert len(_mps_mod._compiled_cache) == 0
+    rel = _rel(out.cpu(), _kd_ref(Q, D, normalize=True))
+    assert rel < 5e-3
+
+
+def test_dispatch_falls_back_to_kd_reference_for_fp32(monkeypatch):
+    """fp32 KD inputs route to the dense KD reference, not the Metal path."""
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_inference_mps
+
+    Q = torch.randn(2, 16, 64, dtype=torch.float32, device="mps")
+    D = torch.randn(2, 4, 32, 64, dtype=torch.float32, device="mps")
+    out = maxsim_inference_mps(Q, D, normalize=True)
+    assert out.shape == (2, 4)
+    rel = _rel(out.cpu(), _kd_ref(Q, D, normalize=True))
+    assert rel < 1e-4
+
+
+def test_dispatch_force_reference_handles_4d_d(monkeypatch):
+    """``LIK_FORCE_MPS_BACKEND=reference`` must accept 4-D D."""
+    monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "reference")
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_inference_mps, maxsim_mps
+
+    Q = torch.randn(2, 8, 64, dtype=torch.float16, device="mps")
+    D = torch.randn(2, 3, 16, 64, dtype=torch.float16, device="mps")
+    out = maxsim_inference_mps(Q, D, normalize=True)
+    assert out.shape == (2, 3)
+    # Training-aware path (autograd) must also work on 4-D D.
+    out2 = maxsim_mps(Q, D, normalize=True)
+    assert torch.allclose(out, out2, atol=1e-4)
 
 
 # --------------------------------------------------------------------------- #

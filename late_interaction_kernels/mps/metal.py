@@ -64,6 +64,7 @@ _J_THRESHOLD = 256  # Nd above which the persistent variant wins
 _FLAG_HAS_Q_MASK = 1 << 0
 _FLAG_HAS_D_MASK = 1 << 1
 _FLAG_NORMALIZE = 1 << 2
+_FLAG_KD_LAYOUT = 1 << 3
 
 _PARAMS_FORMAT = "6I"  # (Nq, Nd, Lq, Ld, d, flags), all u32
 
@@ -95,6 +96,7 @@ def _build_kernel_source() -> str:
         FLAG_HAS_Q_MASK=_FLAG_HAS_Q_MASK,
         FLAG_HAS_D_MASK=_FLAG_HAS_D_MASK,
         FLAG_NORMALIZE=_FLAG_NORMALIZE,
+        FLAG_KD_LAYOUT=_FLAG_KD_LAYOUT,
     )
 
 _lib_lock = threading.Lock()
@@ -153,7 +155,9 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
     """Whether the Metal kernel handles this dtype + shape combination.
 
     Falls back when ``d`` is not a multiple of 8 or exceeds ``D_MAX``,
-    and when the dtype is not fp16 / bf16.
+    and when the dtype is not fp16 / bf16. ``D`` may be 3-D
+    (cross-product, default) or 4-D ``[Nq, K, Ld, d]`` (KD / pairs); in
+    the 4-D case ``Q`` must be 3-D and ``Q.shape[0] == D.shape[0]``.
     """
     if Q.dtype != D.dtype:
         return False
@@ -161,6 +165,10 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
         return False
     if Q.shape[-1] != D.shape[-1]:
         return False
+    if D.dim() == 4:
+        # KD / pairs layout: Q must be [Nq, Lq, d] and D must be [Nq, K, Ld, d].
+        if Q.dim() != 3 or Q.shape[0] != D.shape[0]:
+            return False
     d = Q.shape[-1]
     return 0 < d <= _D_MAX and d % _BLOCK_K == 0
 
@@ -189,14 +197,21 @@ def maxsim_inference_metal(
     Args:
         Q: ``[Nq, Lq, d]`` or ``[Lq, d]`` query embeddings on ``mps``,
             fp16 or bf16.
-        D: ``[Nd, Ld, d]`` or ``[Ld, d]`` document embeddings on ``mps``,
-            same dtype as ``Q``.
+        D: document embeddings on ``mps``, same dtype as ``Q``. Two
+            layouts are accepted:
+              * cross-product (default): ``[Nd, Ld, d]`` or ``[Ld, d]``,
+                every query scores against the same ``Nd`` docs;
+              * KD / pairs: ``[Nq, K, Ld, d]`` — each query owns its own
+                ``K``-slab of candidates. Mirrors the public
+                :func:`maxsim` 4-D dispatch on CUDA.
         q_mask: optional ``[Nq, Lq]`` bool / int8 mask (``True`` = valid).
-        d_mask: optional ``[Nd, Ld]`` bool / int8 mask.
+        d_mask: optional mask matching ``D``: ``[Nd, Ld]`` for
+            cross-product, ``[Nq, K, Ld]`` for KD.
         normalize: L2-normalize Q and D per-token inside the kernel.
 
     Returns:
-        ``[Nq, Nd]`` fp32 scores (squeezed to match 2-D inputs).
+        Cross-product: ``[Nq, Nd]`` fp32 scores (squeezed to match 2-D inputs).
+        KD: ``[Nq, K]`` fp32 scores.
 
     Raises:
         RuntimeError: if MPS or :func:`torch.mps.compile_shader` is missing,
@@ -209,12 +224,37 @@ def maxsim_inference_metal(
             "support and `torch.mps.compile_shader`."
         )
 
-    q_was_2d = Q.dim() == 2
-    d_was_2d = D.dim() == 2
-    if q_was_2d:
-        Q = Q.unsqueeze(0)
-    if d_was_2d:
-        D = D.unsqueeze(0)
+    kd_layout = D.dim() == 4
+    if kd_layout:
+        if Q.dim() != 3:
+            raise ValueError(
+                f"KD layout (D.dim()==4) needs Q to be [Nq, Lq, d]; got Q.shape={tuple(Q.shape)}"
+            )
+        if Q.shape[0] != D.shape[0]:
+            raise ValueError(
+                f"KD layout needs Q.shape[0] == D.shape[0]; got {Q.shape[0]} vs {D.shape[0]}"
+            )
+        Nq, K, Ld, d = D.shape
+        # Flatten D and d_mask into the [Nq * K, Ld, d] view the kernel
+        # already knows how to index (`d_global = i * Nd + j`). The kernel
+        # treats `params.Nd = K` and the per-query slab is selected by `i`.
+        D = D.contiguous().view(Nq * K, Ld, d)
+        if d_mask is not None:
+            if d_mask.dim() != 3 or d_mask.shape[:3] != (Nq, K, Ld):
+                raise ValueError(
+                    "KD layout needs d_mask.shape == (Nq, K, Ld); got "
+                    f"{tuple(d_mask.shape)} for D.shape={Nq, K, Ld, d}"
+                )
+            d_mask = d_mask.contiguous().view(Nq * K, Ld)
+        q_was_2d = False
+        d_was_2d = False
+    else:
+        q_was_2d = Q.dim() == 2
+        d_was_2d = D.dim() == 2
+        if q_was_2d:
+            Q = Q.unsqueeze(0)
+        if d_was_2d:
+            D = D.unsqueeze(0)
     if q_mask is not None and q_mask.dim() == 1:
         q_mask = q_mask.unsqueeze(0)
     if d_mask is not None and d_mask.dim() == 1:
@@ -235,7 +275,14 @@ def maxsim_inference_metal(
         raise RuntimeError(f"Unsupported dtype {Q.dtype}; the Metal path handles fp16 and bf16.")
 
     Nq, Lq, d = Q.shape
-    Nd, Ld, _ = D.shape
+    # In cross-product mode `params.Nd` is the corpus size. In KD mode
+    # it's `K` (the per-query candidate count); the kernel then derives
+    # the flat D index as `(i * Nd + j) * Ld + t`.
+    n_axis, Ld, _ = D.shape
+    if kd_layout:
+        Nd = n_axis // Nq  # = K
+    else:
+        Nd = n_axis
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
 
@@ -258,6 +305,8 @@ def maxsim_inference_metal(
         d_mask_i8 = _empty_mask()
     if normalize:
         flags |= _FLAG_NORMALIZE
+    if kd_layout:
+        flags |= _FLAG_KD_LAYOUT
 
     out = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
@@ -276,6 +325,9 @@ def maxsim_inference_metal(
         group_size=(1, 1, _THREADS_PER_GROUP),
     )
 
+    if kd_layout:
+        # Output is already shaped [Nq, K] — exactly what KD callers want.
+        return out
     if q_was_2d and d_was_2d:
         return out.reshape(())
     if q_was_2d:

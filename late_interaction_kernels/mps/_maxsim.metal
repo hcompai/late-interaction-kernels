@@ -32,11 +32,12 @@ using namespace metal;
 
 struct MaxSimParams {{
     uint Nq;
-    uint Nd;
+    uint Nd;             // cross-product: doc count;  KD/pairs: K per query
     uint Lq;
     uint Ld;
     uint d;
-    uint flags;        // bit 0: has_q_mask, bit 1: has_d_mask, bit 2: normalize
+    uint flags;          // bit 0: has_q_mask, bit 1: has_d_mask,
+                         // bit 2: normalize,  bit 3: kd_layout
 }};
 
 template <typename T>
@@ -99,6 +100,11 @@ inline void maxsim_inference_impl(
     const bool has_q_mask = (p.flags & {FLAG_HAS_Q_MASK}u) != 0u;
     const bool has_d_mask = (p.flags & {FLAG_HAS_D_MASK}u) != 0u;
     const bool normalize  = (p.flags & {FLAG_NORMALIZE}u) != 0u;
+    // KD / pairs layout: every query owns its own [Nd, Ld, d] slab in a
+    // flattened D[Nq * Nd, Ld, d] view, mirroring the Triton path in
+    // ``forward.py`` (`d_global = pid`). Cross-product (default) has all
+    // queries share the same D[j, t].
+    const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
 
     const uint Nd = p.Nd;
     const uint Lq = p.Lq;
@@ -153,6 +159,10 @@ inline void maxsim_inference_impl(
         for (uint j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
             const uint j = j_start + j_idx;
             if (j >= Nd) break;
+            // KD: D[i, j, t]  ->  flat index (i*Nd + j)*Ld + t.
+            // X-prod: D[j, t] ->  flat index j*Ld + t (every query reads
+            // the same D, so the per-query offset is zero).
+            const uint j_global = kd_layout ? (i * Nd + j) : j;
 
             float running_max = -INFINITY;
 
@@ -162,13 +172,13 @@ inline void maxsim_inference_impl(
 
                 bool d_active = t_valid;
                 if (has_d_mask && t_valid) {{
-                    d_active = d_mask[j * Ld + t] != 0;
+                    d_active = d_mask[j_global * Ld + t] != 0;
                 }}
                 d_active_tile[tid] = d_active ? (uchar)1 : (uchar)0;
 
                 cooperative_load_row<T>(
                     D4, DT4,
-                    (j * Ld + t) * d4,
+                    (j_global * Ld + t) * d4,
                     tid * (D_MAX >> 2),
                     d4, t_valid, normalize);
 
