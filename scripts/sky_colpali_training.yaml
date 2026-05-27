@@ -22,6 +22,12 @@ workdir: .
 
 envs:
   SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+  # Space-separated subset of config tags to run; empty means "run all".
+  # Tags below: synth-colbert-bs4, synth-colbert-bs8-ckpt, synth-pairwise-bs4,
+  #             synth-colbert-bs16-1024, synth-colbert-bs16-1024-ckpt,
+  #             real-colbert-bs4, real-colbert-bs8-ckpt
+  # Override with: sky launch --env RUN_ONLY="synth-colbert-bs16-1024 synth-colbert-bs16-1024-ckpt" ...
+  RUN_ONLY: ""
 
 setup: |
   set -eux
@@ -106,62 +112,106 @@ run: |
 
   MODEL="vidore/colqwen2-v1.0"
 
-  echo "=============================================================="
-  echo "  Synthetic ColQwen2 — ColbertLoss bs=4"
-  echo "=============================================================="
-  uv run python benchmarks/bench_colpali_training.py \
-      --model "${MODEL}" \
-      --loss colbert \
-      --batch-size 4 --image-size 448 --query-words 16 \
-      --iters 10 --warmup 2 \
-      --outdir "${ART}" \
-      2>&1 | tee "${ART}/synth_colbert_bs4.log"
+  # Tag filter: empty RUN_ONLY means run everything; otherwise only the
+  # space-separated tags in RUN_ONLY are executed. Each config block is
+  # wrapped in `should_run TAG && ( ... )` so subsets are cheap.
+  should_run() {
+    [ -z "${RUN_ONLY}" ] || [[ " ${RUN_ONLY} " == *" $1 "* ]]
+  }
 
-  echo "=============================================================="
-  echo "  Synthetic ColQwen2 — ColbertLoss bs=8 + grad ckpt"
-  echo "=============================================================="
-  uv run python benchmarks/bench_colpali_training.py \
-      --model "${MODEL}" \
-      --loss colbert \
-      --batch-size 8 --image-size 448 --query-words 16 \
-      --iters 10 --warmup 2 \
-      --grad-checkpoint \
-      --outdir "${ART}" \
-      2>&1 | tee "${ART}/synth_colbert_bs8_ckpt.log"
+  should_run synth-colbert-bs4 && (
+    echo "=============================================================="
+    echo "  Synthetic ColQwen2 — ColbertLoss bs=4"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_training.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 4 --image-size 448 --query-words 16 \
+        --iters 10 --warmup 2 \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/synth_colbert_bs4.log"
+  )
 
-  echo "=============================================================="
-  echo "  Synthetic ColQwen2 — ColbertPairwiseCELoss bs=4"
-  echo "=============================================================="
-  uv run python benchmarks/bench_colpali_training.py \
-      --model "${MODEL}" \
-      --loss pairwise_ce \
-      --batch-size 4 --image-size 448 --query-words 16 \
-      --iters 10 --warmup 2 \
-      --outdir "${ART}" \
-      2>&1 | tee "${ART}/synth_pairwise_bs4.log"
+  should_run synth-colbert-bs8-ckpt && (
+    echo "=============================================================="
+    echo "  Synthetic ColQwen2 — ColbertLoss bs=8 + grad ckpt"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_training.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 8 --image-size 448 --query-words 16 \
+        --iters 10 --warmup 2 \
+        --grad-checkpoint \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/synth_colbert_bs8_ckpt.log"
+  )
 
-  echo "=============================================================="
-  echo "  Real DocVQA — ColbertLoss bs=4"
-  echo "=============================================================="
-  uv run python benchmarks/bench_colpali_realdata.py \
-      --model "${MODEL}" \
-      --loss colbert \
-      --batch-size 4 --max-samples 64 \
-      --steps 10 --warmup 2 \
-      --outdir "${ART}" \
-      2>&1 | tee "${ART}/real_colbert_bs4.log"
+  should_run synth-pairwise-bs4 && (
+    echo "=============================================================="
+    echo "  Synthetic ColQwen2 — ColbertPairwiseCELoss bs=4"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_training.py \
+        --model "${MODEL}" \
+        --loss pairwise_ce \
+        --batch-size 4 --image-size 448 --query-words 16 \
+        --iters 10 --warmup 2 \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/synth_pairwise_bs4.log"
+  )
 
-  echo "=============================================================="
-  echo "  Real DocVQA — ColbertLoss bs=8 + grad ckpt"
-  echo "=============================================================="
-  uv run python benchmarks/bench_colpali_realdata.py \
-      --model "${MODEL}" \
-      --loss colbert \
-      --batch-size 8 --max-samples 96 \
-      --steps 10 --warmup 2 \
-      --grad-checkpoint \
-      --outdir "${ART}" \
-      2>&1 | tee "${ART}/real_colbert_bs8_ckpt.log"
+  should_run synth-colbert-bs16-1024 && (
+    echo "=============================================================="
+    echo "  Synthetic ColQwen2 — ColbertLoss bs=16, image=1024"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_training.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 16 --image-size 1024 --query-words 16 \
+        --iters 10 --warmup 2 \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/synth_colbert_bs16_1024.log"
+  )
+
+  should_run synth-colbert-bs16-1024-ckpt && (
+    echo "=============================================================="
+    echo "  Synthetic ColQwen2 — ColbertLoss bs=16, image=1024 + grad ckpt"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_training.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 16 --image-size 1024 --query-words 16 \
+        --iters 10 --warmup 2 \
+        --grad-checkpoint \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/synth_colbert_bs16_1024_ckpt.log"
+  )
+
+  should_run real-colbert-bs4 && (
+    echo "=============================================================="
+    echo "  Real DocVQA — ColbertLoss bs=4"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_realdata.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 4 --max-samples 64 \
+        --steps 10 --warmup 2 \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/real_colbert_bs4.log"
+  )
+
+  should_run real-colbert-bs8-ckpt && (
+    echo "=============================================================="
+    echo "  Real DocVQA — ColbertLoss bs=8 + grad ckpt"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_realdata.py \
+        --model "${MODEL}" \
+        --loss colbert \
+        --batch-size 8 --max-samples 96 \
+        --steps 10 --warmup 2 \
+        --grad-checkpoint \
+        --outdir "${ART}" \
+        2>&1 | tee "${ART}/real_colbert_bs8_ckpt.log"
+  )
 
   echo "Artifacts: ${ART}"
   ls -la "${ART}"
