@@ -36,12 +36,27 @@ setup: |
   # (ColbertLoss / ColbertPairwiseCELoss / ColbertSigmoidLoss + the
   # processing_utils.BaseVisualRetrieverProcessor.score_multi_vector helper).
   uv pip install "colpali-engine>=0.3.10" datasets pillow
-  # colpali-engine can upgrade torch from our lockfile cu124 build to the
-  # plain PyPI (non-CUDA) wheel. Reinstall torch + torchvision from the
-  # pytorch-cu124 index to restore CUDA support and ensure both are
-  # compiled against the same ABI.
-  uv pip install torch torchvision \
-      --index-url https://download.pytorch.org/whl/cu124 --reinstall
+  # torch 2.8+ register_fake() requires operators to pre-exist in the
+  # dispatch table. torchvision 0.26.x imports _meta_registrations before
+  # ops in its __init__.py, so the C++ extension (torchvision::nms etc.)
+  # isn't loaded yet when register_fake runs. Patch the __init__ to load
+  # ops (and thus _C.so) before _meta_registrations.
+  uv run python - << 'PYEOF'
+  import glob
+  tv_init = glob.glob(
+      "/root/sky_workdir/.venv/lib/python3.10/site-packages/torchvision/__init__.py"
+  )[0]
+  with open(tv_init) as f:
+      src = f.read()
+  old = "from torchvision import _meta_registrations, datasets, io, models, ops, transforms, utils"
+  new = "from torchvision import datasets, io, models, ops, transforms, utils, _meta_registrations"
+  if old in src:
+      with open(tv_init, "w") as f:
+          f.write(src.replace(old, new, 1))
+      print("patched torchvision/__init__.py: moved _meta_registrations after ops")
+  else:
+      print("WARNING: expected line not found — check torchvision version")
+  PYEOF
   # Optional: flash-attn for the ColQwen2 attention path. Skip if it fails to
   # build — the bench falls back to torch SDPA automatically.
   uv pip install flash-attn --no-build-isolation || true
