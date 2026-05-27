@@ -8,6 +8,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **MPS Metal backward kernel + Metal autograd.** Adds
+  `maxsim_train_metal` (forward + saved argmax) and
+  `maxsim_backward_metal(grad_scores, Q, D, argmax, q_mask, *,
+  kd_layout, normalize)`, mirroring Triton's
+  `maxsim_backward_unified` API one-for-one. A new
+  `_MaxSimFnMetal(torch.autograd.Function)` wires them into
+  `maxsim_mps`, so training calls run the full Metal path on Apple
+  Silicon (forward, backward, and L2-normalize Jacobian) instead of
+  falling back to `torch.compile`. Inference and unsupported-dtype
+  paths are unchanged. The L2-normalize Jacobian is fused inside the
+  backward kernel via cross-simdgroup reductions, eliminating the
+  host-side norm + projection chain.
 - **MPS Metal kernel: KD / pairs layout (4-D `D`).** The Metal MaxSim
   kernel now accepts `D` as `[Nq, K, Ld, d]` directly, matching the
   Triton path. Each program reads its own `K`-slab via a runtime bit
