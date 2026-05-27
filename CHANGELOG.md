@@ -53,6 +53,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ColQwen2 synthetic + real DocVQA; `RUN_ONLY` tags unchanged.
 - Headline benchmark ranges in `README.md` refreshed to match the 0.3.0
   sweep in `docs/benchmarks.md`. See the per-table notes there.
+- **MPS range moved.** Apple M4 fp16 re-run on this PR's HEAD shows
+  `metal vs eager` **1.7–2.7×** (down from 1.9–3.2× in 0.2.0) and
+  `metal vs compile` **2.0–11.3×** (up from 1.1–2.0× in 0.2.0). The
+  metal kernel itself is unchanged; the eager and compile baselines
+  both moved. Eager got faster on M4 (compressing the metal-vs-eager
+  gap on short shapes); `torch.compile` on MPS regressed sharply on
+  long-Ld inputs (the `compile vs eager` cell on `edge-d48` is now
+  0.24× — compile is 4× *slower* than eager — opening the
+  metal-vs-compile gap to 11.3×). Captured in `docs/benchmarks.md`
+  Apple Silicon section.
+- **JSON peak-VRAM keys standardized.** Multi-variant rows now use
+  `<variant>_peak_mb` consistently (was a mix of `peak_gb`, `_peak`,
+  `mem_*_MB` across benches). Breaking for anyone parsing
+  `benchmarks/results/*.json` directly. Affected files:
+  `bench_pylate_lateon`, `bench_pylate_realdata`,
+  `bench_colpali_training`, `bench_colpali_realdata`,
+  `bench_cached_maxsim`, `bench_fastplaid`, `bench_lateon`. Stdout
+  still prints GB at training scale for readability.
 - Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
   `_mask_as_bool`) and `mps.is_mps_tensor` (exported but unreferenced).
 - `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
@@ -91,7 +109,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleted in 0.2.0.
 - Dropped the `synth bs=16, 1024px` rows from the ColPali e2e bench in
   `docs/benchmarks.md` and the matching `synth-colbert-bs16-1024[-ckpt]`
-  blocks in `scripts/sky_colpali_training.yaml`. Both rows were 1.00×
+  blocks in `scripts/sky_colpali_benchmark.yaml` (renamed from
+  `sky_colpali_training.yaml` — see Changed). Both rows were 1.00×
   (encoder-bound) and added nothing the 448px rows didn't already cover.
 - `scripts/sky_bench_verify.yaml`. The smoke-test path is now
   `sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" scripts/sky_run_all_benchmarks.yaml`.
@@ -128,6 +147,14 @@ below regressed:
   (training), so the small-input bypass (#64) is *not* the cause; first
   thing to check is whether the new `prune_forward` drops a winning
   config for this Nq=Nd=16 shape.
+- `bench_pylate_realdata` `CachedContrastive bs=64 mini=16 Lq=32 Ld=300
+  grad-ckpt`: e2e step 305.5 ms (0.3.0 release sweep) → 318.5 ms
+  (re-measured this PR), vs vanilla 351.1 → 317.2 ms. Net effect: the
+  former 1.15× win at this shape collapsed to 1.00×. Both vanilla and
+  LIK got faster on the encoder side, but LIK lost more on the MaxSim
+  slice — likely a chunked-call autotune miss against the new
+  `prune_forward`. Highest-priority of the four since it was a
+  headline-table win.
 
 ## [0.2.0] - 2026-05-22
 

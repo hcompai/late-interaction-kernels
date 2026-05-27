@@ -17,9 +17,10 @@ All bench scripts follow the same flag shape:
 | `--dtype {bf16,fp16}` | Input dtype where applicable. Accumulator is always fp32. |
 | `--quick` | Pre-baked "small subset" filter on a few scripts; prefer `--only` for explicit control. |
 
-Every script also writes `peak_mb` / `peak_gb` per variant into stdout
-and JSON output — handy for comparing memory footprints alongside
-wall-clock.
+Every script also records peak GPU memory per variant — `peak_mb` in
+JSON output (uniformly MB across the directory), and GB-formatted in
+stdout where the values warrant it (e.g. e2e training shapes at 25+
+GB). Handy for comparing memory footprints alongside wall-clock.
 
 Pass `--help` on any script for the full list of options and the
 choices accepted by `--only`.

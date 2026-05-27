@@ -126,7 +126,7 @@ is asserted at `atol=1e-2` before timing.
 
 | Workload                                                    | Speedup            |
 | ----------------------------------------------------------- | ------------------ |
-| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 1.5-15×        |
+| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 1.7-15×        |
 | Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
 | PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 5-6.5×             |
 | PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 8-23× full / 18-51× partial |
