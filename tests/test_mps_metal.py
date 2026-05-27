@@ -180,16 +180,15 @@ def test_metal_kernel_full_d_mask_is_zero():
 @pytest.mark.parametrize(
     "shape",
     [
-        # (Nq, K, Lq, Ld, d) — covers the typical PyLate-KD inference envelope
-        # and the K=1 (pairs) corner case.
-        (1, 1, 32, 256, 128),    # pairs: single query, single candidate
-        (1, 10, 32, 300, 128),   # rerank: top-10 candidates
-        (4, 8, 32, 256, 128),    # batched-KD typical
-        (8, 32, 32, 200, 128),   # PyLate KD-bs8 with 32 negatives
-        (2, 4, 32, 64, 48),      # edge: d=48
-        (1, 16, 16, 512, 96),    # edge: d=96, long Ld
-        (1, 32, 32, 1024, 128),  # large per-query slab
-        (2, 3, 12, 23, 64),      # Lq/Ld non-aligned
+        # (Nq, K, Lq, Ld, d)
+        (1, 1, 32, 256, 128),
+        (1, 10, 32, 300, 128),
+        (4, 8, 32, 256, 128),
+        (8, 32, 32, 200, 128),
+        (2, 4, 32, 64, 48),
+        (1, 16, 16, 512, 96),
+        (1, 32, 32, 1024, 128),
+        (2, 3, 12, 23, 64),
     ],
     ids=lambda s: f"Nq{s[0]}_K{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}",
 )
@@ -288,7 +287,7 @@ def test_metal_kd_rejects_d_mask_wrong_shape():
 
 
 def test_dispatch_routes_4d_d_through_metal_when_worthwhile():
-    """A typical PyLate-KD inference shape (Nq=4, K=32, Ld=300) goes to Metal."""
+    """A typical KD inference shape (Nq=4, K=32, Ld=300) goes to Metal."""
     from late_interaction_kernels.mps import compile_dispatch as _mps_mod
     from late_interaction_kernels.mps.compile_dispatch import maxsim_inference_mps
 

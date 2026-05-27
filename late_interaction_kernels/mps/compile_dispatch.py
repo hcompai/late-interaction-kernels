@@ -81,25 +81,14 @@ def _compile_key(
 
 
 def _get_compiled_kd(key: tuple) -> Callable:
-    """Like :func:`_get_compiled` but wraps the 4-D KD reference.
-
-    Same ``mode="reduce-overhead"`` / ``dynamic=False`` choice — Inductor
-    on MPS (torch 2.8) recompiles per shape, which is fine for the
-    inference workloads that exercise this path (PyLate KD, ColPali
-    pairwise) where ``(Nq, K, Ld)`` is stable across a run.
-    """
+    """``_get_compiled`` for the 4-D KD reference — same compile flags."""
     fn = _compiled_kd_cache.get(key)
     if fn is not None:
         return fn
     with _compile_lock:
         fn = _compiled_kd_cache.get(key)
         if fn is None:
-            fn = torch.compile(
-                _kd_reference,
-                mode="reduce-overhead",
-                dynamic=False,
-                fullgraph=False,
-            )
+            fn = torch.compile(_kd_reference, mode="reduce-overhead", dynamic=False, fullgraph=False)
             _compiled_kd_cache[key] = fn
     return fn
 
@@ -134,16 +123,14 @@ def _metal_is_worthwhile(Q: torch.Tensor, D: torch.Tensor) -> bool:
     """Heuristic: only launch the Metal kernel when the work amortises.
 
     Below ``Nq * Nd ≥ MIN_BATCH`` and ``Ld ≥ MIN_LD`` the compile path
-    has lower launch overhead and tends to win. For KD/pairs
-    (``D.dim() == 4``) we treat ``Nq * K`` as the effective doc count —
-    that's the work-per-query × queries that the kernel actually does.
+    has lower launch overhead and tends to win. For KD (4-D ``D``) we
+    use ``K`` (per-query slab) as the effective doc count.
     """
     if Q.dim() == 2:
         Nq, Lq = 1, Q.shape[0]
     else:
         Nq, Lq = Q.shape[0], Q.shape[1]
     if D.dim() == 4:
-        # [Nq, K, Ld, d] — each query reads its own K-slab.
         _, K, Ld, _ = D.shape
         Nd = K
     elif D.dim() == 2:
@@ -165,11 +152,8 @@ def _kd_reference(
 ) -> torch.Tensor:
     """Reference KD MaxSim: ``Q[Nq, Lq, d] × D[Nq, K, Ld, d] -> [Nq, K]``.
 
-    Used as the compile-path fallback when the Metal KD kernel can't take
-    the dtype / shape (fp32 inputs, ``d > 128``, etc.). Mirrors
-    :func:`maxsim_reference` semantics (fp32 accumulator, `-inf` clamp on
-    fully-masked rows) but takes 4-D ``D`` directly instead of going
-    through the cross-product path and indexing the diagonal afterwards.
+    fp32 accumulator with ``-inf`` clamp on fully-masked rows, same
+    contract as :func:`maxsim_reference` for the cross-product layout.
     """
     import torch.nn.functional as F
 
@@ -182,14 +166,12 @@ def _kd_reference(
         Df = F.normalize(Df, p=2, dim=-1, eps=1e-12)
     S = torch.einsum("ild,iktd->iklt", Qf, Df)  # [Nq, K, Lq, Ld]
     if d_mask is not None:
-        # d_mask: [Nq, K, Ld] -> broadcast over Lq
         S = S.masked_fill(~d_mask.bool().unsqueeze(2), NEG_INF)
-    row_max = S.max(dim=-1).values  # [Nq, K, Lq]
+    row_max = S.max(dim=-1).values
     row_max = torch.where(torch.isfinite(row_max), row_max, torch.zeros_like(row_max))
     if q_mask is not None:
-        # q_mask: [Nq, Lq] -> broadcast over K
         row_max = row_max * q_mask.to(row_max.dtype).unsqueeze(1)
-    return row_max.sum(dim=-1)  # [Nq, K]
+    return row_max.sum(dim=-1)
 
 
 def _compile_path(
@@ -199,11 +181,8 @@ def _compile_path(
     d_mask: torch.Tensor | None,
     normalize: bool,
 ) -> torch.Tensor:
-    # KD / pairs (4-D D) wraps the dense ``_kd_reference`` with
-    # ``torch.compile`` — same policy as the cross-product path, so
-    # benchmarks that report "compile" actually measure ``torch.compile``
-    # output (Inductor MPS) rather than silently dropping to eager.
-    # Honour ``LIK_DISABLE_COMPILE=1`` for both layouts.
+    # KD (4-D D) wraps ``_kd_reference`` via ``torch.compile`` — same
+    # policy as the cross-product branch, opt-out via ``LIK_DISABLE_COMPILE``.
     if D.dim() == 4:
         if _disable_compile():
             return _kd_reference(Q, D, q_mask, d_mask, normalize)
@@ -225,9 +204,8 @@ def maxsim_mps(
 ) -> torch.Tensor:
     """``torch.compile``-fused MaxSim on MPS. Autograd-aware.
 
-    Always uses the compile path; the Metal kernel is forward-only so
-    it can't carry gradients. Accepts 4-D ``D`` (KD / pairs layout)
-    via the dense reference fallback in :func:`_compile_path`.
+    Always uses the compile path; the Metal kernel is forward-only.
+    Accepts 4-D ``D`` (KD / pairs) via :func:`_compile_path`.
     """
     forced = _forced_backend()
     if forced == "reference":

@@ -54,17 +54,16 @@ SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
     ("edge-d64", 1, 1000, 32, 300, 64),
 )
 
-# KD / pairs layout: ``D.shape == (Nq, K, Ld, d)``. Each query owns its
-# own K-slab — the PyLate KD inference shape and the ColPali negative-
-# loss layout. ``K=1`` is the "pairs" corner (same as the cross-product
-# diagonal). (name, Nq, K, Lq, Ld, d)
+# KD / pairs layout: ``D.shape == (Nq, K, Ld, d)``, each query owns its
+# own K-slab. ``K=1`` is the diagonal "pairs" corner.
+# (name, Nq, K, Lq, Ld, d)
 KD_SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
-    ("kd-rerank-top10",   1, 10,  32,  300, 128),  # eval-time rerank, top-10
-    ("kd-rerank-top32",   1, 32,  32,  300, 128),  # PyLate issue #224 top-32
-    ("kd-bs4-K10",        4, 10,  32,  300, 128),  # batched eval: 4 × 10
-    ("kd-bs8-K32",        8, 32,  32,  200, 128),  # PyLate KD bs=8, 32 negs
-    ("kd-pairs-bs32",    32,  1,  32,  256, 128),  # diagonal pairs (ColPali)
-    ("kd-bs1-K100-long",  1, 100, 32, 1024, 128),  # rerank with long docs
+    ("kd-rerank-top10", 1, 10, 32, 300, 128),
+    ("kd-rerank-top32", 1, 32, 32, 300, 128),
+    ("kd-bs4-K10", 4, 10, 32, 300, 128),
+    ("kd-bs8-K32", 8, 32, 32, 200, 128),
+    ("kd-pairs-bs32", 32, 1, 32, 256, 128),
+    ("kd-bs1-K100-long", 1, 100, 32, 1024, 128),
 )
 
 
@@ -99,29 +98,20 @@ def _peak_mb(fn) -> float:
 
 
 def _compile_call(Q, D):
-    """Force the compile path even on shapes the heuristic prefers Metal for.
-
-    For 4-D ``D`` (KD layout), this routes through the dense
-    ``_kd_reference`` fallback inside ``_compile_path`` — same code the
-    production dispatcher hits when the Metal kernel can't take the shape.
-    """
+    """Force the compile path (3-D and 4-D D both routed through ``_compile_path``)."""
     from late_interaction_kernels.mps import compile_dispatch as _mps
 
     return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
 
 
 def _kd_eager_call(Q, D):
-    """Eager KD reference — dense einsum + fp32 max-sum. No ``torch.compile``."""
+    """Eager KD reference (no ``torch.compile``)."""
     from late_interaction_kernels.mps.compile_dispatch import _kd_reference
 
     return _kd_reference(Q, D, None, None, True)
 
 
-def _kd_compile_call(Q, D):
-    """``torch.compile``-wrapped KD reference — same path as ``_compile_path``."""
-    from late_interaction_kernels.mps import compile_dispatch as _mps
-
-    return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
+_kd_compile_call = _compile_call
 
 
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
@@ -152,12 +142,7 @@ def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
 
 
 def bench_one_kd(name, Nq, K, Lq, Ld, d, dtype):
-    """KD-layout bench: ``D.shape == (Nq, K, Ld, d)``.
-
-    Compares the Metal kernel (which now indexes ``d_global = i * K + j``
-    internally) against the dense ``_kd_reference`` einsum fallback that
-    production code drops to on unsupported dtypes (fp32, ``d > 128``).
-    """
+    """KD-layout bench: ``D.shape == (Nq, K, Ld, d)``."""
     Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
     D = torch.randn(Nq, K, Ld, d, device="mps", dtype=dtype)
 
@@ -170,10 +155,6 @@ def bench_one_kd(name, Nq, K, Lq, Ld, d, dtype):
     else:
         rows.append(("metal", float("nan"), float("nan"), float("nan")))
 
-    # Three honestly distinct paths now: ``_compile_path`` actually wraps
-    # ``_kd_reference`` in ``torch.compile`` (matching the xprod policy),
-    # so we measure it; the ``eager`` column calls the un-compiled
-    # reference for a like-for-like Inductor lift comparison.
     try:
         t, sd = _time_op(lambda: _kd_compile_call(Q, D))
         m = _peak_mb(lambda: _kd_compile_call(Q, D))

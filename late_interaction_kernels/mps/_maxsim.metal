@@ -1,22 +1,16 @@
 // SPDX: same as the parent package.
 //
-// Fused MaxSim forward kernel (Apple `simdgroup_matrix` MMA).
+// Fused MaxSim forward kernel (Apple `simdgroup_matrix` MMA) — Metal
+// analogue of `forward.py`. FlashAttention-style tiling: Q hoisted into
+// a register-resident simdgroup-matrix cache, [Lq, Ld] similarities
+// never reach HBM. Loaded by `mps/metal.py` via
+// `Path.read_text().format(...)` with the Python-side constants
+// (tile sizes, flag bits) substituted in.
 //
-// Direct Metal-side analogue of `late_interaction_kernels/forward.py`:
-// FlashAttention-style outer-product tiling, Q hoisted into a
-// register-resident simdgroup-matrix cache that survives every
-// (j, d-chunk) pair, [Lq, Ld] similarities never reach HBM.
-//
-// This file is loaded by `late_interaction_kernels.mps.metal` via
-// `Path.read_text().format(...)` so Python-side constants and bit-flag
-// values stay the single source of truth. The host packs
-// `MaxSimParams` with `struct.pack(_PARAMS_FORMAT, ...)` using those
-// same constants.
-//
-// Two persistence levels are dispatched by `Nd`:
-//   * J_PER_TG = 1 for tiny corpora (wide launch grid keeps the GPU saturated);
-//   * J_PER_TG = 8 for the typical inference regime (Q-cache build amortised 8x).
-//
+// Two persistence levels dispatched by `Nd`:
+//   * J_PER_TG = 1 for tiny corpora (wide grid, keeps the GPU busy);
+//   * J_PER_TG = 8 otherwise (amortises the Q-cache build).
+
 #include <metal_stdlib>
 #include <metal_simdgroup_matrix>
 using namespace metal;
@@ -65,12 +59,7 @@ inline void cooperative_load_row(
             sum2 += dot(vf, vf);
         }}
         if (normalize) {{
-            // eps = 1e-12 matches the Triton forward.py path
-            // (`q_norm_sq = max(_, 1e-12)`) and the dense reference
-            // (`F.normalize(..., eps=1e-12)`) so a vector with norm
-            // ``< 1e-6`` produces the same scaled output on CUDA and MPS.
-            // The old 1e-24 floor was effectively never reached on real
-            // data — the change only affects truly degenerate inputs.
+            // eps = 1e-12 to match `forward.py` and `F.normalize`.
             const float inv = rsqrt(max(sum2, 1e-12f));
             for (uint k = 0; k < d4; ++k) {{
                 regs[k] = vec<T, 4>(float4(regs[k]) * inv);
@@ -106,15 +95,11 @@ inline void maxsim_inference_impl(
     const bool has_q_mask = (p.flags & {FLAG_HAS_Q_MASK}u) != 0u;
     const bool has_d_mask = (p.flags & {FLAG_HAS_D_MASK}u) != 0u;
     const bool normalize  = (p.flags & {FLAG_NORMALIZE}u) != 0u;
-    // KD / pairs layout: every query owns its own [Nd, Ld, d] slab in a
-    // flattened D[Nq * Nd, Ld, d] view, mirroring the Triton path in
-    // ``forward.py`` (`d_global = pid`). Cross-product (default) has all
-    // queries share the same D[j, t]. Unlike Triton — which sets
-    // ``kd_layout`` as a ``tl.constexpr`` and emits two specialised
-    // binaries — Metal keeps the two modes in a single kernel and pays
-    // one ``select`` instruction per ``j_idx`` for the index pick.
-    // That's effectively free on Apple's ALU and saves us 4 extra
-    // kernel variants (half×big/small × bfloat×big/small × kd).
+    // KD / pairs: each query owns its own slab in a flattened
+    // D[Nq * Nd, Ld, d] view (`d_global = i * Nd + j`); cross-product
+    // shares one D across all queries (`d_global = j`). Runtime flag —
+    // not a constexpr — to avoid doubling kernel variants for one
+    // ``select`` op (Apple ALU handles it for free).
     const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
 
     const uint Nd = p.Nd;
@@ -170,9 +155,6 @@ inline void maxsim_inference_impl(
         for (uint j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
             const uint j = j_start + j_idx;
             if (j >= Nd) break;
-            // KD: D[i, j, t]  ->  flat index (i*Nd + j)*Ld + t.
-            // X-prod: D[j, t] ->  flat index j*Ld + t (every query reads
-            // the same D, so the per-query offset is zero).
             const uint j_global = kd_layout ? (i * Nd + j) : j;
 
             float running_max = -INFINITY;

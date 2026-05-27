@@ -26,11 +26,10 @@ Constraints (everything outside falls back to ``torch.compile``):
 * fp16 / bf16 inputs only — Apple's MMA accepts those; fp32 inputs
   go through the compile path.
 
-The MSL source lives in :file:`_maxsim.metal` so editors give us
-syntax highlighting / navigation. This module is the single
-source-of-truth for the host-side constants (tile sizes, flag bits,
-struct format) — they're substituted into the source via
-``str.format(...)`` at JIT-compile time, so host and device never drift.
+The MSL source lives in :file:`_maxsim.metal` and is loaded via
+``str.format(...)`` at JIT-compile time, with host-side constants
+(tile sizes, flag bits, struct format) substituted in so host and
+device can't drift.
 """
 
 import struct
@@ -75,12 +74,8 @@ _MSL_TEMPLATE_PATH = Path(__file__).with_name("_maxsim.metal")
 def _build_kernel_source() -> str:
     """Read the MSL template and substitute the Python-side constants.
 
-    The ``.metal`` file is a ``str.format``-style template — literal MSL
-    braces are doubled (``{{`` / ``}}``), substitutions are single (e.g.
-    ``{BLOCK_Q}``). Keeping the template external is purely a developer-
-    experience win (editor syntax highlighting); the bytes handed to
-    ``torch.mps.compile_shader`` are identical to the previous inline
-    f-string.
+    Literal MSL braces in the template are doubled (``{{`` / ``}}``);
+    substitutions like ``{BLOCK_Q}`` are single.
     """
     template = _MSL_TEMPLATE_PATH.read_text()
     return template.format(
@@ -98,6 +93,7 @@ def _build_kernel_source() -> str:
         FLAG_NORMALIZE=_FLAG_NORMALIZE,
         FLAG_KD_LAYOUT=_FLAG_KD_LAYOUT,
     )
+
 
 _lib_lock = threading.Lock()
 _lib: Any | None = None
@@ -173,19 +169,13 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
     return 0 < d <= _D_MAX and d % _BLOCK_K == 0
 
 
-# Tiny LRU for the 24-byte ``MaxSimParams`` upload. Same (shape, flags)
-# combination shows up on every step of a typical PyLate / ColPali eval
-# (and on every batch of a stable training loop), so caching the device
-# tensor saves a ``struct.pack`` + ``bytearray`` + host-tensor + H2D copy
-# per call. The cache is keyed on the six u32 fields so two callers can
-# never alias each other's bytes.
 _PARAMS_CACHE_MAX = 64
 _params_cache: "dict[tuple[int, int, int, int, int, int], torch.Tensor]" = {}
 _params_cache_lock = threading.Lock()
 
 
 def _pack_params(Nq: int, Nd: int, Lq: int, Ld: int, d: int, flags: int) -> torch.Tensor:
-    """Pack the kernel's ``MaxSimParams`` struct into a 6-int32 MPS tensor."""
+    """Pack ``MaxSimParams`` into a 6-int32 MPS tensor; cached by key."""
     key = (Nq, Nd, Lq, Ld, d, flags)
     cached = _params_cache.get(key)
     if cached is not None:
@@ -193,10 +183,6 @@ def _pack_params(Nq: int, Nd: int, Lq: int, Ld: int, d: int, flags: int) -> torc
     raw = struct.pack(_PARAMS_FORMAT, Nq, Nd, Lq, Ld, d, flags)
     tensor = torch.frombuffer(bytearray(raw), dtype=torch.int32).clone().to("mps")
     with _params_cache_lock:
-        # Coarse eviction: when full, drop everything and re-warm. The
-        # entries are 24 bytes each so a clear is faster than maintaining
-        # a real LRU, and the cache typically fits well under the cap on
-        # the workloads we care about (≤ a few dozen distinct shapes).
         if len(_params_cache) >= _PARAMS_CACHE_MAX:
             _params_cache.clear()
         _params_cache[key] = tensor
@@ -219,17 +205,11 @@ def maxsim_inference_metal(
     """Forward-only fused MaxSim on MPS via the ``simdgroup_matrix`` kernel.
 
     Args:
-        Q: ``[Nq, Lq, d]`` or ``[Lq, d]`` query embeddings on ``mps``,
-            fp16 or bf16.
-        D: document embeddings on ``mps``, same dtype as ``Q``. Two
-            layouts are accepted:
-              * cross-product (default): ``[Nd, Ld, d]`` or ``[Ld, d]``,
-                every query scores against the same ``Nd`` docs;
-              * KD / pairs: ``[Nq, K, Ld, d]`` — each query owns its own
-                ``K``-slab of candidates. Mirrors the public
-                :func:`maxsim` 4-D dispatch on CUDA.
-        q_mask: optional ``[Nq, Lq]`` bool / int8 mask (``True`` = valid).
-        d_mask: optional mask matching ``D``: ``[Nd, Ld]`` for
+        Q: ``[Nq, Lq, d]`` or ``[Lq, d]``, fp16 or bf16.
+        D: same dtype as ``Q``. Either ``[Nd, Ld, d]`` / ``[Ld, d]``
+            (cross-product) or ``[Nq, K, Ld, d]`` (KD / pairs).
+        q_mask: optional ``[Nq, Lq]`` mask (``True`` = valid).
+        d_mask: optional mask matching ``D`` — ``[Nd, Ld]`` for
             cross-product, ``[Nq, K, Ld]`` for KD.
         normalize: L2-normalize Q and D per-token inside the kernel.
 
@@ -255,13 +235,10 @@ def maxsim_inference_metal(
                 f"KD layout (D.dim()==4) needs Q to be [Nq, Lq, d]; got Q.shape={tuple(Q.shape)}"
             )
         if Q.shape[0] != D.shape[0]:
-            raise ValueError(
-                f"KD layout needs Q.shape[0] == D.shape[0]; got {Q.shape[0]} vs {D.shape[0]}"
-            )
+            raise ValueError(f"KD layout needs Q.shape[0] == D.shape[0]; got {Q.shape[0]} vs {D.shape[0]}")
         Nq, K, Ld, d = D.shape
-        # Flatten D and d_mask into the [Nq * K, Ld, d] view the kernel
-        # already knows how to index (`d_global = i * Nd + j`). The kernel
-        # treats `params.Nd = K` and the per-query slab is selected by `i`.
+        # Flatten into the [Nq * K, Ld, d] view the kernel already
+        # indexes via `d_global = i * Nd + j` (with Nd = K).
         D = D.contiguous().view(Nq * K, Ld, d)
         if d_mask is not None:
             if d_mask.dim() != 3 or d_mask.shape[:3] != (Nq, K, Ld):
@@ -299,14 +276,9 @@ def maxsim_inference_metal(
         raise RuntimeError(f"Unsupported dtype {Q.dtype}; the Metal path handles fp16 and bf16.")
 
     Nq, Lq, d = Q.shape
-    # In cross-product mode `params.Nd` is the corpus size. In KD mode
-    # it's `K` (the per-query candidate count); the kernel then derives
-    # the flat D index as `(i * Nd + j) * Ld + t`.
     n_axis, Ld, _ = D.shape
-    if kd_layout:
-        Nd = n_axis // Nq  # = K
-    else:
-        Nd = n_axis
+    # KD: Nd = K (per-query slab), kernel derives `(i * Nd + j) * Ld + t`.
+    Nd = n_axis // Nq if kd_layout else n_axis
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
 
@@ -350,8 +322,7 @@ def maxsim_inference_metal(
     )
 
     if kd_layout:
-        # Output is already shaped [Nq, K] — exactly what KD callers want.
-        return out
+        return out  # already [Nq, K]
     if q_was_2d and d_was_2d:
         return out.reshape(())
     if q_was_2d:
