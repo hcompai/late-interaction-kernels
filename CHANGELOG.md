@@ -61,6 +61,10 @@ below regressed and are queued for 0.3.1:
 
 ### Added
 
+- `benchmarks/README.md` — operator's guide to the directory: per-script
+  one-line summary, CLI conventions (`--only`, `--variants`, `--outdir`,
+  `--dtype`, `--quick`), and how to run one bench / all benches / the
+  sky-cluster sweep with `RUN_ONLY`.
 - **Peak VRAM is now reported by every benchmark.** Scripts that
   previously only timed steps now also call
   `torch.cuda.reset_peak_memory_stats()` and record
