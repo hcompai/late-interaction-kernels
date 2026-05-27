@@ -137,8 +137,12 @@ is asserted at `atol=1e-2` before timing.
 `torch.compile` is within ±5% of eager on every forward shape because
 Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity
 tensor before the `max(-1)` reduction — that materialisation *is* what
-the fused kernel exists to skip. Full tables and reproduction commands:
-[`docs/benchmarks.md`](docs/benchmarks.md).
+the fused kernel exists to skip. Full tables and reproduction commands
+live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench
+scripts themselves are organised — CLI conventions (`--only`,
+`--variants`), per-script summaries, and how to run one bench, the
+whole sweep, or a `RUN_ONLY`-filtered subset on a SkyPilot cluster —
+see [`benchmarks/README.md`](benchmarks/README.md).
 
 ## Choose a kernel
 
