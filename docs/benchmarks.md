@@ -65,7 +65,7 @@ Results land in `benchmarks/results/*.{json,md}`.
 ## On a SkyPilot cluster
 
 ```bash
-sky launch -c lik-rerun-0.3.0 scripts/sky_rerun_0_3_0.yaml -y   # every table on this page in one shot (1×H100, ~25 min)
+sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y   # every table on this page in one shot (1×H100, ~25 min)
 sky launch -c lik-bench scripts/sky_bench_verify.yaml -y   # forward + cached + fused head + fp8 (the README numbers)
 sky jobs launch scripts/sky_test.yaml             # CI-style: tests + bench_forward + bench_backward
 sky jobs launch scripts/sky_lateon_edge.yaml      # LateOn-Code-edge end-to-end
