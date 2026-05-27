@@ -109,7 +109,12 @@ inline void maxsim_inference_impl(
     // KD / pairs layout: every query owns its own [Nd, Ld, d] slab in a
     // flattened D[Nq * Nd, Ld, d] view, mirroring the Triton path in
     // ``forward.py`` (`d_global = pid`). Cross-product (default) has all
-    // queries share the same D[j, t].
+    // queries share the same D[j, t]. Unlike Triton — which sets
+    // ``kd_layout`` as a ``tl.constexpr`` and emits two specialised
+    // binaries — Metal keeps the two modes in a single kernel and pays
+    // one ``select`` instruction per ``j_idx`` for the index pick.
+    // That's effectively free on Apple's ALU and saves us 4 extra
+    // kernel variants (half×big/small × bfloat×big/small × kd).
     const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
 
     const uint Nd = p.Nd;

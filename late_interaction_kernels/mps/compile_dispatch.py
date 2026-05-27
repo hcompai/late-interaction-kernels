@@ -35,6 +35,7 @@ from late_interaction_kernels.reference import maxsim_reference
 
 _compile_lock = threading.Lock()
 _compiled_cache: dict[tuple, Callable] = {}
+_compiled_kd_cache: dict[tuple, Callable] = {}
 
 # Crossover thresholds measured on M-series silicon: below these, the
 # compile path's lower launch overhead beats the Metal kernel's bigger
@@ -77,6 +78,30 @@ def _compile_key(
     d_mask: torch.Tensor | None,
 ) -> tuple:
     return (Q.dtype, bool(normalize), q_mask is not None, d_mask is not None)
+
+
+def _get_compiled_kd(key: tuple) -> Callable:
+    """Like :func:`_get_compiled` but wraps the 4-D KD reference.
+
+    Same ``mode="reduce-overhead"`` / ``dynamic=False`` choice — Inductor
+    on MPS (torch 2.8) recompiles per shape, which is fine for the
+    inference workloads that exercise this path (PyLate KD, ColPali
+    pairwise) where ``(Nq, K, Ld)`` is stable across a run.
+    """
+    fn = _compiled_kd_cache.get(key)
+    if fn is not None:
+        return fn
+    with _compile_lock:
+        fn = _compiled_kd_cache.get(key)
+        if fn is None:
+            fn = torch.compile(
+                _kd_reference,
+                mode="reduce-overhead",
+                dynamic=False,
+                fullgraph=False,
+            )
+            _compiled_kd_cache[key] = fn
+    return fn
 
 
 def _get_compiled(key: tuple) -> Callable:
@@ -174,13 +199,16 @@ def _compile_path(
     d_mask: torch.Tensor | None,
     normalize: bool,
 ) -> torch.Tensor:
-    # KD / pairs (4-D D) doesn't go through ``maxsim_reference`` — that
-    # one only knows the cross-product layout. Fall back to the dense
-    # KD reference instead (eager only; no ``torch.compile``, because
-    # Inductor MPS on torch 2.8 doesn't lower the ``[Nq, K, Lq, Ld]``
-    # ``max`` reduction cleanly enough to be worth the recompile churn).
+    # KD / pairs (4-D D) wraps the dense ``_kd_reference`` with
+    # ``torch.compile`` — same policy as the cross-product path, so
+    # benchmarks that report "compile" actually measure ``torch.compile``
+    # output (Inductor MPS) rather than silently dropping to eager.
+    # Honour ``LIK_DISABLE_COMPILE=1`` for both layouts.
     if D.dim() == 4:
-        return _kd_reference(Q, D, q_mask, d_mask, normalize)
+        if _disable_compile():
+            return _kd_reference(Q, D, q_mask, d_mask, normalize)
+        fn = _get_compiled_kd(_compile_key(Q, normalize, q_mask, d_mask))
+        return fn(Q, D, q_mask, d_mask, normalize)
     if _disable_compile():
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     fn = _get_compiled(_compile_key(Q, normalize, q_mask, d_mask))

@@ -114,7 +114,14 @@ def _kd_eager_call(Q, D):
     """Eager KD reference — dense einsum + fp32 max-sum. No ``torch.compile``."""
     from late_interaction_kernels.mps.compile_dispatch import _kd_reference
 
-    return _kd_reference(Q, D, q_mask=None, d_mask=None, normalize=True)
+    return _kd_reference(Q, D, None, None, True)
+
+
+def _kd_compile_call(Q, D):
+    """``torch.compile``-wrapped KD reference — same path as ``_compile_path``."""
+    from late_interaction_kernels.mps import compile_dispatch as _mps
+
+    return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
 
 
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
@@ -163,12 +170,19 @@ def bench_one_kd(name, Nq, K, Lq, Ld, d, dtype):
     else:
         rows.append(("metal", float("nan"), float("nan"), float("nan")))
 
-    # ``_compile_path`` routes 4-D D straight to ``_kd_reference``, so the
-    # "compile" and "eager" columns are the same code in KD; we keep both
-    # rows for layout parity with the cross-product table above.
+    # Three honestly distinct paths now: ``_compile_path`` actually wraps
+    # ``_kd_reference`` in ``torch.compile`` (matching the xprod policy),
+    # so we measure it; the ``eager`` column calls the un-compiled
+    # reference for a like-for-like Inductor lift comparison.
+    try:
+        t, sd = _time_op(lambda: _kd_compile_call(Q, D))
+        m = _peak_mb(lambda: _kd_compile_call(Q, D))
+        rows.append(("compile", t, sd, m))
+    except Exception:
+        rows.append(("compile", float("nan"), float("nan"), float("nan")))
+
     t, sd = _time_op(lambda: _kd_eager_call(Q, D))
     m = _peak_mb(lambda: _kd_eager_call(Q, D))
-    rows.append(("compile", t, sd, m))
     rows.append(("eager", t, sd, m))
 
     return rows
