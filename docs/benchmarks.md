@@ -244,13 +244,13 @@ the projection / normalize step is folded in:
 
 | shape                                                  | unfused (`F.linear+normalize` then LIK MaxSim) | fused    | speedup   |
 | ------------------------------------------------------ | ---------------------------------------------- | -------- | --------- |
-| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.95 ms                                       |  1.02 ms | 0.93×     |
-| LateOn `Nd=32, Lq=32, Ld=1024`                         |  1.21 ms                                       |  1.05 ms | 1.15×     |
-| LateOn-Code `Nd=128, Ld=1024`                          |  1.50 ms                                       |  1.01 ms | 1.49×     |
-| LateOn-Code `Nd=256, Ld=1024`                          |  2.27 ms                                       |  1.21 ms | **1.88×** |
-| LateOn-Code `Nd=512, Ld=2048`                          |  7.40 ms                                       |  1.74 ms | **4.27×** |
-| LateOn-Code `Nd=1024, Ld=2048`                         | 14.09 ms                                       |  3.14 ms | **4.49×** |
-| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.24 ms                                       |  1.31 ms | **4.01×** |
+| LateOn `Nd=16, Lq=32, Ld=300, d_model=768`             |  0.93 ms                                       |  0.98 ms | 0.95×     |
+| LateOn `Nd=32, Lq=32, Ld=1024`                         |  0.93 ms                                       |  0.99 ms | 0.94×     |
+| LateOn-Code `Nd=128, Ld=1024`                          |  1.47 ms                                       |  1.04 ms | 1.42×     |
+| LateOn-Code `Nd=256, Ld=1024`                          |  2.34 ms                                       |  1.09 ms | **2.15×** |
+| LateOn-Code `Nd=512, Ld=2048`                          |  7.31 ms                                       |  1.71 ms | **4.28×** |
+| LateOn-Code `Nd=1024, Ld=2048`                         | 14.08 ms                                       |  3.15 ms | **4.47×** |
+| LateOn-Code-edge `Nd=256, Ld=4096, d_model=384, d=96`  |  5.23 ms                                       |  1.33 ms | **3.93×** |
 
 
 The win grows with `Nd · Ld` (more positions for the fused linear to
@@ -272,13 +272,13 @@ H100 80 GB SXM, NGC 25.06, `bench_fp8.py`:
 
 | shape                                       | bf16     | fp8      | speedup   | label              |
 | ------------------------------------------- | -------- | -------- | --------- | ------------------ |
-| `Nd=1k, Lq=32, Ld=128, d=128`               | 0.125 ms | 0.130 ms | 0.96×     | pylate-rerank-1k   |
-| `Nd=4k, Lq=32, Ld=128, d=128`               | 0.152 ms | 0.158 ms | 0.96×     | pylate-rerank-4k   |
-| `Nd=8k, Lq=32, Ld=256, d=128`               | 0.279 ms | 0.237 ms | 1.18×     | colbert-rerank-8k  |
-| `Nd=4k, Lq=32, Ld=256, d=128`               | 0.448 ms | 0.348 ms | **1.29×** | batched-rerank-16k |
-| `Nd=2k, Lq=32, Ld=512, d=128`               | 0.198 ms | 0.176 ms | 1.12×     | long-docs-2k       |
-| `Nd=1k, Lq=32, Ld=128, d=96`                | 0.123 ms | 0.139 ms | 0.89×     | lateon-edge-1k     |
-| `Nd=4k, Lq=32, Ld=128, d=96`                | 0.149 ms | 0.152 ms | 0.98×     | lateon-edge-4k     |
+| `Nd=1k, Lq=32, Ld=128, d=128`               | 0.124 ms | 0.133 ms | 0.94×     | pylate-rerank-1k   |
+| `Nd=4k, Lq=32, Ld=128, d=128`               | 0.154 ms | 0.158 ms | 0.98×     | pylate-rerank-4k   |
+| `Nd=8k, Lq=32, Ld=256, d=128`               | 0.278 ms | 0.234 ms | 1.19×     | colbert-rerank-8k  |
+| `Nd=4k, Lq=32, Ld=256, d=128`               | 0.442 ms | 0.346 ms | **1.28×** | batched-rerank-16k |
+| `Nd=2k, Lq=32, Ld=512, d=128`               | 0.194 ms | 0.173 ms | 1.13×     | long-docs-2k       |
+| `Nd=1k, Lq=32, Ld=128, d=96`                | 0.123 ms | 0.137 ms | 0.90×     | lateon-edge-1k     |
+| `Nd=4k, Lq=32, Ld=128, d=96`                | 0.148 ms | 0.155 ms | 0.96×     | lateon-edge-4k     |
 
 
 On rerank-sized shapes the bf16 kernel got fast enough in 0.3.0 that
@@ -511,15 +511,16 @@ fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
 ## Where this kernel actually moves the e2e needle
 
 1. **Inference / reranking** — no encoder backward → MaxSim *is* the
-  step. **1.5–15×** at matched numerics, biggest wins on wide
+  step. **1.7–15×** at matched numerics, biggest wins on wide
   `Lq · Ld` shapes.
 2. **Small-encoder training** — encoder small enough that MaxSim is
-  material; LateOn-Code-edge moves **1.04–1.15×** end-to-end on real
-  MS MARCO triplets.
+  material; LateOn-Code-edge moves **1.00–1.06×** end-to-end on real
+  MS MARCO triplets in this sweep (was 1.04–1.15× pre-0.3.0; the
+  `bs=64, Ld=300` headline is queued for 0.3.1 — see CHANGELOG).
 3. **Long-context regimes** (`Ld ≥ 8k`) — fused kernels run, naive
   doesn't.
 4. **Compressed indices** — PLAID rerank vs `engine.search()` is
-  **8–22×** on full corpus scoring and **18–47×** on the partial
+  **8–23×** on full corpus scoring and **18–51×** on the partial
   rerank workload that matches fast-plaid's IVF probe.
 5. **KD / offline scoring** — teacher + student both do MaxSim, no
   per-step encoder cost to hide behind.
