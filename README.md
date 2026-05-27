@@ -126,13 +126,13 @@ is asserted at `atol=1e-2` before timing.
 
 | Workload                                                    | Speedup            |
 | ----------------------------------------------------------- | ------------------ |
-| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 2-11×          |
+| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 1.5-15×        |
 | Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
-| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.0-5.5×           |
-| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 12-32×             |
-| Fused D-side head (training)                                | 1.2-4.2×           |
-| FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.9-2.5×           |
-| LateOn-Code-edge training (real MS MARCO triplets)          | 1.05-1.27× e2e     |
+| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 5-6.5×             |
+| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 8-22× full / 18-47× partial |
+| Fused D-side head (training)                                | 1.5-4.5× on `Nd · Ld` large |
+| FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
+| LateOn-Code-edge training (real MS MARCO triplets)          | 1.04-1.15× e2e     |
 
 `torch.compile` is within ±5% of eager on every forward shape because
 Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity
