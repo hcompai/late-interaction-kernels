@@ -64,7 +64,7 @@ run: |
   run python benchmarks/bench_normalize.py        --outdir "$OUT"
   run python benchmarks/bench_backward_method.py  --outdir "$OUT"
   run python benchmarks/bench_lateon.py           --outdir "$OUT"
-  run python benchmarks/bench_cached_maxsim.py    --outdir "$OUT" --only all
+  run python benchmarks/bench_cached_maxsim.py    --outdir "$OUT" --variants all
   run python benchmarks/bench_flash_maxsim.py     --outdir "$OUT"
 
   # --- standalone benches without --outdir (table 4 / 5 / 6) -----------------

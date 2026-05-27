@@ -20,8 +20,6 @@ Requires: ``pip install pylate datasets`` (see ``.[dev,pylate]`` extra).
 # ruff: noqa: F821  -- ruff loses ``loss_fn`` / ``optim`` across the trailing
 # ``del`` in ``run_realdata`` and false-positives on the ``step`` closure.
 
-from __future__ import annotations
-
 import argparse
 import gc
 import importlib.util
@@ -265,7 +263,7 @@ def main():
     ap.add_argument("--recipe", choices=["contrastive", "reason"], default="contrastive")
     ap.add_argument("--mini-batch-size", type=int, default=16)
     ap.add_argument("--grad-checkpoint", action="store_true")
-    ap.add_argument("--only", choices=["both", "vanilla", "flash"], default="both")
+    ap.add_argument("--variants", choices=["both", "vanilla", "flash"], default="both")
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -282,7 +280,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "flash"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "flash"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_realdata(

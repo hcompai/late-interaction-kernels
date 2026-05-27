@@ -43,7 +43,7 @@ run: |
   uv run python benchmarks/bench_forward.py --outdir /tmp/bench --dtype bf16 2>&1 | tee /tmp/bench/forward.log
 
   echo "=== bench_cached_maxsim (vanilla pylate + torch.compile + LIK) ==="
-  uv run python benchmarks/bench_cached_maxsim.py --outdir /tmp/bench --only all 2>&1 | tee /tmp/bench/cached.log
+  uv run python benchmarks/bench_cached_maxsim.py --outdir /tmp/bench --variants all 2>&1 | tee /tmp/bench/cached.log
 
   echo "=== bench_fused_head_train (fused_head vs F.linear+normalize+maxsim — both with LIK maxsim) ==="
   uv run python benchmarks/bench_fused_head_train.py 2>&1 | tee /tmp/bench/fused_head.log || true

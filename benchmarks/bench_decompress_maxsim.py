@@ -272,7 +272,15 @@ def run(args) -> list[dict]:
     print(header)
     print("-" * len(header))
 
-    shapes = SHAPES if not args.short else SHAPES[:3]
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    elif args.short:
+        shapes = SHAPES[:3]
+    else:
+        shapes = SHAPES
     rows = []
     for name, n_docs, ld in shapes:
         idx = _build_index(n_docs, ld, args.nbits, seed=args.seed)
@@ -352,6 +360,12 @@ def main():
     ap.add_argument("--dtype", choices=["fp16", "bf16"], default="bf16")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--short", action="store_true")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)

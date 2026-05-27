@@ -39,10 +39,28 @@ def _time(fn, warmup=5, iters=50):
     return s.elapsed_time(e) / iters
 
 
-def main(out_dir: str):
+def _peak_mb(fn) -> float:
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    fn()
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated() / 1024**2
+
+
+def _filter_shapes(only: list[str] | None) -> list[tuple]:
+    if not only:
+        return list(SHAPES)
+    wanted = set(only)
+    out = [s for s in SHAPES if s[0] in wanted]
+    if not out:
+        raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    return out
+
+
+def main(out_dir: str, only: list[str] | None):
     gpu = torch.cuda.get_device_name(0).replace(" ", "_")
     rows = []
-    for name, Nq, Nd, Lq, Ld, d in SHAPES:
+    for name, Nq, Nd, Lq, Ld, d in _filter_shapes(only):
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.bfloat16)
         D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.bfloat16)
 
@@ -56,6 +74,8 @@ def main(out_dir: str):
 
         t_explicit = _time(_explicit)
         t_fused = _time(_fused)
+        m_explicit = _peak_mb(_explicit)
+        m_fused = _peak_mb(_fused)
 
         rows.append(
             {
@@ -68,10 +88,13 @@ def main(out_dir: str):
                 "explicit_ms": t_explicit,
                 "fused_ms": t_fused,
                 "speedup": t_explicit / t_fused,
+                "explicit_peak_mb": m_explicit,
+                "fused_peak_mb": m_fused,
             }
         )
         print(
-            f"{name:20s}  explicit={t_explicit:6.3f} ms  fused={t_fused:6.3f} ms  "
+            f"{name:20s}  explicit={t_explicit:6.3f} ms / {m_explicit:7.1f} MB  "
+            f"fused={t_fused:6.3f} ms / {m_fused:7.1f} MB  "
             f"speedup={t_explicit / t_fused:4.2f}x"
         )
 
@@ -80,17 +103,27 @@ def main(out_dir: str):
         json.dump({"gpu": gpu, "rows": rows}, f, indent=2)
     with open(f"{out_dir}/normalize_{gpu}.md", "w") as f:
         f.write(f"# Fused L2-normalize bench — {gpu}\n\n")
-        f.write("| shape | Nq | Nd | Lq | Ld | d | F.normalize+maxsim (ms) | fused (ms) | speedup |\n")
-        f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+        f.write(
+            "| shape | Nq | Nd | Lq | Ld | d | F.normalize+maxsim (ms) | "
+            "fused (ms) | speedup | explicit peak (MB) | fused peak (MB) |\n"
+        )
+        f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
         for r in rows:
             f.write(
                 f"| {r['name']} | {r['Nq']} | {r['Nd']} | {r['Lq']} | {r['Ld']} | {r['d']} | "
-                f"{r['explicit_ms']:.3f} | {r['fused_ms']:.3f} | {r['speedup']:.2f}× |\n"
+                f"{r['explicit_ms']:.3f} | {r['fused_ms']:.3f} | {r['speedup']:.2f}× | "
+                f"{r['explicit_peak_mb']:.1f} | {r['fused_peak_mb']:.1f} |\n"
             )
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--outdir", default="benchmarks/results")
+    p.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
     args = p.parse_args()
-    main(args.outdir)
+    main(args.outdir, args.only)

@@ -459,8 +459,6 @@ Reproduce with `scripts/sky_colpali_training.yaml` and
 | `ColbertLoss`       | synth bs=4, 448px                  |  386.9 ms              |  370.4 ms | **1.04×** |  9.10 GB |
 | `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  895.4 ms              |  882.4 ms | 1.01×     |  5.74 GB |
 | `ColbertPairwiseCE` | synth bs=4, 448px                  |  366.9 ms              |  363.8 ms | 1.01×     |  9.10 GB |
-| `ColbertLoss`       | synth bs=16, 1024px                |  831.8 ms              |  831.7 ms | 1.00×     | 49.61 GB |
-| `ColbertLoss`       | synth bs=16, 1024px, grad-ckpt     | 2099.5 ms              | 2093.5 ms | 1.00×     | 11.54 GB |
 | `ColbertLoss`       | real DocVQA bs=4                   |  770.7 ms              |  723.6 ms | **1.07×** | 16.20 GB |
 | `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 1941.3 ms              | 1865.7 ms | 1.04×     |  8.05 GB |
 
@@ -468,15 +466,14 @@ Reproduce with `scripts/sky_colpali_training.yaml` and
 Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
 forward+backward than a ModernBERT-149 M ColBERT, and the image
 modality blows up Ld (≈1 030 visual tokens at the default 448 px
-resolution; ≈3 060 at 1 024 px). So even with LoRA-only training
-shrinking AdamW state by ~60×, the *encoder activation-grad
-backward* is what dominates the step — LIK lands in the 1.00–1.07×
-range here. Best win is the 448 px / bs=4 real-data step (**1.07×**)
-where the encoder share is smallest; at 1 024 px the encoder fully
-swallows the step. The kernel is a drop-in — no other code changes
-between the two columns. Same takeaway as the PyLate `Contrastive`
-recipe on the 149 M encoder: when the transformer is the bottleneck,
-LIK doesn't move the needle, it just doesn't hurt.
+resolution). So even with LoRA-only training shrinking AdamW state
+by ~60×, the *encoder activation-grad backward* is what dominates
+the step — LIK lands in the 1.00–1.07× range here. Best win is the
+448 px / bs=4 real-data step (**1.07×**) where the encoder share is
+smallest. The kernel is a drop-in — no other code changes between
+the two columns. Same takeaway as the PyLate `Contrastive` recipe
+on the 149 M encoder: when the transformer is the bottleneck, LIK
+doesn't move the needle, it just doesn't hurt.
 
 ## Edge models (`d ∈ {48, 64}`)
 

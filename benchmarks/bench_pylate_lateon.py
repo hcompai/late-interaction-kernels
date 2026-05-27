@@ -324,7 +324,7 @@ def main():
     )
     ap.add_argument("--ddp", action="store_true", help="initialize torch.distributed (torchrun required)")
     ap.add_argument(
-        "--only",
+        "--variants",
         choices=["both", "vanilla", "flash"],
         default="both",
         help="run a subset of variants (useful when vanilla OOMs)",
@@ -347,7 +347,7 @@ def main():
     _log("-" * 70)
 
     results = {}
-    variants = ["vanilla", "flash"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "flash"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_one(

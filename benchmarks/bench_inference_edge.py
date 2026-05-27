@@ -179,10 +179,10 @@ def main():
     p.add_argument("--dtype", choices=["fp16", "bf16"], default="bf16")
     p.add_argument("--outdir", default="benchmarks/results")
     p.add_argument(
-        "--shapes",
+        "--only",
         nargs="+",
         default=None,
-        help="Subset of shape names. Defaults to the full sweep.",
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
     )
     p.add_argument("--quick", action="store_true", help="Drop the Ld=8192 / Nd=32k rows.")
     args = p.parse_args()
@@ -192,8 +192,8 @@ def main():
 
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float16
 
-    if args.shapes:
-        shapes = _shapes_arg(args.shapes)
+    if args.only:
+        shapes = _shapes_arg(args.only)
     elif args.quick:
         shapes = [s for s in SHAPES if s[4] <= 4096 and s[2] <= 4000]
     else:

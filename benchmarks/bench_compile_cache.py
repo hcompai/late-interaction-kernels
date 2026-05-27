@@ -35,6 +35,13 @@ def _time(fn, warmup=5, iters=50):
     return s.elapsed_time(e) / iters
 
 
+SHAPES = [
+    # name, Nq, Nd, Lq, d
+    ("text", 2, 4, 32, 128),
+    ("colpali", 1, 4, 1024, 128),
+]
+
+
 def _bench_one(Nq: int, Nd: int, Lq: int, d: int, dtype: torch.dtype) -> dict:
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
     Ds = [torch.randn(Nd, ld, d, device="cuda", dtype=dtype) for ld in LDS]
@@ -45,11 +52,13 @@ def _bench_one(Nq: int, Nd: int, Lq: int, d: int, dtype: torch.dtype) -> dict:
     torch.cuda.synchronize()
     _maxsim_fwd_kernel.cache.clear()
 
+    torch.cuda.reset_peak_memory_stats()
     t0 = time.perf_counter()
     for D in Ds:
         _ = maxsim(Q, D)
         torch.cuda.synchronize()
     cold_s = time.perf_counter() - t0
+    cold_peak_mb = torch.cuda.max_memory_allocated() / 1024**2
 
     warm_ms = _time(lambda: maxsim(Q, Ds[len(Ds) // 2]))
 
@@ -59,29 +68,37 @@ def _bench_one(Nq: int, Nd: int, Lq: int, d: int, dtype: torch.dtype) -> dict:
         "Lq": Lq,
         "d": d,
         "cold_pass_s": cold_s,
+        "cold_peak_mb": cold_peak_mb,
         "cache_entries": len(_maxsim_fwd_kernel.cache),
         "warm_per_call_ms": warm_ms,
     }
 
 
-def main(out_dir: str) -> None:
+def main(out_dir: str, only: list[str] | None, dtypes: list[str] | None) -> None:
     gpu = torch.cuda.get_device_name(0).replace(" ", "_")
-    shapes = [
-        # name, Nq, Nd, Lq, d
-        ("text", 2, 4, 32, 128),
-        ("colpali", 1, 4, 1024, 128),
+    if only:
+        wanted = set(only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    else:
+        shapes = SHAPES
+
+    dtype_pairs = [
+        (name, torch.float16 if name == "fp16" else torch.bfloat16) for name in (dtypes or ["fp16", "bf16"])
     ]
 
     rows = []
     for name, Nq, Nd, Lq, d in shapes:
-        for dtype in (torch.float16, torch.bfloat16):
+        for dtype_name, dtype in dtype_pairs:
             r = _bench_one(Nq, Nd, Lq, d, dtype)
             r["name"] = name
-            r["dtype"] = "fp16" if dtype is torch.float16 else "bf16"
+            r["dtype"] = dtype_name
             rows.append(r)
             print(
                 f"{name:10s} {r['dtype']}  "
                 f"cold={r['cold_pass_s']:6.2f}s  "
+                f"peak={r['cold_peak_mb']:7.1f}MB  "
                 f"cache_entries={r['cache_entries']}  "
                 f"warm/call={r['warm_per_call_ms']:.3f}ms"
             )
@@ -92,12 +109,16 @@ def main(out_dir: str) -> None:
     with open(f"{out_dir}/compile_cache_{gpu}.md", "w") as f:
         f.write(f"# Compile-cache bench — {gpu}\n\n")
         f.write(f"Cold pass over {len(LDS)} distinct Ld in [{LDS[0]}, {LDS[-1]}].\n\n")
-        f.write("| shape | dtype | Nq | Nd | Lq | d | cold (s) | cache entries | warm/call (ms) |\n")
-        f.write("|---|---|---:|---:|---:|---:|---:|---:|---:|\n")
+        f.write(
+            "| shape | dtype | Nq | Nd | Lq | d | cold (s) | cold peak (MB) | "
+            "cache entries | warm/call (ms) |\n"
+        )
+        f.write("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
         for r in rows:
             f.write(
                 f"| {r['name']} | {r['dtype']} | {r['Nq']} | {r['Nd']} | "
                 f"{r['Lq']} | {r['d']} | {r['cold_pass_s']:.2f} | "
+                f"{r['cold_peak_mb']:.1f} | "
                 f"{r['cache_entries']} | {r['warm_per_call_ms']:.3f} |\n"
             )
 
@@ -105,5 +126,18 @@ def main(out_dir: str) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--outdir", default="benchmarks/results")
+    p.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
+    p.add_argument(
+        "--dtype",
+        nargs="+",
+        choices=["fp16", "bf16"],
+        default=None,
+        help="subset of dtypes to run; default = both",
+    )
     args = p.parse_args()
-    main(args.outdir)
+    main(args.outdir, args.only, args.dtype)

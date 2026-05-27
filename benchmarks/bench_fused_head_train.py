@@ -12,8 +12,10 @@ Usage
 ::
 
     python benchmarks/bench_fused_head_train.py
+    python benchmarks/bench_fused_head_train.py --only lateon-B4-Ld300
 """
 
+import argparse
 import statistics
 import time
 
@@ -77,14 +79,33 @@ def _step_unfused(Q, H_d, W, b, *, normalize):
     scores.sum().backward()
 
 
+def _filter_shapes(only: list[str] | None) -> list[tuple]:
+    if not only:
+        return list(SHAPES)
+    wanted = set(only)
+    out = [s for s in SHAPES if s[0] in wanted]
+    if not out:
+        raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    return out
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
+    args = ap.parse_args()
+
     print(f"device: {torch.cuda.get_device_name(0)}")
     print(
         f"{'shape':<34} {'unfused ms':>12} {'fused ms':>12} "
         f"{'speedup':>9}   {'unfused MB':>12} {'fused MB':>12}   label"
     )
     print("-" * 116)
-    for label, Nq, Nd, Lq, Ld, d_model, d_out in SHAPES:
+    for label, Nq, Nd, Lq, Ld, d_model, d_out in _filter_shapes(args.only):
         torch.manual_seed(0)
         dtype = torch.bfloat16
         H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype, requires_grad=True)

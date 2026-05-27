@@ -34,6 +34,46 @@ below regressed and are queued for 0.3.1:
 
 - Headline benchmark ranges in `README.md` refreshed to match the
   0.3.0 sweep in `docs/benchmarks.md`. See the per-table notes there.
+- **Benchmark CLI is now uniform.** Every script with a hard-coded
+  shape / experiment list now accepts `--only NAME [NAME ...]` to
+  run a subset (added to `bench_forward`, `bench_normalize`,
+  `bench_fp8`, `bench_fused_head_train`, `bench_lateon`,
+  `bench_compile_cache`, `bench_decompress_maxsim`, `bench_fastplaid`,
+  `bench_fastplaid_e2e`, `bench_backward_method`,
+  `bench_backward_unified`, `bench_backward_0_5`,
+  `bench_cached_maxsim`, `bench_pylate_training`). The pre-existing
+  single-name `--shape` flag in `bench_flash_maxsim` / `bench_mps`
+  was renamed to `--only` (now accepts multiple names), and
+  `bench_inference_edge`'s `--shapes` was renamed to `--only` for
+  the same reason.
+- **Variant selection is now `--variants`.** In benches where
+  `--only` previously chose between `vanilla` / `lik` / `flash` /
+  `compile` / `both` / `all` it has been renamed to `--variants` so
+  `--only` is unambiguously about the experiment subset. Affects
+  `bench_cached_maxsim`, `bench_pylate_lateon`,
+  `bench_pylate_realdata`, `bench_colpali_training`,
+  `bench_colpali_realdata`. `scripts/sky_bench_verify.yaml` and
+  `scripts/sky_run_all_benchmarks.yaml` updated to match.
+
+### Added
+
+- **Peak VRAM is now reported by every benchmark.** Scripts that
+  previously only timed steps now also call
+  `torch.cuda.reset_peak_memory_stats()` and record
+  `max_memory_allocated()` per variant in stdout and JSON output:
+  `bench_normalize`, `bench_fp8`, `bench_compile_cache`,
+  `bench_pylate_training`, `bench_backward_method`,
+  `bench_backward_unified`, `bench_backward_0_5`,
+  `bench_fastplaid_e2e`.
+
+### Removed
+
+- Dropped the `synth bs=16, 1024px` rows from the synthetic ColPali
+  e2e bench tables in `docs/benchmarks.md` and the matching
+  `synth-colbert-bs16-1024` / `synth-colbert-bs16-1024-ckpt` blocks
+  in `scripts/sky_colpali_training.yaml`. These shapes were
+  encoder-bound (1.00× vs vanilla in both rows) and contributed
+  nothing the 448px rows didn't already cover.
 
 ## [0.3.0] - 2026-05-26
 

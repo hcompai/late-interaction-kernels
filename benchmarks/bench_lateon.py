@@ -116,9 +116,23 @@ def main():
     p.add_argument(
         "--skip-naive-at", type=int, default=4096, help="skip naive for Ld above this threshold (OOM)"
     )
+    p.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
     args = p.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
+
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    else:
+        shapes = SHAPES
 
     rows = []
     print(
@@ -128,7 +142,7 @@ def main():
         f"{'mem flash':>9} {'mem naive':>9}   {'auto':>5}"
     )
 
-    for name, Nq, Nd, Lq, Ld in SHAPES:
+    for name, Nq, Nd, Lq, Ld in shapes:
         d = D_MODEL
         # Use fp16 (ColBERT's standard inference dtype).
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16, requires_grad=True)

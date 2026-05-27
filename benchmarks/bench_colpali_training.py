@@ -293,7 +293,7 @@ def main():
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
-        "--only",
+        "--variants",
         choices=["both", "vanilla", "lik"],
         default="both",
         help="run a subset of variants (useful when vanilla OOMs)",
@@ -317,7 +317,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "lik"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "lik"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_one(

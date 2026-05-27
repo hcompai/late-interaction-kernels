@@ -193,13 +193,25 @@ def main():
     parser.add_argument("--dtype", choices=["fp16", "bf16"], default="bf16")
     parser.add_argument("--outdir", default="benchmarks/results")
     parser.add_argument("--quick", action="store_true", help="Skip the biggest shapes")
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"subset of shape names to run; default = all. choices: {[s[0] for s in SHAPES]}",
+    )
     args = parser.parse_args()
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float16
 
     os.makedirs(args.outdir, exist_ok=True)
     gpu = torch.cuda.get_device_name().replace(" ", "_")
 
-    shapes = [s for s in SHAPES if not args.quick or s[2] <= 1000]
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
+    else:
+        shapes = [s for s in SHAPES if not args.quick or s[2] <= 1000]
     results = []
     for shape in shapes:
         name, *_rest = shape

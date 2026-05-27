@@ -263,7 +263,7 @@ def main():
             "is for measuring an upper-bound encoder-dominated regime."
         ),
     )
-    ap.add_argument("--only", choices=["both", "vanilla", "lik"], default="both")
+    ap.add_argument("--variants", choices=["both", "vanilla", "lik"], default="both")
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -284,7 +284,7 @@ def main():
     _log("-" * 72)
 
     results: dict[str, Measurement] = {}
-    variants = ["vanilla", "lik"] if args.only == "both" else [args.only]
+    variants = ["vanilla", "lik"] if args.variants == "both" else [args.variants]
     for v in variants:
         _log(f"[{v}] running ...")
         m = run_realdata(

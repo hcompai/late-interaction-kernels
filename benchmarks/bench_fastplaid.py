@@ -139,8 +139,16 @@ def run_isolated(args) -> list[dict]:
         f"{'fp_peak':>10} {'flash_peak':>12} {'mem_x':>7}"
     )
 
+    if args.only:
+        wanted = set(args.only)
+        shapes = [s for s in RERANK_SHAPES if s[0] in wanted]
+        if not shapes:
+            raise SystemExit(f"unknown shape(s); pick from: {[s[0] for s in RERANK_SHAPES]}")
+    else:
+        shapes = RERANK_SHAPES
+
     rows = []
-    for name, n, lq, ld in RERANK_SHAPES:
+    for name, n, lq, ld in shapes:
         Q = torch.nn.functional.normalize(
             torch.randn(lq, D_MODEL, device="cuda", dtype=torch.float16), dim=-1
         )
@@ -288,6 +296,15 @@ def main():
     ap.add_argument("--small", action="store_true", help="skip the 50k corpus")
     ap.add_argument("--skip-isolated", action="store_true")
     ap.add_argument("--skip-fastplaid", action="store_true")
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=(
+            "subset of isolated-rerank shape names to run; default = all. "
+            f"choices: {[s[0] for s in RERANK_SHAPES]}"
+        ),
+    )
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
