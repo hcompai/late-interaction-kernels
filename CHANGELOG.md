@@ -4,6 +4,33 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MPS Metal kernel: KD / pairs layout (4-D `D`).** The Metal MaxSim
+  kernel now accepts `D` as `[Nq, K, Ld, d]` directly, matching the
+  Triton path. Each program reads its own `K`-slab via a constexpr
+  `KD_LAYOUT` flag — one launch, no Python `K`-loop, no host-side
+  pack. PyLate's `colbert_kd_scores` and `colbert_scores_pairwise`
+  shapes now hit the Metal kernel on Apple Silicon instead of falling
+  back to `torch.compile`.
+
+### Changed
+
+- **MPS Metal kernel source moved to a sidecar `.metal` file.**
+  `late_interaction_kernels/mps/_maxsim.metal` holds the MSL; the
+  Python wrapper just `read_text()`s it and substitutes the
+  `_NORMALIZE_EPS` token at load time. Gives IDE syntax + diagnostics
+  on the kernel and keeps `metal.py` Python-only.
+- **MPS Metal kernel: harmonise normalize epsilon.** The MSL kernel
+  now uses `1e-12` (matching Triton + the PyTorch reference); the
+  previous value was `1e-6`. Identical numerically to the other
+  backends on near-zero rows.
+- **MPS Metal kernel: cache `_pack_params` upload.** Tiny LRU keyed on
+  the six u32 fields of `MaxSimParams` so the same shape doesn't pay
+  a host pack + H2D copy on every call. No-op when the cache misses.
+
 ## [0.3.0] - 2026-05-27
 
 ### Added
