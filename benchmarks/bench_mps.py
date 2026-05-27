@@ -54,6 +54,19 @@ SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
     ("edge-d64", 1, 1000, 32, 300, 64),
 )
 
+# KD / pairs layout: ``D.shape == (Nq, K, Ld, d)``. Each query owns its
+# own K-slab — the PyLate KD inference shape and the ColPali negative-
+# loss layout. ``K=1`` is the "pairs" corner (same as the cross-product
+# diagonal). (name, Nq, K, Lq, Ld, d)
+KD_SHAPES: Final[tuple[tuple[str, int, int, int, int, int], ...]] = (
+    ("kd-rerank-top10",   1, 10,  32,  300, 128),  # eval-time rerank, top-10
+    ("kd-rerank-top32",   1, 32,  32,  300, 128),  # PyLate issue #224 top-32
+    ("kd-bs4-K10",        4, 10,  32,  300, 128),  # batched eval: 4 × 10
+    ("kd-bs8-K32",        8, 32,  32,  200, 128),  # PyLate KD bs=8, 32 negs
+    ("kd-pairs-bs32",    32,  1,  32,  256, 128),  # diagonal pairs (ColPali)
+    ("kd-bs1-K100-long",  1, 100, 32, 1024, 128),  # rerank with long docs
+)
+
 
 def _sync() -> None:
     torch.mps.synchronize()
@@ -86,10 +99,22 @@ def _peak_mb(fn) -> float:
 
 
 def _compile_call(Q, D):
-    """Force the compile path even on shapes the heuristic prefers Metal for."""
+    """Force the compile path even on shapes the heuristic prefers Metal for.
+
+    For 4-D ``D`` (KD layout), this routes through the dense
+    ``_kd_reference`` fallback inside ``_compile_path`` — same code the
+    production dispatcher hits when the Metal kernel can't take the shape.
+    """
     from late_interaction_kernels.mps import compile_dispatch as _mps
 
     return _mps._compile_path(Q, D, q_mask=None, d_mask=None, normalize=True)
+
+
+def _kd_eager_call(Q, D):
+    """Eager KD reference — dense einsum + fp32 max-sum. No ``torch.compile``."""
+    from late_interaction_kernels.mps.compile_dispatch import _kd_reference
+
+    return _kd_reference(Q, D, q_mask=None, d_mask=None, normalize=True)
 
 
 def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
@@ -119,6 +144,36 @@ def bench_one(name, Nq, Nd, Lq, Ld, d, dtype):
     return rows
 
 
+def bench_one_kd(name, Nq, K, Lq, Ld, d, dtype):
+    """KD-layout bench: ``D.shape == (Nq, K, Ld, d)``.
+
+    Compares the Metal kernel (which now indexes ``d_global = i * K + j``
+    internally) against the dense ``_kd_reference`` einsum fallback that
+    production code drops to on unsupported dtypes (fp32, ``d > 128``).
+    """
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nq, K, Ld, d, device="mps", dtype=dtype)
+
+    rows: list[tuple[str, float, float, float]] = []
+
+    if _metal.is_available() and _metal.supports(Q, D):
+        t, sd = _time_op(lambda: _metal.maxsim_inference_metal(Q, D, normalize=True))
+        m = _peak_mb(lambda: _metal.maxsim_inference_metal(Q, D, normalize=True))
+        rows.append(("metal", t, sd, m))
+    else:
+        rows.append(("metal", float("nan"), float("nan"), float("nan")))
+
+    # ``_compile_path`` routes 4-D D straight to ``_kd_reference``, so the
+    # "compile" and "eager" columns are the same code in KD; we keep both
+    # rows for layout parity with the cross-product table above.
+    t, sd = _time_op(lambda: _kd_eager_call(Q, D))
+    m = _peak_mb(lambda: _kd_eager_call(Q, D))
+    rows.append(("compile", t, sd, m))
+    rows.append(("eager", t, sd, m))
+
+    return rows
+
+
 def _chip() -> str:
     if platform.system() != "Darwin":
         return "unknown"
@@ -141,6 +196,12 @@ def main():
         default=None,
         help="subset of shape names to run; default = all.",
     )
+    ap.add_argument(
+        "--layout",
+        choices=["xprod", "kd", "all"],
+        default="all",
+        help="Which shape set to run: cross-product, KD, or both.",
+    )
     ap.add_argument("--outdir", default="benchmarks/results")
     args = ap.parse_args()
 
@@ -157,21 +218,38 @@ def main():
     print(f"metal kernel: {'enabled' if metal_ok else 'disabled (dtype/build)'}")
     print()
 
+    layouts: list[tuple[str, tuple]] = []
+    if args.layout in ("xprod", "all"):
+        layouts.append(("xprod", SHAPES))
+    if args.layout in ("kd", "all"):
+        layouts.append(("kd", KD_SHAPES))
+
     if args.only:
         wanted = set(args.only)
-        shapes = [s for s in SHAPES if s[0] in wanted]
-        if not shapes:
-            sys.exit(f"unknown shape(s); pick from: {[s[0] for s in SHAPES]}")
-    elif args.quick:
-        shapes = [s for s in SHAPES if s[1] * s[3] <= 10_000]
-    else:
-        shapes = SHAPES
+        layouts = [(lay, tuple(s for s in shp if s[0] in wanted)) for lay, shp in layouts]
+        layouts = [(lay, shp) for lay, shp in layouts if shp]
+        if not layouts:
+            known = [s[0] for s in SHAPES] + [s[0] for s in KD_SHAPES]
+            sys.exit(f"unknown shape(s); pick from: {known}")
+    if args.quick:
+        layouts = [(lay, tuple(s for s in shp if s[1] * s[3] <= 10_000)) for lay, shp in layouts]
 
     report = {"chip": chip, "dtype": args.dtype, "shapes": []}
 
-    for name, Nq, Nd, Lq, Ld, d in shapes:
-        print(f"== {name:18s}  Nq={Nq} Nd={Nd} Lq={Lq} Ld={Ld} d={d}")
-        rows = bench_one(name, Nq, Nd, Lq, Ld, d, dtype)
+    flat: list[tuple[str, tuple]] = []
+    for lay, shp in layouts:
+        for s in shp:
+            flat.append((lay, s))
+
+    for layout, shape in flat:
+        name, Nq, Nd, Lq, Ld, d = shape
+        kd_tag = " [KD]" if layout == "kd" else ""
+        axis = "K" if layout == "kd" else "Nd"
+        print(f"== {name:20s}{kd_tag}  Nq={Nq} {axis}={Nd} Lq={Lq} Ld={Ld} d={d}")
+        if layout == "kd":
+            rows = bench_one_kd(name, Nq, Nd, Lq, Ld, d, dtype)
+        else:
+            rows = bench_one(name, Nq, Nd, Lq, Ld, d, dtype)
         timings = {impl: (t, sd, m) for impl, t, sd, m in rows}
         for impl, t, sd, m in rows:
             t_str = f"{t:7.3f} ± {sd:.3f} ms" if t == t else "        n/a       "
@@ -192,6 +270,7 @@ def main():
         report["shapes"].append(
             {
                 "name": name,
+                "layout": layout,
                 "shape": [Nq, Nd, Lq, Ld, d],
                 "metal_ms": metal_t,
                 "metal_peak_mb": metal_mb,
@@ -210,18 +289,33 @@ def main():
 
     md = [f"# MPS forward benchmark — {chip} ({args.dtype})\n"]
     md.append("30-iter median, `torch.mps.synchronize` between calls.\n")
-    md.append(
-        "| shape | metal ms | compile ms | eager ms | metal vs eager | metal vs compile | compile vs eager |"
-    )
-    md.append("| --- | --- | --- | --- | --- | --- | --- |")
-    for e in report["shapes"]:
-        m_str = f"{e['metal_ms']:.3f}" if e["metal_ms"] == e["metal_ms"] else "n/a"
+
+    def _write_section(label: str, entries: list[dict]) -> None:
+        if not entries:
+            return
+        md.append(f"\n## {label}\n")
         md.append(
-            f"| {e['name']} | {m_str} | {e['compile_ms']:.3f} | {e['eager_ms']:.3f} "
-            f"| {_ratio(e['speedup_metal_vs_eager'])} "
-            f"| {_ratio(e['speedup_metal_vs_compile'])} "
-            f"| {_ratio(e['speedup_compile_vs_eager'])} |"
+            "| shape | metal ms | compile ms | eager ms "
+            "| metal vs eager | metal vs compile | compile vs eager |"
         )
+        md.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for e in entries:
+            m_str = f"{e['metal_ms']:.3f}" if e["metal_ms"] == e["metal_ms"] else "n/a"
+            md.append(
+                f"| {e['name']} | {m_str} | {e['compile_ms']:.3f} | {e['eager_ms']:.3f} "
+                f"| {_ratio(e['speedup_metal_vs_eager'])} "
+                f"| {_ratio(e['speedup_metal_vs_compile'])} "
+                f"| {_ratio(e['speedup_compile_vs_eager'])} |"
+            )
+
+    _write_section(
+        "Cross-product (3-D D)",
+        [e for e in report["shapes"] if e.get("layout") == "xprod"],
+    )
+    _write_section(
+        "KD / pairs (4-D D)",
+        [e for e in report["shapes"] if e.get("layout") == "kd"],
+    )
 
     out_md = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.md")
     out_json = os.path.join(args.outdir, f"mps_{chip}_{args.dtype}.json")
