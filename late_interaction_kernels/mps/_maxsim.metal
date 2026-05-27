@@ -75,13 +75,14 @@ inline void cooperative_load_row(
     }}
 }}
 
-template <typename T, int J_PER_TG>
+template <typename T, int J_PER_TG, bool SaveArgmax>
 inline void maxsim_inference_impl(
     device const T*        Q,
     device const T*        D,
     device const char*     q_mask,
     device const char*     d_mask,
     device       float*    scores,
+    device       int*      argmax,        // [Nq * Nd, Lq]; unused when !SaveArgmax
     constant MaxSimParams& p,
     threadgroup T*         Q_tile,        // [BLOCK_Q, D_MAX]
     threadgroup T*         D_tile,        // [BLOCK_D, D_MAX]
@@ -158,6 +159,7 @@ inline void maxsim_inference_impl(
             const uint j_global = kd_layout ? (i * Nd + j) : j;
 
             float running_max = -INFINITY;
+            int running_argmax = 0;
 
             for (uint d_start = 0; d_start < Ld; d_start += BLOCK_D) {{
                 const uint t = d_start + tid;
@@ -216,13 +218,21 @@ inline void maxsim_inference_impl(
 
                 if (s_valid) {{
                     float local_max = -INFINITY;
+                    int local_argmax = 0;
                     const uint row_base = tid * BLOCK_D;
                     for (uint n = 0; n < BLOCK_D; ++n) {{
                         if (d_active_tile[n] != 0) {{
-                            local_max = fmax(local_max, S_tile[row_base + n]);
+                            float v = S_tile[row_base + n];
+                            if (v > local_max) {{
+                                local_max = v;
+                                local_argmax = (int)(d_start + n);
+                            }}
                         }}
                     }}
-                    running_max = fmax(running_max, local_max);
+                    if (local_max > running_max) {{
+                        running_max = local_max;
+                        running_argmax = local_argmax;
+                    }}
                 }}
                 // No trailing barrier: the next iteration's first writes
                 // (cooperative D load + d_active fill) already pair with
@@ -239,6 +249,13 @@ inline void maxsim_inference_impl(
             if (tid == 0) {{
                 score_acc[j_idx] += partial;
             }}
+
+            // Per-(i, s, j) argmax write. Each lane owns its own s.
+            // Lanes whose s ≥ Lq skipped via s_valid; masked rows still
+            // get a write (value=0) so the backward sees a defined slot.
+            if (SaveArgmax && s_valid) {{
+                argmax[(i * Nd + j) * Lq + s] = running_argmax;
+            }}
         }}
     }}
 
@@ -252,6 +269,7 @@ inline void maxsim_inference_impl(
     }}
 }}
 
+// Inference (no argmax save). Buffer 6 is a placeholder.
 #define MAXSIM_KERNEL(NAME, T, J)                                                \
 kernel void NAME(                                                                \
     device const T*        Q       [[buffer(0)]],                                \
@@ -268,13 +286,140 @@ kernel void NAME(                                                               
     threadgroup float S_tile[BLOCK_Q * BLOCK_D];                                 \
     threadgroup uchar d_active_tile[BLOCK_D];                                    \
     threadgroup uchar q_active_tile[BLOCK_Q];                                    \
-    maxsim_inference_impl<T, J>(Q, D, q_mask, d_mask, scores, p,                 \
-                                Q_tile, D_tile, S_tile,                          \
-                                d_active_tile, q_active_tile,                    \
-                                tid3.z, tg.x, tg.y);                             \
+    /* argmax is unused (SaveArgmax=false) — reuse `scores` as placeholder. */\
+    maxsim_inference_impl<T, J, false>(                                          \
+        Q, D, q_mask, d_mask, scores,                                            \
+        reinterpret_cast<device int*>(scores), p,                                \
+        Q_tile, D_tile, S_tile, d_active_tile, q_active_tile,                    \
+        tid3.z, tg.x, tg.y);                                                     \
+}}
+
+// Training (save argmax to buffer 6). One kernel per (dtype, J_PER_TG).
+#define MAXSIM_TRAIN_KERNEL(NAME, T, J)                                          \
+kernel void NAME(                                                                \
+    device const T*        Q       [[buffer(0)]],                                \
+    device const T*        D       [[buffer(1)]],                                \
+    device const char*     q_mask  [[buffer(2)]],                                \
+    device const char*     d_mask  [[buffer(3)]],                                \
+    device       float*    scores  [[buffer(4)]],                                \
+    constant MaxSimParams& p       [[buffer(5)]],                                \
+    device       int*      argmax  [[buffer(6)]],                                \
+    uint3 tg                       [[threadgroup_position_in_grid]],             \
+    uint3 tid3                     [[thread_position_in_threadgroup]])           \
+{{                                                                               \
+    threadgroup T     Q_tile[BLOCK_Q * D_MAX];                                   \
+    threadgroup T     D_tile[BLOCK_D * D_MAX];                                   \
+    threadgroup float S_tile[BLOCK_Q * BLOCK_D];                                 \
+    threadgroup uchar d_active_tile[BLOCK_D];                                    \
+    threadgroup uchar q_active_tile[BLOCK_Q];                                    \
+    maxsim_inference_impl<T, J, true>(                                           \
+        Q, D, q_mask, d_mask, scores, argmax, p,                                 \
+        Q_tile, D_tile, S_tile, d_active_tile, q_active_tile,                    \
+        tid3.z, tg.x, tg.y);                                                     \
 }}
 
 MAXSIM_KERNEL(maxsim_half_small,   half,   1)
 MAXSIM_KERNEL(maxsim_half_big,     half,   {J_PER_TG_BIG})
 MAXSIM_KERNEL(maxsim_bfloat_small, bfloat, 1)
 MAXSIM_KERNEL(maxsim_bfloat_big,   bfloat, {J_PER_TG_BIG})
+
+MAXSIM_TRAIN_KERNEL(maxsim_half_small_train,   half,   1)
+MAXSIM_TRAIN_KERNEL(maxsim_half_big_train,     half,   {J_PER_TG_BIG})
+MAXSIM_TRAIN_KERNEL(maxsim_bfloat_small_train, bfloat, 1)
+MAXSIM_TRAIN_KERNEL(maxsim_bfloat_big_train,   bfloat, {J_PER_TG_BIG})
+
+
+// ===== Backward =====
+//
+// Triton analogue: `maxsim_backward_unified` in `backward/unified.py`.
+// One threadgroup per (i, s); `THREADS` lanes cooperate on the d-axis.
+// `acc_Q` is row-private (no atomics on grad_Q); `grad_D` is scattered
+// via `atomic_fetch_add_explicit` because multiple (i, j) pairs can
+// land on the same (d_global, t).
+//
+// `kd_layout` switches `d_global` from `j` (cross-product) to `i*Nd+j`
+// (each query owns its own slab).
+template <typename T>
+inline void maxsim_bwd_impl(
+    device const T*           Q,
+    device const T*           D,
+    device const int*         argmax,        // [Nq*Nd, Lq] int32
+    device const float*       grad_scores,   // [Nq, Nd] fp32
+    device const char*        q_mask,        // [Nq, Lq] int8 or unused
+    device       float*       grad_Q,        // [Nq, Lq, d] fp32
+    device       atomic_uint* grad_D_atomic, // [Nd_total, Ld, d] aliased fp32 storage
+    constant MaxSimParams&    p,
+    uint tid,                                // 0 ≤ tid < d
+    uint i,
+    uint s)
+{{
+    const uint Nd = p.Nd;
+    const uint Lq = p.Lq;
+    const uint Ld = p.Ld;
+    const uint d  = p.d;
+    const bool has_q_mask = (p.flags & {FLAG_HAS_Q_MASK}u) != 0u;
+    const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
+
+    if (s >= Lq || tid >= d) return;
+
+    bool q_active = true;
+    if (has_q_mask) {{
+        q_active = q_mask[i * Lq + s] != 0;
+    }}
+
+    const uint q_off = (i * Lq + s) * d + tid;
+
+    if (!q_active) {{
+        grad_Q[q_off] = 0.0f;
+        return;
+    }}
+
+    const float qv = float(Q[q_off]);
+    float acc_Q = 0.0f;
+
+    for (uint j = 0; j < Nd; ++j) {{
+        const float gs = grad_scores[i * Nd + j];
+        const uint d_global = kd_layout ? (i * Nd + j) : j;
+        const int t = argmax[(i * Nd + j) * Lq + s];
+        if (t < 0 || (uint)t >= Ld) continue;
+        const uint d_idx = (d_global * Ld + (uint)t) * d + tid;
+        const float dv = float(D[d_idx]);
+        acc_Q += gs * dv;
+        // Apple Silicon supports fp32 atomic add on device memory via
+        // the bitcast-to-uint dance below (Metal3 has no direct
+        // atomic_float; ``atomic_fetch_add_explicit`` on a uint that
+        // aliases a float is the documented workaround).
+        const float contrib = gs * qv;
+        uint old_bits = atomic_load_explicit(&grad_D_atomic[d_idx], memory_order_relaxed);
+        uint new_bits;
+        do {{
+            const float old_val = as_type<float>(old_bits);
+            new_bits = as_type<uint>(old_val + contrib);
+        }} while (!atomic_compare_exchange_weak_explicit(
+            &grad_D_atomic[d_idx], &old_bits, new_bits,
+            memory_order_relaxed, memory_order_relaxed));
+    }}
+
+    grad_Q[q_off] = acc_Q;
+}}
+
+#define MAXSIM_BWD_KERNEL(NAME, T)                                               \
+kernel void NAME(                                                                \
+    device const T*           Q           [[buffer(0)]],                         \
+    device const T*           D           [[buffer(1)]],                         \
+    device const int*         argmax      [[buffer(2)]],                         \
+    device const float*       grad_scores [[buffer(3)]],                         \
+    device const char*        q_mask      [[buffer(4)]],                         \
+    device       float*       grad_Q      [[buffer(5)]],                         \
+    device       atomic_uint* grad_D      [[buffer(6)]],                         \
+    constant MaxSimParams&    p           [[buffer(7)]],                         \
+    uint3 tg                              [[threadgroup_position_in_grid]],      \
+    uint3 tid3                            [[thread_position_in_threadgroup]])    \
+{{                                                                               \
+    maxsim_bwd_impl<T>(Q, D, argmax, grad_scores, q_mask,                        \
+                       grad_Q, grad_D, p,                                        \
+                       tid3.z, tg.x, tg.y);                                      \
+}}
+
+MAXSIM_BWD_KERNEL(maxsim_bwd_half,   half)
+MAXSIM_BWD_KERNEL(maxsim_bwd_bfloat, bfloat)

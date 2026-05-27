@@ -128,6 +128,18 @@ _DTYPE_TO_KERNEL = {
     (torch.bfloat16, _J_PER_TG_BIG): "maxsim_bfloat_big",
 }
 
+_DTYPE_TO_TRAIN_KERNEL = {
+    (torch.float16, 1): "maxsim_half_small_train",
+    (torch.float16, _J_PER_TG_BIG): "maxsim_half_big_train",
+    (torch.bfloat16, 1): "maxsim_bfloat_small_train",
+    (torch.bfloat16, _J_PER_TG_BIG): "maxsim_bfloat_big_train",
+}
+
+_DTYPE_TO_BWD_KERNEL = {
+    torch.float16: "maxsim_bwd_half",
+    torch.bfloat16: "maxsim_bwd_bfloat",
+}
+
 
 def _pick_j_per_tg(Nd: int) -> int:
     """Persist 8 j-values when Nd is large enough that the smaller
@@ -200,40 +212,17 @@ def _empty_mask() -> torch.Tensor:
     return torch.zeros(1, dtype=torch.int8, device="mps")
 
 
-def maxsim_inference_metal(
+def _prepare_inputs(
     Q: torch.Tensor,
     D: torch.Tensor,
-    q_mask: torch.Tensor | None = None,
-    d_mask: torch.Tensor | None = None,
-    *,
-    normalize: bool = False,
-) -> torch.Tensor:
-    """Forward-only fused MaxSim on MPS via the ``simdgroup_matrix`` kernel.
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None, bool, bool, bool]:
+    """Shared shape/dtype/device validation for forward and training paths.
 
-    Args:
-        Q: ``[Nq, Lq, d]`` or ``[Lq, d]``, fp16 or bf16.
-        D: same dtype as ``Q``. Either ``[Nd, Ld, d]`` / ``[Ld, d]``
-            (cross-product) or ``[Nq, K, Ld, d]`` (KD / pairs).
-        q_mask: optional ``[Nq, Lq]`` mask (``True`` = valid).
-        d_mask: optional mask matching ``D`` — ``[Nd, Ld]`` for
-            cross-product, ``[Nq, K, Ld]`` for KD.
-        normalize: L2-normalize Q and D per-token inside the kernel.
-
-    Returns:
-        Cross-product: ``[Nq, Nd]`` fp32 scores (squeezed to match 2-D inputs).
-        KD: ``[Nq, K]`` fp32 scores.
-
-    Raises:
-        RuntimeError: if MPS or :func:`torch.mps.compile_shader` is missing,
-            or the shape / dtype falls outside :func:`supports`.
-        ValueError: on shape / device contract violations.
+    Returns the contiguous, broadcast-normalised
+    ``(Q, D, q_mask, d_mask, kd_layout, q_was_2d, d_was_2d)`` tuple.
     """
-    if not is_available():
-        raise RuntimeError(
-            "MPS Metal path unavailable: requires PyTorch ≥ 2.10 with MPS "
-            "support and `torch.mps.compile_shader`."
-        )
-
     kd_layout = D.dim() == 4
     if kd_layout:
         if Q.dim() != 3:
@@ -284,27 +273,22 @@ def maxsim_inference_metal(
             f"vs D.shape[-1]={D.shape[-1]}."
         )
     if Q.device.type != "mps" or D.device.type != "mps":
-        raise ValueError(
-            f"maxsim_inference_metal requires MPS tensors; got Q.device={Q.device}, D.device={D.device}."
-        )
+        raise ValueError(f"Metal path requires MPS tensors; got Q.device={Q.device}, D.device={D.device}.")
     if Q.dtype != D.dtype:
         raise ValueError(f"Q and D must share dtype; got {Q.dtype} vs {D.dtype}.")
     if Q.dtype not in (torch.float16, torch.bfloat16):
         raise RuntimeError(f"Unsupported dtype {Q.dtype}; the Metal path handles fp16 and bf16.")
 
-    Nq, Lq, d = Q.shape
-    n_axis, Ld, _ = D.shape
-    # KD: Nd = K (per-query slab), kernel derives `(i * Nd + j) * Ld + t`.
-    Nd = n_axis // Nq if kd_layout else n_axis
-    if d > _D_MAX or d % _BLOCK_K != 0:
-        raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
+    return Q.contiguous(), D.contiguous(), q_mask, d_mask, kd_layout, q_was_2d, d_was_2d
 
-    j_per_tg = _pick_j_per_tg(Nd)
-    kernel_name = _DTYPE_TO_KERNEL[(Q.dtype, j_per_tg)]
 
-    Q = Q.contiguous()
-    D = D.contiguous()
-
+def _prepare_flags_and_masks(
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    normalize: bool,
+    kd_layout: bool,
+) -> tuple[int, torch.Tensor, torch.Tensor]:
+    """Build the kernel flag word + ensure masks are contiguous int8."""
     flags = 0
     if q_mask is not None:
         flags |= _FLAG_HAS_Q_MASK
@@ -320,6 +304,54 @@ def maxsim_inference_metal(
         flags |= _FLAG_NORMALIZE
     if kd_layout:
         flags |= _FLAG_KD_LAYOUT
+    return flags, q_mask_i8, d_mask_i8
+
+
+def maxsim_inference_metal(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
+) -> torch.Tensor:
+    """Forward-only fused MaxSim on MPS via the ``simdgroup_matrix`` kernel.
+
+    Args:
+        Q: ``[Nq, Lq, d]`` or ``[Lq, d]``, fp16 or bf16.
+        D: same dtype as ``Q``. Either ``[Nd, Ld, d]`` / ``[Ld, d]``
+            (cross-product) or ``[Nq, K, Ld, d]`` (KD / pairs).
+        q_mask: optional ``[Nq, Lq]`` mask (``True`` = valid).
+        d_mask: optional mask matching ``D`` — ``[Nd, Ld]`` for
+            cross-product, ``[Nq, K, Ld]`` for KD.
+        normalize: L2-normalize Q and D per-token inside the kernel.
+
+    Returns:
+        Cross-product: ``[Nq, Nd]`` fp32 scores (squeezed to match 2-D inputs).
+        KD: ``[Nq, K]`` fp32 scores.
+
+    Raises:
+        RuntimeError: if MPS or :func:`torch.mps.compile_shader` is missing,
+            or the shape / dtype falls outside :func:`supports`.
+        ValueError: on shape / device contract violations.
+    """
+    if not is_available():
+        raise RuntimeError(
+            "MPS Metal path unavailable: requires PyTorch ≥ 2.10 with MPS "
+            "support and `torch.mps.compile_shader`."
+        )
+
+    Q, D, q_mask, d_mask, kd_layout, q_was_2d, d_was_2d = _prepare_inputs(Q, D, q_mask, d_mask)
+    Nq, Lq, d = Q.shape
+    n_axis, Ld, _ = D.shape
+    Nd = n_axis // Nq if kd_layout else n_axis
+    if d > _D_MAX or d % _BLOCK_K != 0:
+        raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
+
+    j_per_tg = _pick_j_per_tg(Nd)
+    kernel_name = _DTYPE_TO_KERNEL[(Q.dtype, j_per_tg)]
+
+    flags, q_mask_i8, d_mask_i8 = _prepare_flags_and_masks(q_mask, d_mask, normalize, kd_layout)
 
     out = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
@@ -339,7 +371,7 @@ def maxsim_inference_metal(
     )
 
     if kd_layout:
-        return out  # already [Nq, K]
+        return out
     if q_was_2d and d_was_2d:
         return out.reshape(())
     if q_was_2d:
@@ -349,4 +381,159 @@ def maxsim_inference_metal(
     return out
 
 
-__all__ = ["is_available", "supports", "maxsim_inference_metal"]
+def maxsim_train_metal(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict]:
+    """Forward + argmax save. Returns ``(scores, argmax, ctx)``.
+
+    ``ctx`` carries the contiguous ``Q``/``D`` and the masks that
+    :func:`maxsim_backward_metal` needs — same shapes the kernel saw, so
+    the backward doesn't have to re-do the broadcasts.
+
+    ``argmax`` has shape ``[Nq * Nd, Lq]`` int32 (Nd = K in KD mode),
+    matching Triton's :func:`maxsim_backward_unified`.
+    """
+    if not is_available():
+        raise RuntimeError(
+            "MPS Metal path unavailable: requires PyTorch ≥ 2.10 with MPS "
+            "support and `torch.mps.compile_shader`."
+        )
+
+    Q, D, q_mask, d_mask, kd_layout, q_was_2d, d_was_2d = _prepare_inputs(Q, D, q_mask, d_mask)
+    if q_was_2d or d_was_2d:
+        raise ValueError("maxsim_train_metal needs batched (3-D Q, 3-D or 4-D D); reshape upstream.")
+    Nq, Lq, d = Q.shape
+    n_axis, Ld, _ = D.shape
+    Nd = n_axis // Nq if kd_layout else n_axis
+    if d > _D_MAX or d % _BLOCK_K != 0:
+        raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
+
+    j_per_tg = _pick_j_per_tg(Nd)
+    kernel_name = _DTYPE_TO_TRAIN_KERNEL[(Q.dtype, j_per_tg)]
+
+    flags, q_mask_i8, d_mask_i8 = _prepare_flags_and_masks(q_mask, d_mask, normalize, kd_layout)
+
+    scores = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
+    argmax = torch.zeros(Nq * Nd, Lq, device="mps", dtype=torch.int32)
+    params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
+
+    j_blocks = (Nd + j_per_tg - 1) // j_per_tg
+
+    fn = getattr(_get_lib(), kernel_name)
+    fn(
+        Q,
+        D,
+        q_mask_i8,
+        d_mask_i8,
+        scores,
+        params,
+        argmax,
+        threads=(Nq, j_blocks, _THREADS_PER_GROUP),
+        group_size=(1, 1, _THREADS_PER_GROUP),
+    )
+
+    ctx = {
+        "Q": Q,
+        "D": D,
+        "q_mask_i8": q_mask_i8 if q_mask is not None else None,
+        "kd_layout": kd_layout,
+    }
+    return scores, argmax, ctx
+
+
+def maxsim_backward_metal(
+    grad_scores: torch.Tensor,
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    argmax: torch.Tensor,
+    q_mask: torch.Tensor | None = None,
+    *,
+    kd_layout: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``grad_Q``, ``grad_D`` for the fused MaxSim. Mirrors Triton's
+    :func:`maxsim_backward_unified` API.
+
+    Args:
+        grad_scores: ``[Nq, Nd]`` fp32 upstream gradient.
+        Q: ``[Nq, Lq, d]`` contiguous, fp16 / bf16.
+        D: ``[Nd, Ld, d]`` (cross-product) or ``[Nq * K, Ld, d]`` (KD,
+            already flat — same view the forward kernel saw).
+        argmax: ``[Nq * Nd, Lq]`` int32 winner buffer from
+            :func:`maxsim_train_metal`.
+        q_mask: optional ``[Nq, Lq]`` int8 mask (``1`` = valid).
+        kd_layout: ``True`` if ``D`` is the flat KD view.
+
+    Returns:
+        ``(grad_Q, grad_D)`` cast back to ``Q.dtype`` / ``D.dtype``.
+    """
+    if not is_available():
+        raise RuntimeError("MPS Metal path unavailable.")
+    if Q.dtype != D.dtype or Q.dtype not in (torch.float16, torch.bfloat16):
+        raise RuntimeError(f"maxsim_backward_metal needs matching fp16/bf16 Q/D; got {Q.dtype}, {D.dtype}.")
+    if grad_scores.dtype != torch.float32:
+        grad_scores = grad_scores.to(torch.float32)
+    if argmax.dtype != torch.int32:
+        argmax = argmax.to(torch.int32)
+    if q_mask is not None and q_mask.dtype != torch.int8:
+        q_mask = q_mask.to(torch.int8)
+
+    Q = Q.contiguous()
+    D = D.contiguous()
+    grad_scores = grad_scores.contiguous()
+    argmax = argmax.contiguous()
+
+    Nq, Lq, d = Q.shape
+    n_axis, Ld, d_d = D.shape
+    if d_d != d:
+        raise ValueError(f"Q and D must share the embedding dim; got {d} vs {d_d}.")
+    if d > _D_MAX or d % _BLOCK_K != 0:
+        raise RuntimeError(f"Metal backward supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
+    Nd = n_axis // Nq if kd_layout else n_axis
+    if argmax.shape != (Nq * Nd, Lq):
+        raise ValueError(f"argmax must be [{Nq * Nd}, {Lq}]; got {tuple(argmax.shape)}.")
+    if grad_scores.shape != (Nq, Nd):
+        raise ValueError(f"grad_scores must be [{Nq}, {Nd}]; got {tuple(grad_scores.shape)}.")
+
+    flags = 0
+    if q_mask is not None:
+        flags |= _FLAG_HAS_Q_MASK
+        q_mask_i8 = q_mask.contiguous()
+    else:
+        q_mask_i8 = _empty_mask()
+    if kd_layout:
+        flags |= _FLAG_KD_LAYOUT
+
+    grad_Q = torch.empty(Nq, Lq, d, device="mps", dtype=torch.float32)
+    grad_D = torch.zeros(n_axis, Ld, d, device="mps", dtype=torch.float32)
+
+    params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
+    kernel_name = _DTYPE_TO_BWD_KERNEL[Q.dtype]
+    fn = getattr(_get_lib(), kernel_name)
+    fn(
+        Q,
+        D,
+        argmax,
+        grad_scores,
+        q_mask_i8,
+        grad_Q,
+        grad_D,
+        params,
+        threads=(Nq, Lq, d),
+        group_size=(1, 1, d),
+    )
+
+    return grad_Q.to(Q.dtype), grad_D.to(D.dtype)
+
+
+__all__ = [
+    "is_available",
+    "supports",
+    "maxsim_inference_metal",
+    "maxsim_train_metal",
+    "maxsim_backward_metal",
+]
