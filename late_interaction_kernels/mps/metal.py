@@ -173,10 +173,34 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
     return 0 < d <= _D_MAX and d % _BLOCK_K == 0
 
 
+# Tiny LRU for the 24-byte ``MaxSimParams`` upload. Same (shape, flags)
+# combination shows up on every step of a typical PyLate / ColPali eval
+# (and on every batch of a stable training loop), so caching the device
+# tensor saves a ``struct.pack`` + ``bytearray`` + host-tensor + H2D copy
+# per call. The cache is keyed on the six u32 fields so two callers can
+# never alias each other's bytes.
+_PARAMS_CACHE_MAX = 64
+_params_cache: "dict[tuple[int, int, int, int, int, int], torch.Tensor]" = {}
+_params_cache_lock = threading.Lock()
+
+
 def _pack_params(Nq: int, Nd: int, Lq: int, Ld: int, d: int, flags: int) -> torch.Tensor:
     """Pack the kernel's ``MaxSimParams`` struct into a 6-int32 MPS tensor."""
+    key = (Nq, Nd, Lq, Ld, d, flags)
+    cached = _params_cache.get(key)
+    if cached is not None:
+        return cached
     raw = struct.pack(_PARAMS_FORMAT, Nq, Nd, Lq, Ld, d, flags)
-    return torch.frombuffer(bytearray(raw), dtype=torch.int32).clone().to("mps")
+    tensor = torch.frombuffer(bytearray(raw), dtype=torch.int32).clone().to("mps")
+    with _params_cache_lock:
+        # Coarse eviction: when full, drop everything and re-warm. The
+        # entries are 24 bytes each so a clear is faster than maintaining
+        # a real LRU, and the cache typically fits well under the cap on
+        # the workloads we care about (≤ a few dozen distinct shapes).
+        if len(_params_cache) >= _PARAMS_CACHE_MAX:
+            _params_cache.clear()
+        _params_cache[key] = tensor
+    return tensor
 
 
 def _empty_mask() -> torch.Tensor:

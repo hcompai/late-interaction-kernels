@@ -315,6 +315,51 @@ def test_dispatch_falls_back_to_kd_reference_for_fp32(monkeypatch):
     assert rel < 1e-4
 
 
+# --------------------------------------------------------------------------- #
+# `_pack_params` cache                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_pack_params_cache_returns_same_tensor_for_identical_key():
+    """Same (Nq, Nd, Lq, Ld, d, flags) -> exact same device tensor."""
+    _metal._params_cache.clear()
+    p1 = _metal._pack_params(1, 8, 32, 200, 128, 5)
+    p2 = _metal._pack_params(1, 8, 32, 200, 128, 5)
+    assert p1.data_ptr() == p2.data_ptr()
+
+
+def test_pack_params_cache_distinguishes_keys():
+    """Different flags = different cache entry."""
+    _metal._params_cache.clear()
+    p_norm = _metal._pack_params(1, 8, 32, 200, 128, _metal._FLAG_NORMALIZE)
+    p_no_norm = _metal._pack_params(1, 8, 32, 200, 128, 0)
+    assert p_norm.data_ptr() != p_no_norm.data_ptr()
+
+
+def test_pack_params_cache_eviction_when_capacity_exceeded():
+    """Coarse eviction: cache resets when it would exceed ``_PARAMS_CACHE_MAX``."""
+    _metal._params_cache.clear()
+    # Fill the cache with distinct keys (vary ``Nd``).
+    for nd in range(_metal._PARAMS_CACHE_MAX):
+        _metal._pack_params(1, nd, 32, 200, 128, 0)
+    assert len(_metal._params_cache) == _metal._PARAMS_CACHE_MAX
+    # One more entry triggers eviction (clear-then-insert).
+    _metal._pack_params(1, _metal._PARAMS_CACHE_MAX, 32, 200, 128, 0)
+    assert len(_metal._params_cache) == 1
+
+
+def test_pack_params_bytes_match_struct_pack():
+    """Cached tensor must be byte-identical to a fresh ``struct.pack``."""
+    _metal._params_cache.clear()
+    import struct
+
+    args = (3, 12, 32, 256, 96, 7)
+    raw = struct.pack(_metal._PARAMS_FORMAT, *args)
+    expected = torch.frombuffer(bytearray(raw), dtype=torch.int32)
+    got = _metal._pack_params(*args).cpu()
+    assert torch.equal(got, expected)
+
+
 def test_dispatch_force_reference_handles_4d_d(monkeypatch):
     """``LIK_FORCE_MPS_BACKEND=reference`` must accept 4-D D."""
     monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "reference")

@@ -65,7 +65,13 @@ inline void cooperative_load_row(
             sum2 += dot(vf, vf);
         }}
         if (normalize) {{
-            const float inv = rsqrt(max(sum2, 1e-24f));
+            // eps = 1e-12 matches the Triton forward.py path
+            // (`q_norm_sq = max(_, 1e-12)`) and the dense reference
+            // (`F.normalize(..., eps=1e-12)`) so a vector with norm
+            // ``< 1e-6`` produces the same scaled output on CUDA and MPS.
+            // The old 1e-24 floor was effectively never reached on real
+            // data — the change only affects truly degenerate inputs.
+            const float inv = rsqrt(max(sum2, 1e-12f));
             for (uint k = 0; k < d4; ++k) {{
                 regs[k] = vec<T, 4>(float4(regs[k]) * inv);
             }}
