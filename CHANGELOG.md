@@ -32,8 +32,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unambiguously about the experiment subset.
 - `scripts/sky_run_all_benchmarks.yaml` accepts a `RUN_ONLY` env (space-
   separated bench tags) to run a subset. Same pattern as
-  `sky_colpali_training.yaml`; replaces the standalone
+  `sky_colpali_benchmark.yaml`; replaces the standalone
   `sky_bench_verify.yaml` smoke script.
+- **SkyPilot bench yamls consolidated and renamed.** Four user-facing
+  files now cover every operator-launched bench run:
+  - `sky_benchmark_smoke_test.yaml` (was `sky_run_benchmarks.yaml`) —
+    two-bench smoke check on a fresh CUDA host.
+  - `sky_run_all_benchmarks.yaml` — every headline table; `RUN_ONLY`
+    picks a subset.
+  - `sky_pylate_benchmark.yaml` (new) — folds the previous
+    `sky_lateon_edge.yaml`, `sky_pylate_realdata.yaml`, and
+    `sky_pylate_realdata_long.yaml` behind a `RUN_ONLY` env. Tags:
+    `lateon_contrastive`, `lateon_cached`, `realdata_contrastive`,
+    `realdata_reason`, `realdata_long_2k`, `realdata_long_4k`.
+  - `sky_colpali_benchmark.yaml` (was `sky_colpali_training.yaml`) —
+    ColQwen2 synthetic + real DocVQA; `RUN_ONLY` tags unchanged.
 - Headline benchmark ranges in `README.md` refreshed to match the 0.3.0
   sweep in `docs/benchmarks.md`. See the per-table notes there.
 - Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
@@ -78,6 +91,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (encoder-bound) and added nothing the 448px rows didn't already cover.
 - `scripts/sky_bench_verify.yaml`. The smoke-test path is now
   `sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" scripts/sky_run_all_benchmarks.yaml`.
+- `scripts/sky_lateon_edge.yaml`, `scripts/sky_pylate_realdata.yaml`,
+  and `scripts/sky_pylate_realdata_long.yaml` — folded into
+  `scripts/sky_pylate_benchmark.yaml` (see entry above).
 
 ### Fixed
 

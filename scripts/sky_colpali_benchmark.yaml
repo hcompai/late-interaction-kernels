@@ -1,6 +1,6 @@
 # E2E ColQwen2 training benchmark via colpali_engine: synthetic + real DocVQA.
 #
-#   sky launch scripts/sky_colpali_training.yaml -c lik-colpali-training -y
+#   sky launch scripts/sky_colpali_benchmark.yaml -c lik-colpali-benchmark -y
 #
 # Compares vanilla colpali_engine vs patch_colpali_engine() driving a real
 # ColQwen2-v1.0 forward + backward through ColbertLoss / ColbertPairwiseCELoss /
@@ -10,7 +10,7 @@
 #   * benchmarks/bench_colpali_realdata.py  — vidore/docvqa_test_subsampled
 #     (a few hundred real document images + OCR-targeted queries)
 
-name: lik-colpali-training
+name: lik-colpali-benchmark
 
 resources:
   infra: kubernetes

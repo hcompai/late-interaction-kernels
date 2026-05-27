@@ -65,10 +65,25 @@ Results land in `benchmarks/results/*.{json,md}`.
 ## On a SkyPilot cluster
 
 ```bash
-sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y   # every table on this page in one shot (1×H100, ~25 min)
-sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"  # README numbers only (~5 min)
-sky jobs launch scripts/sky_test.yaml             # CI-style: tests + bench_forward + bench_backward
-sky jobs launch scripts/sky_lateon_edge.yaml      # LateOn-Code-edge end-to-end
+# Every table on this page in one shot (1×H100, ~25 min):
+sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y
+
+# Subsets of the full sweep via RUN_ONLY (tags: forward, inference_edge,
+# normalize, backward_method, lateon, cached_maxsim, flash_maxsim, fp8,
+# fused_head_train, pylate_training, pylate_lateon, decompress_maxsim,
+# fastplaid_e2e, pylate_realdata):
+sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y \
+    --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"
+
+# Per-stack deep-dives (each with its own RUN_ONLY tag set):
+sky launch -c lik-pylate  scripts/sky_pylate_benchmark.yaml  -y  # all e2e pylate shapes
+sky launch -c lik-colpali scripts/sky_colpali_benchmark.yaml -y  # ColQwen2 synth + real DocVQA
+
+# Two-bench smoke test (just bench_forward + bench_backward_method):
+sky jobs launch scripts/sky_benchmark_smoke_test.yaml
+
+# PLAID-specific benches (kept separate; will likely be folded into a
+# sky_plaid_benchmark.yaml in a follow-up):
 sky jobs launch scripts/sky_decompress_bench.yaml # PLAID decompress + MaxSim
 sky jobs launch scripts/sky_fastplaid_e2e.yaml    # vs `fast_plaid.engine.search()`
 ```
@@ -277,7 +292,8 @@ top-k retrieval where ordering, not exact scores, is what matters.
 ## End-to-end LateOn-Code-edge training (17 M encoder)
 
 `losses.Contrastive`, in-batch negatives, bf16, grad-checkpointing,
-1×H100. Reproduce with `scripts/sky_lateon_edge.yaml`.
+1×H100. Reproduce with
+`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="lateon_contrastive lateon_cached"`.
 
 
 | setup                  | vanilla  | fused    | speedup   | peak (v → f)   |
@@ -421,8 +437,9 @@ Real `pylate.models.ColBERT("lightonai/LateOn-Code-edge")` (`d=48`,
 loaded through `datasets`. We swap `patch_pylate()` on/off and time
 full optimizer steps (encoder forward + loss + backward + step). The
 kernel is a drop-in — no other code changes between the two columns.
-Reproduce with `scripts/sky_pylate_realdata.yaml` and
-`benchmarks/bench_pylate_realdata.py`.
+Reproduce with
+`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="realdata_contrastive realdata_reason realdata_long_2k realdata_long_4k"`
+(or `benchmarks/bench_pylate_realdata.py` directly).
 
 
 | recipe              | setup                              | vanilla PyLate | + LIK    | speedup   |
@@ -449,9 +466,9 @@ LoRA-only training (37 M of 2 246 M params trainable — the official
 ColPali recipe via `peft.get_peft_model`), AdamW + bf16 weights. We
 swap `patch_colpali_engine()` on/off and time full optimizer steps
 (vision tower + text encoder forward + ColbertLoss + backward + step).
-Reproduce with `scripts/sky_colpali_training.yaml` and
-`benchmarks/bench_colpali_training.py` (synthetic) /
-`bench_colpali_realdata.py` (real `vidore/docvqa_test_subsampled`).
+Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
+`benchmarks/bench_colpali_training.py` on synthetic shapes and
+`benchmarks/bench_colpali_realdata.py` on `vidore/docvqa_test_subsampled`).
 
 
 | loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak     |
