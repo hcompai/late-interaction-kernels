@@ -26,14 +26,47 @@ Usage
 # trailing ``del`` in ``run_one`` and false-positives on the ``step`` closure.
 
 import argparse
+import enum
 import gc
 import importlib.util
 import json
 import os
 import random
 import string
+import sys
 import time
+import types
 from pathlib import Path
+
+# ColQwen2 uses qwen_vl_utils for image preprocessing — not torchvision.
+# However, colpali_engine.__init__ triggers the Gemma3 model import chain
+# which reaches transformers.image_utils → torchvision.io, and newer
+# PyPI torchvision wheels require libcudart.so.13 while this container
+# has CUDA 12.x. Inject a minimal mock before any colpali_engine import
+# so the chain succeeds without the C++ extension ever loading.
+if "torchvision" not in sys.modules:
+    _tv = types.ModuleType("torchvision")
+    _tv.__version__ = "0.0.0+mock"
+    for _s in ("extension", "_meta_registrations", "ops", "io",
+               "transforms", "models", "datasets", "utils"):
+        _m = types.ModuleType(f"torchvision.{_s}")
+        setattr(_tv, _s, _m)
+        sys.modules[f"torchvision.{_s}"] = _m
+
+    class _ImageReadMode(enum.IntEnum):
+        UNCHANGED = 0
+        GRAY = 1
+        GRAY_ALPHA = 2
+        RGB = 3
+        RGB_ALPHA = 4
+
+    def _decode_image_stub(*args, **kwargs):
+        raise RuntimeError("torchvision mock: decode_image not available")
+
+    sys.modules["torchvision.io"].ImageReadMode = _ImageReadMode
+    sys.modules["torchvision.io"].decode_image = _decode_image_stub
+    sys.modules["torchvision"] = _tv
+    del _tv, _m, _s, _ImageReadMode, _decode_image_stub
 
 import torch
 

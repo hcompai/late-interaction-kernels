@@ -48,7 +48,17 @@ setup: |
   # build — the bench falls back to torch SDPA automatically.
   uv pip install flash-attn --no-build-isolation || true
   # Sanity check the model + processor + loss patcher can all hydrate.
+  # Uses the same torchvision mock as the bench scripts (ColQwen2 uses
+  # qwen_vl_utils, not torchvision; the mock just satisfies transformers).
   uv run python -c "
+  import sys, types, enum as _enum
+  _tv = types.ModuleType('torchvision'); _tv.__version__ = '0.0.0+mock'
+  for _s in ('extension','_meta_registrations','ops','io','transforms','models','datasets','utils'):
+      _m = types.ModuleType(f'torchvision.{_s}'); setattr(_tv, _s, _m); sys.modules[f'torchvision.{_s}'] = _m
+  class _IR(_enum.IntEnum): UNCHANGED=0; GRAY=1; GRAY_ALPHA=2; RGB=3; RGB_ALPHA=4
+  sys.modules['torchvision.io'].ImageReadMode = _IR
+  sys.modules['torchvision.io'].decode_image = lambda *a, **kw: None
+  sys.modules['torchvision'] = _tv
   import torch
   from colpali_engine.models import ColQwen2, ColQwen2Processor
   from colpali_engine.loss.late_interaction_losses import ColbertLoss
