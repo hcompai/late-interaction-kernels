@@ -564,29 +564,29 @@ falls back to `compile`.
 
 | shape                                          | metal    | compile  | eager    | metal vs eager | metal vs compile | compile vs eager |
 | ---------------------------------------------- | -------- | -------- | -------- | -------------- | ---------------- | ---------------- |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.42 ms  | 10.87 ms | 18.68 ms | **2.22×**      | 1.29×            | 1.72×            |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.43 ms | 18.28 ms | 31.13 ms | **1.89×**      | 1.11×            | 1.70×            |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 55.5 ms  | 93.9 ms  | 170.5 ms | **3.07×**      | 1.69×            | 1.82×            |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.11 ms  | 3.37 ms  | 6.51 ms  | **2.10×**      | 1.09×            | 1.93×            |
-| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 9.84 ms  | 17.27 ms | 28.89 ms | **2.94×**      | 1.76×            | 1.67×            |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 33.3 ms  | 67.2 ms  | 107.2 ms | **3.22×**      | 2.02×            | 1.59×            |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.82 ms  | 5.40 ms  | 13.06 ms | **2.71×**      | 1.12×            | 2.42×            |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 1.64 ms  | 2.33 ms  | 0.41× → 1.42×  | 0.29× (compile)  | 1.42×            |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.60 ms  | 17.41 ms | 17.13 ms | **1.99×**      | 2.02×            | 0.98×            |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.16 ms | 64.34 ms | 28.24 ms | **1.75×**      | 3.98×            | 0.44×            |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 65.3 ms  | 171.7 ms | 167.7 ms | **2.57×**      | 2.63×            | 0.98×            |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.09 ms  | 13.22 ms | 5.82 ms  | **1.88×**      | 4.28×            | 0.44×            |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 16.18 ms | 64.76 ms | 28.19 ms | **1.74×**      | 4.00×            | 0.44×            |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 39.21 ms | 441.1 ms | 105.7 ms | **2.70×**      | 11.25×           | 0.24×            |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.83 ms  | 13.86 ms | 9.66 ms  | **2.00×**      | 2.87×            | 0.70×            |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 9.27 ms  | 2.29 ms  | 0.40× → 1.62×  | 0.62× (compile)  | 0.25×            |
 
 
 For someone moving from plain PyTorch to this library, the headline is
-`metal vs eager`: **1.9–3.2×** on every realistic inference shape. On
-`train-batch` the Metal kernel's launch overhead dominates, so the
-dispatch heuristic (`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) routes it to `compile`
-automatically — the user still gets 1.42× over eager via that path.
-Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}` or
-`LIK_DISABLE_COMPILE=1` if you need explicit control.
+`metal vs eager`: **1.7–2.7×** on every realistic inference shape. On
+`train-batch` the Metal kernel's launch overhead dominates and eager
+actually wins (2.29 ms vs metal's 5.73 ms) — the dispatch heuristic
+(`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) is tuned to route this regime away from
+metal. Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`
+or `LIK_DISABLE_COMPILE=1` if you need explicit control.
 
 Memory is the second story: because `metal` streams `D` in 32-row tiles
 through threadgroup memory, peak working-set is one output tensor
 (8 MB) regardless of the corpus size. On `rerank-10k` and `edge-d48`
-the compile / eager paths materialise 2.5 GB / 750 MB intermediates —
-**~300×** memory reduction.
+the compile / eager paths materialise 2.5–4 GB intermediates —
+**~300–500×** memory reduction.
 
 The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
 analogue of CUDA tensor cores) on top of a *persistent* threadgroup
