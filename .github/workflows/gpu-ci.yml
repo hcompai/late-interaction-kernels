@@ -5,20 +5,12 @@ permissions:
 
 # Runs the CUDA-marked tests on an AWS CodeBuild-hosted GPU runner (A10G).
 # Triggered:
-#   - on commits to main that touch GPU-relevant code;
 #   - on PRs carrying the `run-gpu-tests` label, when GPU-relevant code changed
 #     (label apply requires triage+);
-#   - manually via workflow_dispatch (e.g. to force a run on a docs-only PR).
+#   - manually via workflow_dispatch — launch from
+#     https://github.com/hcompai/late-interaction-kernels/actions/workflows/gpu-ci.yml
+#     (no automatic run on pushes to main, to keep CodeBuild spend predictable).
 on:
-  push:
-    branches: [main]
-    paths:
-      - "late_interaction_kernels/**"
-      - "torch-ext/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/gpu-ci.yml"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
@@ -39,12 +31,12 @@ jobs:
     name: GPU tests
     # A10G (g5-class), ~$0.05/min — https://aws.amazon.com/codebuild/pricing/
     runs-on: codebuild-late-interaction-kernels-${{ github.run_id }}-${{ github.run_attempt }}-linux-5.0-gpu_small
-    # Run on every push to main; on PRs, only when the `run-gpu-tests` label
-    # is attached (so new commits on a labeled PR also re-run). Label apply
-    # requires triage+ — every current collaborator on this repo has that,
-    # so the gate is effectively "any internal collaborator can trigger."
+    # On PRs, only when the `run-gpu-tests` label is attached (so new commits
+    # on a labeled PR also re-run). Label apply requires triage+ — every
+    # current collaborator on this repo has that, so the gate is effectively
+    # "any internal collaborator can trigger." Manual workflow_dispatch runs
+    # always pass.
     if: >-
-      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-gpu-tests')
     # Silence the unnormalized-input warning: many parity tests deliberately
