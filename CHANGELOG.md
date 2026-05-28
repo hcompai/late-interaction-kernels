@@ -19,6 +19,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepts `D` as `[Nq, K, Ld, d]` directly — PyLate's
   `colbert_kd_scores` and `colbert_scores_pairwise` shapes hit the
   Metal kernel instead of falling back to `torch.compile`.
+- **`maxsim()` 4-D dispatch + `maxsim_pairs()` on CUDA.** `maxsim(Q, D)`
+  now dispatches on `D.dim()`: 3-D stays on the in-batch cross-product
+  path, 4-D `[Nq, K, Ld, d]` runs as a single fused KD launch. New
+  `maxsim_pairs(Q, D)` covers the `[B, Lq, d] × [B, Ld, d] → [B]`
+  case. PyLate's `colbert_kd_scores` Python `for`-loop (one
+  `maxsim()` call per query) collapses to one kernel launch —
+  ~10× faster than the loop at `B=64, K=32` and the pairwise
+  `B=5000` shape went from 355 ms (old `maxsim_varlen` packing
+  path) → 0.18 ms (beats `flash-maxsim`).
 - Every benchmark now reports peak VRAM (`max_memory_allocated()`) per
   variant in stdout and JSON; `bench_fp8.py` and `bench_fused_head_train.py`
   also gained `--outdir` JSON + Markdown sidecars. `benchmarks/README.md`
@@ -26,6 +35,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CUDA autotune & dispatch overhaul — broadly faster across kernels.**
+  Five independent wins on the Triton path:
+  - **`Lq` bucketed to next pow-of-2** in the `maxsim()` wrapper
+    (#62). Variable-`Lq` training (ColBERT / ColPali, where the
+    tokenizer's per-batch `max(Lq)` floats step-to-step) used to
+    re-trigger the full autotune sweep on every novel `Lq`. Now
+    collapses to ≤ 9 cache entries. Measured **4.7× faster
+    end-to-end** on 30 H100 steps with `Lq ∈ [8, 32]` (median
+    step 588 ms → 0.19 ms).
+  - **KD + pairwise folded into the fast forward + backward
+    kernels** (#66). A single `kd_layout: tl.constexpr` switches
+    `d_global = pid % Nd` (in-batch) vs `pid` (KD / pairs) so
+    PyLate's `colbert_kd_scores` (4-D `D`) and
+    `colbert_scores_pairwise` shapes use the same dense fast path
+    as in-batch instead of routing through `score_pairs_packed`'s
+    packing layer. KD `B=64, K=32` now beats `flash-maxsim`
+    (lik/flash 0.94×), down from 1.4–7.7× slower pre-PR.
+  - **Persistent on-disk autotune cache** via Triton ≥ 3.4's
+    `cache_results=True` on all eight autotuned kernels (#64).
+    First run on a machine still pays the ~4 s sweep; every
+    subsequent process / CI job / training restart loads the JSON
+    winner and skips bench. **10.6× faster** cold start on the
+    second process. Feature-detected — older Triton (3.0–3.3)
+    silently keeps the in-memory-only behaviour, no dependency
+    floor bump.
+  - **Small-input forward bypass** for `Nq*Nd ≤ 500 && d ≤ 256`
+    with `save_argmax=False` (#64). Fixed-config launch
+    (`BLOCK_Q=32, BLOCK_D=64, num_warps=4, num_stages=2`); cold
+    call drops from ~0.5–1 ms (autotune sweep) to sub-millisecond.
+    Closes the gap to `flash-maxsim`'s `_maxsim_fwd_kernel_small`
+    on REPL / unit-test shapes.
+  - **New Hopper autotune config** `BLOCK_Q=128, BLOCK_D=128,
+    num_warps=8, num_stages=3` (#57). Closes a 0.85× regression
+    vs `flash-maxsim` on the compute-bound colpali rerank shape
+    (`Nq=1, Nd=500, Lq=Ld=1024, d=128` — now 1.23×). Only picked
+    on the shape it was designed for; no regression elsewhere.
+  - **`normalize` out of the forward autotune key** (#64). The two
+    constexpr branches still produce distinct binaries; they now
+    share one autotune entry instead of two. Cache cardinality
+    halves.
 - **Benchmark CLI unified.** Experiment subsets are now `--only NAME ...`
   on every script (replacing the legacy `--shape` / `--shapes` flags and
   the older `--only` for variant selection, which moved to `--variants`).
