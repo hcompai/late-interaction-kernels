@@ -596,3 +596,302 @@ def test_metal_kernel_idempotent_on_repeated_calls():
     a = _metal.maxsim_inference_metal(Q, D, normalize=True)
     b = _metal.maxsim_inference_metal(Q, D, normalize=True)
     assert torch.equal(a, b)
+
+
+# ============================================================
+# Backward kernel
+# ============================================================
+
+
+def _dense_argmax(Q_hat, D_hat):
+    """fp32 reference argmax with the same shape as the kernel buffer."""
+    Nq, Lq, _ = Q_hat.shape
+    Nd, Ld, _ = D_hat.shape
+    S = torch.einsum("ild,jtd->ijlt", Q_hat.float(), D_hat.float())  # [Nq, Nd, Lq, Ld]
+    return S.argmax(dim=-1).reshape(Nq * Nd, Lq).to(torch.int32)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("normalize", [False, True])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 4, 16, 32, 64),
+        (4, 8, 16, 32, 64),
+        (8, 16, 32, 64, 128),
+        (4, 8, 32, 256, 128),
+    ],
+)
+def test_metal_train_argmax_matches_fp32(dtype, normalize, shape):
+    """Kernel argmax agrees with the fp32 reference (per (i, s, j))."""
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, normalize=normalize)
+
+    import torch.nn.functional as F
+
+    Qf = Q.float()
+    Df = D.float()
+    if normalize:
+        Qf = F.normalize(Qf, p=2, dim=-1, eps=1e-12)
+        Df = F.normalize(Df, p=2, dim=-1, eps=1e-12)
+    # Cast back to inference dtype so close ties resolve the same way the
+    # kernel resolves them (this is the apples-to-apples comparison).
+    ref_argmax = _dense_argmax(Qf.to(dtype), Df.to(dtype))
+    disagree = (argmax.cpu() != ref_argmax.cpu()).sum().item()
+    # Allow a tiny number of near-tie disagreements at low precision.
+    assert disagree / argmax.numel() < 0.02, (
+        f"{disagree}/{argmax.numel()} argmax disagreements (dtype={dtype}, normalize={normalize}, shape={shape})"
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(
+    "shape",
+    [(2, 4, 16, 32, 64), (4, 8, 32, 64, 128), (4, 16, 32, 256, 128)],
+)
+def test_metal_backward_grad_Q_matches_argmax_reference(dtype, shape):
+    """grad_Q = sum_j gs[i,j] * D[d_global, argmax[i*Nd+j, s], :].
+
+    Uses the kernel's own ``argmax`` so the comparison isolates the
+    backward kernel from fp16 argmax noise.
+    """
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, normalize=False)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+
+    gQ, gD = _metal.maxsim_backward_metal(gs, Q, D, argmax)
+
+    am = argmax.view(Nq, Nd, Lq).long()
+    j_idx = torch.arange(Nd, device="mps").view(1, Nd, 1).expand(Nq, Nd, Lq)
+    D_win = D.float()[j_idx, am]  # [Nq, Nd, Lq, d]
+    ref_gQ = (gs.view(Nq, Nd, 1, 1) * D_win).sum(dim=1)  # [Nq, Lq, d]
+
+    diff = (gQ.float() - ref_gQ).abs().max().item()
+    scale = ref_gQ.abs().max().item()
+    tol = 1e-3 if dtype == torch.float16 else 5e-3
+    assert diff / max(scale, 1e-6) < tol, f"gQ rel diff {diff}/{scale}"
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("shape", [(2, 4, 16, 32, 64), (4, 8, 32, 64, 128)])
+def test_metal_backward_grad_D_matches_argmax_reference(dtype, shape):
+    """grad_D scatters gs[i,j] * Q[i, s, :] into D[d_global, argmax, :]."""
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, normalize=False)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+
+    _, gD = _metal.maxsim_backward_metal(gs, Q, D, argmax)
+
+    am = argmax.view(Nq, Nd, Lq).long()
+    ref_gD = torch.zeros(Nd, Ld, d, device="mps", dtype=torch.float32)
+    contrib = gs.view(Nq, Nd, 1, 1) * Q.float().view(Nq, 1, Lq, d)  # [Nq, Nd, Lq, d]
+    for j in range(Nd):
+        ref_gD[j].index_add_(0, am[:, j, :].reshape(-1), contrib[:, j, :, :].reshape(-1, d))
+
+    diff = (gD.float() - ref_gD).abs().max().item()
+    scale = ref_gD.abs().max().item()
+    tol = 5e-3 if dtype == torch.float16 else 1e-2
+    assert diff / max(scale, 1e-6) < tol, f"gD rel diff {diff}/{scale}"
+
+
+def test_metal_backward_zeroes_grad_Q_on_masked_rows():
+    """grad_Q must be 0 wherever ``q_mask`` is False."""
+    Nq, Nd, Lq, Ld, d = 2, 4, 16, 32, 64
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=torch.float16)
+    q_mask = torch.ones(Nq, Lq, device="mps", dtype=torch.bool)
+    q_mask[:, Lq // 2 :] = False
+
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, q_mask=q_mask, normalize=False)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+    gQ, _ = _metal.maxsim_backward_metal(gs, Q, D, argmax, q_mask=q_mask.to(torch.int8))
+
+    assert torch.all(gQ[:, Lq // 2 :, :] == 0), "masked rows should have zero gradient"
+    assert torch.any(gQ[:, : Lq // 2, :].abs() > 0), "unmasked rows should be nonzero"
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("shape", [(4, 8, 16, 32, 64), (8, 16, 32, 128, 128), (4, 8, 32, 64, 48)])
+def test_metal_backward_normalize_fused_matches_host_jacobian(dtype, shape):
+    """The in-kernel normalize Jacobian must match the host-side unwind
+    (norm + project) byte-equivalent up to fp16 rounding."""
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=dtype)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=dtype)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, normalize=True)
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+
+    gQ_fused, gD_fused = _metal.maxsim_backward_metal(gs, Q, D, argmax, normalize=True)
+
+    # Host-side unwind, same shape as the old _MaxSimFnMetal.backward.
+    q_norm = torch.linalg.vector_norm(Q.float(), dim=-1, keepdim=True).clamp_min(1e-6)
+    d_norm = torch.linalg.vector_norm(D.float(), dim=-1, keepdim=True).clamp_min(1e-6)
+    Q_hat = (Q.float() / q_norm).to(dtype)
+    D_hat = (D.float() / d_norm).to(dtype)
+    gQh, gDh = _metal.maxsim_backward_metal(gs, Q_hat, D_hat, argmax, normalize=False)
+    gQh = gQh.float()
+    gDh = gDh.float()
+    Qh = Q_hat.float()
+    Dh = D_hat.float()
+    gQ_host = (gQh - (gQh * Qh).sum(-1, keepdim=True) * Qh) / q_norm
+    gD_host = (gDh - (gDh * Dh).sum(-1, keepdim=True) * Dh) / d_norm
+
+    # Atomic-add ordering is nondeterministic so allow a small absolute
+    # diff scaled by the magnitude of the gradient.
+    gQ_err = (gQ_fused.float() - gQ_host).norm() / gQ_host.norm().clamp_min(1e-6)
+    gD_err = (gD_fused.float() - gD_host).norm() / gD_host.norm().clamp_min(1e-6)
+    assert gQ_err < 5e-3, f"gQ rel diff {gQ_err}"
+    assert gD_err < 5e-3, f"gD rel diff {gD_err}"
+
+
+def test_metal_backward_KD_layout_matches_reference():
+    """4-D ``D`` (KD): backward parity vs the per-pair atomic reference."""
+    Nq, K, Lq, Ld, d = 4, 8, 16, 32, 64
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D4 = torch.randn(Nq, K, Ld, d, device="mps", dtype=torch.float16)
+    _, argmax, fwd_ctx = _metal.maxsim_train_metal(Q, D4, normalize=False)
+    # fwd_ctx.D is the flattened [Nq*K, Ld, d] view the kernel saw
+    D_flat = fwd_ctx.D
+    gs = torch.randn(Nq, K, device="mps", dtype=torch.float32)
+    gQ, gD = _metal.maxsim_backward_metal(gs, Q, D_flat, argmax, kd_layout=True)
+
+    am = argmax.view(Nq, K, Lq).long()
+    # grad_Q[i, s, :] = sum_k gs[i, k] * D[i, k, argmax[i, k, s], :]
+    i_idx = torch.arange(Nq, device="mps").view(Nq, 1, 1).expand(Nq, K, Lq)
+    k_idx = torch.arange(K, device="mps").view(1, K, 1).expand(Nq, K, Lq)
+    D_win = D4.float()[i_idx, k_idx, am]  # [Nq, K, Lq, d]
+    ref_gQ = (gs.view(Nq, K, 1, 1) * D_win).sum(dim=1)
+
+    ref_gD = torch.zeros(Nq, K, Ld, d, device="mps", dtype=torch.float32)
+    contrib = gs.view(Nq, K, 1, 1) * Q.float().view(Nq, 1, Lq, d)  # [Nq, K, Lq, d]
+    for i in range(Nq):
+        for k in range(K):
+            ref_gD[i, k].index_add_(0, am[i, k], contrib[i, k])
+
+    assert (gQ.float() - ref_gQ).abs().max().item() / max(ref_gQ.abs().max().item(), 1e-6) < 2e-3
+    assert (gD.view(Nq, K, Ld, d).float() - ref_gD).abs().max().item() / max(
+        ref_gD.abs().max().item(), 1e-6
+    ) < 5e-3
+
+
+def test_metal_backward_accepts_4d_D_directly():
+    """`maxsim_backward_metal` accepts the natural 4-D D the train kernel saw,
+    mirroring `maxsim_train_metal`. grad_D comes back in the same 4-D shape."""
+    Nq, K, Lq, Ld, d = 2, 4, 8, 16, 32
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D4 = torch.randn(Nq, K, Ld, d, device="mps", dtype=torch.float16)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D4, normalize=False)
+    gs = torch.randn(Nq, K, device="mps", dtype=torch.float32)
+
+    # 4-D path (auto-detects kd_layout).
+    gQ_4d, gD_4d = _metal.maxsim_backward_metal(gs, Q, D4, argmax)
+    assert gD_4d.shape == D4.shape
+
+    # 3-D (flat) path: same kernel, same numbers.
+    D_flat = D4.contiguous().view(Nq * K, Ld, d)
+    gQ_3d, gD_3d = _metal.maxsim_backward_metal(gs, Q, D_flat, argmax, kd_layout=True)
+    assert torch.equal(gQ_4d, gQ_3d)
+    assert torch.equal(gD_4d.view(Nq * K, Ld, d), gD_3d)
+
+
+def test_metal_backward_argmax_sentinel_skips_fully_masked_rows():
+    """A fully-d-masked (i, s, j) row writes argmax=-1; the backward must skip it
+    (no spurious atomic_add into D[d_global, 0, :])."""
+    Nq, Nd, Lq, Ld, d = 1, 1, 4, 8, 32
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=torch.float16)
+    d_mask = torch.zeros(Nd, Ld, dtype=torch.bool, device="mps")  # everything masked
+
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, d_mask=d_mask, normalize=False)
+    # Every save slot keeps the -1 sentinel (no valid argmax was ever produced).
+    assert (argmax == -1).all()
+
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+    _, gD = _metal.maxsim_backward_metal(gs, Q, D, argmax)
+    # No scatter happened -> grad_D is all zeros.
+    assert torch.equal(gD, torch.zeros_like(gD))
+
+
+# ============================================================
+# Autograd integration
+# ============================================================
+
+
+@pytest.mark.parametrize("normalize", [False, True])
+@pytest.mark.parametrize(
+    "shape",
+    [(4, 8, 16, 32, 64), (8, 16, 32, 64, 128), (8, 32, 32, 256, 128)],
+)
+def test_maxsim_mps_autograd_routes_through_metal(monkeypatch, normalize, shape):
+    """``maxsim_mps`` end-to-end: scores + grads match the dense reference."""
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_mps
+
+    monkeypatch.setenv("LIK_FORCE_MPS_BACKEND", "metal")
+
+    Nq, Nd, Lq, Ld, d = shape
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16, requires_grad=True)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=torch.float16, requires_grad=True)
+    Qr = Q.detach().float().requires_grad_(True)
+    Dr = D.detach().float().requires_grad_(True)
+
+    scores = maxsim_mps(Q, D, normalize=normalize)
+    gs = torch.randn_like(scores)
+    scores.backward(gs)
+
+    ref_scores = maxsim_reference(Qr, Dr, normalize=normalize)
+    ref_scores.backward(gs)
+
+    # Scores: kernel is fp32 accumulator on fp16 inputs.
+    assert (scores - ref_scores).abs().max().item() < 5e-3
+    # Gradients have a long-tail of large element-wise diffs whenever an
+    # fp16 vs fp32 argmax tie flips (typical ≲ 0.1% of positions). The
+    # ``ratio of frobenius norms`` is the right global measure here.
+    gQ_err = (Q.grad.float() - Qr.grad).norm().item() / max(Qr.grad.norm().item(), 1e-6)
+    gD_err = (D.grad.float() - Dr.grad).norm().item() / max(Dr.grad.norm().item(), 1e-6)
+    assert gQ_err < 5e-2, f"grad_Q ‖·‖₂ rel diff {gQ_err}"
+    assert gD_err < 5e-2, f"grad_D ‖·‖₂ rel diff {gD_err}"
+
+
+def test_maxsim_mps_no_grad_uses_compile_path(monkeypatch):
+    """When neither Q nor D requires grad, ``maxsim_mps`` skips the Metal autograd path."""
+    from late_interaction_kernels.mps import compile_dispatch as cd
+
+    monkeypatch.delenv("LIK_FORCE_MPS_BACKEND", raising=False)
+
+    Q = torch.randn(4, 32, 128, device="mps", dtype=torch.float16)
+    D = torch.randn(16, 256, 128, device="mps", dtype=torch.float16)
+    # Should run through _compile_path; we just verify it doesn't error
+    # and produces finite scores.
+    out = cd.maxsim_mps(Q, D, normalize=True)
+    assert out.shape == (4, 16)
+    assert torch.isfinite(out).all()
+
+
+def test_maxsim_mps_falls_back_to_compile_for_unsupported_dtype(monkeypatch):
+    """fp32 inputs aren't handled by the Metal kernel — must go to compile."""
+    from late_interaction_kernels.mps.compile_dispatch import maxsim_mps
+
+    monkeypatch.delenv("LIK_FORCE_MPS_BACKEND", raising=False)
+
+    Q = torch.randn(4, 32, 128, device="mps", dtype=torch.float32, requires_grad=True)
+    D = torch.randn(16, 256, 128, device="mps", dtype=torch.float32, requires_grad=True)
+    scores = maxsim_mps(Q, D, normalize=True)
+    gs = torch.randn_like(scores)
+    scores.backward(gs)
+    assert Q.grad is not None and D.grad is not None
+    assert torch.isfinite(Q.grad).all() and torch.isfinite(D.grad).all()

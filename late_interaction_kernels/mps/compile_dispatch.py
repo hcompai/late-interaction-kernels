@@ -209,6 +209,52 @@ def _compile_path(
     return fn(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
 
 
+class _MaxSimFnMetal(torch.autograd.Function):
+    """Fused MaxSim forward + Metal backward (mirrors Triton's ``_MaxSimFn``).
+
+    Both halves run on the GPU. When ``normalize=True`` the backward
+    kernel folds the L2-normalize Jacobian into its writes (the
+    host-side variant was ~10x more expensive than the kernel proper).
+    """
+
+    @staticmethod
+    def forward(ctx, Q, D, q_mask, d_mask, normalize, kd_layout):
+        scores, argmax, fwd_ctx = _metal.maxsim_train_metal(
+            Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize
+        )
+        ctx.save_for_backward(fwd_ctx.Q, fwd_ctx.D, argmax, fwd_ctx.q_mask_i8)
+        ctx.normalize = normalize
+        ctx.kd_layout = kd_layout
+        ctx.d_input_shape = D.shape
+        return scores
+
+    @staticmethod
+    def backward(ctx, grad_scores):
+        Q, D, argmax, q_mask_i8 = ctx.saved_tensors
+        grad_Q, grad_D = _metal.maxsim_backward_metal(
+            grad_scores,
+            Q,
+            D,
+            argmax,
+            q_mask=q_mask_i8,
+            kd_layout=ctx.kd_layout,
+            normalize=ctx.normalize,
+        )
+        if ctx.kd_layout and grad_D.shape != ctx.d_input_shape:
+            grad_D = grad_D.view(ctx.d_input_shape)
+        return grad_Q, grad_D, None, None, None, None
+
+
+def _metal_train_supported(Q: torch.Tensor, D: torch.Tensor) -> bool:
+    """Metal forward+backward applies to fp16/bf16, ``d`` ≤ 128, 3-D Q,
+    3-D or 4-D D, and large-enough workloads (same threshold as inference)."""
+    if not _metal.is_available() or not _metal.supports(Q, D):
+        return False
+    if Q.dim() != 3 or D.dim() not in (3, 4):
+        return False
+    return _metal_is_worthwhile(Q, D)
+
+
 def maxsim_mps(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -217,16 +263,32 @@ def maxsim_mps(
     *,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """``torch.compile``-fused MaxSim on MPS. Autograd-aware.
+    """Autograd-aware MaxSim on MPS.
 
-    Always uses the compile path; the Metal kernel is forward-only.
-    Accepts 4-D ``D`` (KD / pairs) via :func:`_compile_path`.
+    When ``Q``/``D`` need grads and the shape/dtype suits the Metal
+    kernel, routes through the fused Metal forward + Metal backward
+    via :class:`_MaxSimFnMetal`. Otherwise (no grads needed, unsupported
+    dtype, or below the size threshold) falls back to the
+    ``torch.compile`` path, which is itself autograd-aware.
     """
     forced = _forced_backend()
     if forced == "reference":
         if D.dim() == 4:
             return _kd_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
+    if forced == "compile":
+        return _compile_path(Q, D, q_mask, d_mask, normalize)
+
+    needs_grad = Q.requires_grad or D.requires_grad
+    if needs_grad and (forced == "metal" or _metal_train_supported(Q, D)):
+        kd_layout = D.dim() == 4
+        return _MaxSimFnMetal.apply(Q, D, q_mask, d_mask, normalize, kd_layout)
+    # `forced == "metal"` with no grad: the autograd path above doesn't
+    # apply, so route to the inference kernel directly rather than
+    # silently falling through to compile.
+    if forced == "metal" and _metal.is_available() and _metal.supports(Q, D):
+        with torch.no_grad():
+            return _metal.maxsim_inference_metal(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     return _compile_path(Q, D, q_mask, d_mask, normalize)
 
 
