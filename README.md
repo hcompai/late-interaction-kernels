@@ -206,7 +206,7 @@ uv run ruff check . && uv run ruff format --check .
 > [!NOTE]
 > Pick exactly one of `--extra torch-cuda` (pulls torch from the CUDA index — `cu124`) or `--extra torch-cpu` (CPU-only wheel, what CI uses). The two are declared as conflicting in `pyproject.toml` so the lockfile resolves cleanly for both. On macOS, `--extra torch-cpu` falls back to PyPI's default (MPS-capable) wheel automatically.
 
-GPU tests run automatically on every push to `main`. To run them on a PR, apply the `run-gpu-tests` label — this requires repository admin permissions, so ping a maintainer if your PR needs it.
+GPU tests run on AWS CodeBuild (A10G). To run them on a PR, apply the `run-gpu-tests` label — this requires repository admin permissions, so ping a maintainer if your PR needs it. Maintainers can also trigger an on-demand run via the [GPU CI workflow](https://github.com/hcompai/late-interaction-kernels/actions/workflows/gpu-ci.yml) `workflow_dispatch`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
 

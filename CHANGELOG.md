@@ -4,22 +4,21 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-05-28
 
 ### Added
 
-- **MPS Metal backward kernel + Metal autograd.** Adds
-  `maxsim_train_metal` (forward + saved argmax) and
-  `maxsim_backward_metal(grad_scores, Q, D, argmax, q_mask, *,
-  kd_layout, normalize)`, mirroring Triton's
+- **MPS Metal backward kernel + Metal autograd.** Adds `maxsim_train_metal`
+  (forward + saved argmax) and `maxsim_backward_metal(grad_scores, Q, D,
+  argmax, q_mask, *, kd_layout, normalize)`, mirroring Triton's
   `maxsim_backward_unified` API one-for-one. A new
-  `_MaxSimFnMetal(torch.autograd.Function)` wires them into
-  `maxsim_mps`, so training calls run the full Metal path on Apple
-  Silicon (forward, backward, and L2-normalize Jacobian) instead of
-  falling back to `torch.compile`. Inference and unsupported-dtype
-  paths are unchanged. The L2-normalize Jacobian is fused inside the
-  backward kernel via cross-simdgroup reductions, eliminating the
-  host-side norm + projection chain.
+  `_MaxSimFnMetal(torch.autograd.Function)` wires them into `maxsim_mps`,
+  so training calls run the full Metal path on Apple Silicon (forward,
+  backward, and L2-normalize Jacobian) instead of falling back to
+  `torch.compile`. Inference and unsupported-dtype paths are unchanged.
+  The L2-normalize Jacobian is fused inside the backward kernel via
+  cross-simdgroup reductions, eliminating the host-side norm +
+  projection chain.
 - **MPS Metal kernel: KD / pairs layout (4-D `D`).** The Metal MaxSim
   kernel now accepts `D` as `[Nq, K, Ld, d]` directly, matching the
   Triton path. Each program reads its own `K`-slab via a runtime bit
@@ -28,27 +27,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   PyLate's `colbert_kd_scores` and `colbert_scores_pairwise` shapes
   now hit the Metal kernel on Apple Silicon instead of falling back
   to `torch.compile`.
-
-### Changed
-
-- **MPS Metal kernel source moved to a sidecar `.metal` file.**
-  `late_interaction_kernels/mps/_maxsim.metal` holds the MSL; the
-  Python wrapper just `read_text()`s it and substitutes the tile /
-  flag constants at load time (`BLOCK_Q`, `D_MAX`, `FLAG_*`, etc.).
-  Gives IDE syntax + diagnostics on the kernel and keeps `metal.py`
-  Python-only.
-- **MPS Metal kernel: harmonise normalize epsilon.** The MSL kernel
-  now uses `1e-12` (matching `forward.py` and `F.normalize`); the
-  previous value was `1e-6`. Identical numerically to the other
-  backends on near-zero rows.
-- **MPS Metal kernel: cache `_pack_params` upload.** Tiny LRU keyed on
-  the six u32 fields of `MaxSimParams` so the same shape doesn't pay
-  a host pack + H2D copy on every call. No-op when the cache misses.
-
-## [0.3.0] - 2026-05-27
-
-### Added
-
 - `benchmarks/README.md` — operator's guide to the directory: per-script
   one-line summary, CLI conventions (`--only`, `--variants`, `--outdir`,
   `--dtype`, `--quick`), and how to drive one bench, the whole sweep, or
@@ -66,6 +44,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **MPS Metal kernel source moved to a sidecar `.metal` file.**
+  `late_interaction_kernels/mps/_maxsim.metal` holds the MSL; the Python
+  wrapper just `read_text()`s it and substitutes the tile / flag
+  constants at load time (`BLOCK_Q`, `D_MAX`, `FLAG_*`, etc.). Gives
+  IDE syntax + diagnostics on the kernel and keeps `metal.py` Python-only.
+- **MPS Metal kernel: harmonise normalize epsilon.** The MSL kernel now
+  uses `1e-12` (matching `forward.py` and `F.normalize`); the previous
+  value was `1e-6`. Identical numerically to the other backends on
+  near-zero rows.
+- **MPS Metal kernel: cache `_pack_params` upload.** Tiny LRU keyed on
+  the six u32 fields of `MaxSimParams` so the same shape doesn't pay a
+  host pack + H2D copy on every call. No-op when the cache misses.
 - **Benchmark CLI is now uniform.** Every script with a hard-coded shape
   list accepts `--only NAME [NAME ...]` to run a subset (added to 14
   benches; the legacy `--shape` / `--shapes` flags in `bench_flash_maxsim`,
@@ -94,15 +84,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ColQwen2 synthetic + real DocVQA; `RUN_ONLY` tags unchanged.
 - Headline benchmark ranges in `README.md` refreshed to match the 0.3.0
   sweep in `docs/benchmarks.md`. See the per-table notes there.
-- **MPS range moved.** Apple M4 fp16 re-run on this PR's HEAD shows
-  `metal vs eager` **1.7–2.7×** (down from 1.9–3.2× in 0.2.0) and
-  `metal vs compile` **2.0–11.3×** (up from 1.1–2.0× in 0.2.0). The
-  metal kernel itself is unchanged; the eager and compile baselines
-  both moved. Eager got faster on M4 (compressing the metal-vs-eager
-  gap on short shapes); `torch.compile` on MPS regressed sharply on
-  long-Ld inputs (the `compile vs eager` cell on `edge-d48` is now
-  0.24× — compile is 4× *slower* than eager — opening the
-  metal-vs-compile gap to 11.3×). Captured in `docs/benchmarks.md`
+- **MPS range refreshed (M4 2025).** Apple M4 fp16 re-run shows
+  inference `metal vs eager` **1.9–3.5×** (vs 1.9–3.2× in 0.2.0) and
+  `metal vs compile` **2.2–14.3×** (vs 1.1–2.0× in 0.2.0). The Metal
+  kernel itself is unchanged for the forward; the gap widened because
+  `torch.compile` on MPS regressed sharply on long-`Ld` inputs (the
+  `compile vs eager` cell on `edge-d48` is now 0.24× — compile is 4×
+  *slower* than eager — opening the metal-vs-compile gap to 14.3×).
+  A new training (forward + backward) table lands alongside, with the
+  Metal backward 1.2–1.7× over eager and 3–4× over `torch.compile` once
+  shapes amortise launch overhead. Full tables in `docs/benchmarks.md`
   Apple Silicon section.
 - **JSON peak-VRAM keys standardized.** Multi-variant rows now use
   `<variant>_peak_mb` consistently (was a mix of `peak_gb`, `_peak`,
@@ -117,6 +108,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
   `Q.contiguous()` directly; the previous `ensure_contiguous_last(Q).contiguous()`
   pattern was a no-op pair.
+- GPU CI moved from a self-hosted GitHub-hosted runner to AWS CodeBuild
+  (A10G, g5-class) and no longer auto-runs on push to `main` — to keep
+  CodeBuild spend predictable, GPU runs are now opt-in via the
+  `run-gpu-tests` PR label or `workflow_dispatch`.
 
 ### Removed
 
@@ -161,6 +156,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Triton argmax sentinel.** `forward.py:_maxsim_fwd_kernel` initialised
+  the running argmax (`m_idx`) to `0`, so a query row whose docs were
+  all masked wrote a saved argmax of `0` despite having no valid winner.
+  The `unified` and `atomic` backwards then unconditionally loaded
+  `D[d_global, 0, :]` and atomic-added into `grad_D[d_global, 0, :]`,
+  poisoning the first doc-token's gradient with a spurious
+  `grad_scores[i, j] * Q[i, s, :]`. Forward now inits `m_idx = -1`; the
+  unified / atomic backwards gate the load + atomic-add on `t >= 0`.
+  CSR backward needs no change (sorting naturally drops `-1` entries).
+  Matches the fix shipped on the MPS Metal backward.
 - `docs/benchmarks.md` Apple Silicon section now points at
   `late_interaction_kernels.mps.metal.maxsim_inference_metal` (the
   module was relocated under `mps/` in 0.2.0).
