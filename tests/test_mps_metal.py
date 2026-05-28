@@ -335,16 +335,45 @@ def test_pack_params_cache_distinguishes_keys():
     assert p_norm.data_ptr() != p_no_norm.data_ptr()
 
 
-def test_pack_params_cache_eviction_when_capacity_exceeded():
-    """Coarse eviction: cache resets when it would exceed ``_PARAMS_CACHE_MAX``."""
+def test_kd_q_mask_wrong_shape_raises():
+    """KD layout must reject a q_mask that doesn't match (Nq, Lq)."""
+    Q = torch.randn(2, 8, 32, device="mps", dtype=torch.float16)
+    D = torch.randn(2, 3, 16, 32, device="mps", dtype=torch.float16)
+    q_mask = torch.ones(8, dtype=torch.bool, device="mps")
+    with pytest.raises(ValueError, match="q_mask"):
+        _metal.maxsim_inference_metal(Q, D, q_mask=q_mask, normalize=True)
+
+
+def test_cross_product_q_dim_4_raises():
+    """4-D Q with 3-D D must fail clearly, not crash on shape unpack."""
+    Q = torch.randn(1, 2, 8, 32, device="mps", dtype=torch.float16)
+    D = torch.randn(2, 16, 32, device="mps", dtype=torch.float16)
+    with pytest.raises(ValueError, match=r"Q\.dim\(\)"):
+        _metal.maxsim_inference_metal(Q, D, normalize=True)
+
+
+def test_supports_rejects_1d_d():
+    """`supports()` must return False for 1-D D (no Ld axis)."""
+    Q = torch.randn(8, 32, device="mps", dtype=torch.float16)
+    D = torch.randn(32, device="mps", dtype=torch.float16)
+    assert _metal.supports(Q, D) is False
+
+
+def test_pack_params_cache_lru_eviction():
+    """LRU: at capacity, the least-recently-used entry gets evicted; size stays
+    pinned at ``_PARAMS_CACHE_MAX`` instead of thrashing to 1 on every overflow."""
     _metal._params_cache.clear()
-    # Fill the cache with distinct keys (vary ``Nd``).
     for nd in range(_metal._PARAMS_CACHE_MAX):
         _metal._pack_params(1, nd, 32, 200, 128, 0)
     assert len(_metal._params_cache) == _metal._PARAMS_CACHE_MAX
-    # One more entry triggers eviction (clear-then-insert).
+
+    # Touch key Nd=0 so it's now the most-recently-used; Nd=1 is now the LRU.
+    _metal._pack_params(1, 0, 32, 200, 128, 0)
+
     _metal._pack_params(1, _metal._PARAMS_CACHE_MAX, 32, 200, 128, 0)
-    assert len(_metal._params_cache) == 1
+    assert len(_metal._params_cache) == _metal._PARAMS_CACHE_MAX
+    assert (1, 0, 32, 200, 128, 0) in _metal._params_cache  # touched -> kept
+    assert (1, 1, 32, 200, 128, 0) not in _metal._params_cache  # LRU -> evicted
 
 
 def test_pack_params_bytes_match_struct_pack():

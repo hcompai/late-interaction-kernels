@@ -108,7 +108,7 @@ def _kd_eager_call(Q, D):
     """Eager KD reference (no ``torch.compile``)."""
     from late_interaction_kernels.mps.compile_dispatch import _kd_reference
 
-    return _kd_reference(Q, D, None, None, True)
+    return _kd_reference(Q, D, normalize=True)
 
 
 _kd_compile_call = _compile_call

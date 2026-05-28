@@ -34,6 +34,7 @@ device can't drift.
 
 import struct
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,8 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
         return False
     if Q.dtype not in (torch.float16, torch.bfloat16):
         return False
+    if Q.dim() not in (2, 3) or D.dim() not in (2, 3, 4):
+        return False
     if Q.shape[-1] != D.shape[-1]:
         return False
     if D.dim() == 4:
@@ -170,22 +173,25 @@ def supports(Q: torch.Tensor, D: torch.Tensor) -> bool:
 
 
 _PARAMS_CACHE_MAX = 64
-_params_cache: "dict[tuple[int, int, int, int, int, int], torch.Tensor]" = {}
+_params_cache: "OrderedDict[tuple[int, int, int, int, int, int], torch.Tensor]" = OrderedDict()
 _params_cache_lock = threading.Lock()
 
 
 def _pack_params(Nq: int, Nd: int, Lq: int, Ld: int, d: int, flags: int) -> torch.Tensor:
-    """Pack ``MaxSimParams`` into a 6-int32 MPS tensor; cached by key."""
+    """Pack ``MaxSimParams`` into a 6-int32 MPS tensor; LRU-cached by key."""
     key = (Nq, Nd, Lq, Ld, d, flags)
-    cached = _params_cache.get(key)
-    if cached is not None:
-        return cached
+    with _params_cache_lock:
+        cached = _params_cache.get(key)
+        if cached is not None:
+            _params_cache.move_to_end(key)
+            return cached
     raw = struct.pack(_PARAMS_FORMAT, Nq, Nd, Lq, Ld, d, flags)
     tensor = torch.frombuffer(bytearray(raw), dtype=torch.int32).clone().to("mps")
     with _params_cache_lock:
-        if len(_params_cache) >= _PARAMS_CACHE_MAX:
-            _params_cache.clear()
         _params_cache[key] = tensor
+        _params_cache.move_to_end(key)
+        while len(_params_cache) > _PARAMS_CACHE_MAX:
+            _params_cache.popitem(last=False)
     return tensor
 
 
@@ -237,6 +243,12 @@ def maxsim_inference_metal(
         if Q.shape[0] != D.shape[0]:
             raise ValueError(f"KD layout needs Q.shape[0] == D.shape[0]; got {Q.shape[0]} vs {D.shape[0]}")
         Nq, K, Ld, d = D.shape
+        Lq = Q.shape[1]
+        if q_mask is not None and (q_mask.dim() != 2 or tuple(q_mask.shape) != (Nq, Lq)):
+            raise ValueError(
+                "KD layout needs q_mask.shape == (Nq, Lq); got "
+                f"{tuple(q_mask.shape)} for Q.shape={tuple(Q.shape)}"
+            )
         # Flatten into the [Nq * K, Ld, d] view the kernel already
         # indexes via `d_global = i * Nd + j` (with Nd = K).
         D = D.contiguous().view(Nq * K, Ld, d)
@@ -250,6 +262,11 @@ def maxsim_inference_metal(
         q_was_2d = False
         d_was_2d = False
     else:
+        if Q.dim() not in (2, 3) or D.dim() not in (2, 3):
+            raise ValueError(
+                "Metal path needs Q.dim() in (2, 3) and D.dim() in (2, 3, 4); "
+                f"got Q.shape={tuple(Q.shape)}, D.shape={tuple(D.shape)}"
+            )
         q_was_2d = Q.dim() == 2
         d_was_2d = D.dim() == 2
         if q_was_2d:

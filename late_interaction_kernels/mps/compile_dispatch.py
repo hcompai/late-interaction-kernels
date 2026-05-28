@@ -44,6 +44,12 @@ _compiled_kd_cache: dict[tuple, Callable] = {}
 _DEFAULT_MIN_BATCH = 64
 _DEFAULT_MIN_LD = 192
 
+# KD / pairs: the compile fallback materialises a dense [Nq, K, Lq, Ld]
+# einsum, so it scales worse than the cross-product compile path and
+# the Metal kernel wins from a much smaller workload. Looser thresholds.
+_DEFAULT_KD_MIN_BATCH = 8
+_DEFAULT_KD_MIN_LD = 64
+
 
 def _disable_compile() -> bool:
     """Honour ``LIK_DISABLE_COMPILE=1`` so users can opt out."""
@@ -122,33 +128,42 @@ def _get_compiled(key: tuple) -> Callable:
 def _metal_is_worthwhile(Q: torch.Tensor, D: torch.Tensor) -> bool:
     """Heuristic: only launch the Metal kernel when the work amortises.
 
-    Below ``Nq * Nd ≥ MIN_BATCH`` and ``Ld ≥ MIN_LD`` the compile path
-    has lower launch overhead and tends to win. For KD (4-D ``D``) we
-    use ``K`` (per-query slab) as the effective doc count.
+    Cross-product: ``Nq * Nd ≥ MIN_BATCH`` and ``Ld ≥ MIN_LD``.
+    KD / pairs (4-D ``D``): a separate, looser pair of thresholds. The
+    compile path on KD goes through the dense ``[Nq, K, Lq, Ld]``
+    einsum materialise, which scales much worse than the cross-product
+    compile path — so the Metal kernel wins from a much smaller
+    workload. Crossover measured on M4 fp16; matches the marquee
+    ``kd-rerank-top10`` shape (Nq=1, K=10, Ld=300).
     """
     if Q.dim() == 2:
-        Nq, Lq = 1, Q.shape[0]
+        Nq = 1
     else:
-        Nq, Lq = Q.shape[0], Q.shape[1]
-    if D.dim() == 4:
+        Nq = Q.shape[0]
+    kd_layout = D.dim() == 4
+    if kd_layout:
         _, K, Ld, _ = D.shape
         Nd = K
     elif D.dim() == 2:
         Nd, Ld = 1, D.shape[0]
     else:
         Nd, Ld = D.shape[0], D.shape[1]
-    del Lq
-    min_batch = _env_int("LIK_MPS_METAL_MIN_BATCH", _DEFAULT_MIN_BATCH)
-    min_ld = _env_int("LIK_MPS_METAL_MIN_LD", _DEFAULT_MIN_LD)
+    if kd_layout:
+        min_batch = _env_int("LIK_MPS_METAL_KD_MIN_BATCH", _DEFAULT_KD_MIN_BATCH)
+        min_ld = _env_int("LIK_MPS_METAL_KD_MIN_LD", _DEFAULT_KD_MIN_LD)
+    else:
+        min_batch = _env_int("LIK_MPS_METAL_MIN_BATCH", _DEFAULT_MIN_BATCH)
+        min_ld = _env_int("LIK_MPS_METAL_MIN_LD", _DEFAULT_MIN_LD)
     return Nq * Nd >= min_batch and Ld >= min_ld
 
 
 def _kd_reference(
     Q: torch.Tensor,
     D: torch.Tensor,
-    q_mask: torch.Tensor | None,
-    d_mask: torch.Tensor | None,
-    normalize: bool,
+    q_mask: torch.Tensor | None = None,
+    d_mask: torch.Tensor | None = None,
+    *,
+    normalize: bool = False,
 ) -> torch.Tensor:
     """Reference KD MaxSim: ``Q[Nq, Lq, d] × D[Nq, K, Ld, d] -> [Nq, K]``.
 
@@ -185,9 +200,9 @@ def _compile_path(
     # policy as the cross-product branch, opt-out via ``LIK_DISABLE_COMPILE``.
     if D.dim() == 4:
         if _disable_compile():
-            return _kd_reference(Q, D, q_mask, d_mask, normalize)
+            return _kd_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         fn = _get_compiled_kd(_compile_key(Q, normalize, q_mask, d_mask))
-        return fn(Q, D, q_mask, d_mask, normalize)
+        return fn(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     if _disable_compile():
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     fn = _get_compiled(_compile_key(Q, normalize, q_mask, d_mask))
@@ -210,7 +225,7 @@ def maxsim_mps(
     forced = _forced_backend()
     if forced == "reference":
         if D.dim() == 4:
-            return _kd_reference(Q, D, q_mask, d_mask, normalize)
+            return _kd_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     return _compile_path(Q, D, q_mask, d_mask, normalize)
 
@@ -233,7 +248,7 @@ def maxsim_inference_mps(
         forced = _forced_backend()
         if forced == "reference":
             if D.dim() == 4:
-                return _kd_reference(Q, D, q_mask, d_mask, normalize)
+                return _kd_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
             return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
         if forced == "compile":
             return _compile_path(Q, D, q_mask, d_mask, normalize)
