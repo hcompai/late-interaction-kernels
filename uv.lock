@@ -58,9 +58,8 @@ dependencies = [
     { name = "psutil" },
     { name = "pyyaml" },
     { name = "safetensors" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ca/14/787e5498cd062640f0f3d92ef4ae4063174f76f9afd29d13fc52a319daae/accelerate-1.13.0.tar.gz", hash = "sha256:d631b4e0f5b3de4aff2d7e9e6857d164810dfc3237d54d017f075122d057b236", size = 402835, upload-time = "2026-03-04T19:34:12.359Z" }
@@ -414,15 +413,6 @@ wheels = [
 ]
 
 [[package]]
-name = "execnet"
-version = "2.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bf/89/780e11f9588d9e7128a3f87788354c7946a9cbb1401ad38a48c4db9a4f07/execnet-2.1.2.tar.gz", hash = "sha256:63d83bfdd9a23e35b9c6a3261412324f964c2ec8dcd8d3c6916ee9373e0befcd", size = 166622, upload-time = "2025-11-12T09:56:37.75Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl", hash = "sha256:67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec", size = 40708, upload-time = "2025-11-12T09:56:36.333Z" },
-]
-
-[[package]]
 name = "fast-plaid"
 version = "1.2.4.260"
 source = { registry = "https://pypi.org/simple" }
@@ -431,25 +421,15 @@ resolution-markers = [
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux'",
     "python_full_version == '3.11.*' and sys_platform == 'linux'",
     "python_full_version < '3.11' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.11' and sys_platform != 'linux'",
 ]
 dependencies = [
-    { name = "fastkmeans", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "joblib", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "maturin", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "setuptools", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "fastkmeans", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "joblib", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "maturin", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "setuptools", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/d8/121f275c4f3be19e3dbf31090d7c86e804a1ce5102c24dadf4d05dcea1f4/fast_plaid-1.2.4.260-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:414f6c52bee4b2fd21fd7b42a0be3e65335eea016c0c3bb204a609b0f6652754", size = 1551430, upload-time = "2025-09-23T15:32:16.625Z" },
@@ -471,6 +451,16 @@ name = "fast-plaid"
 version = "1.3.0.280"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
@@ -497,14 +487,13 @@ resolution-markers = [
     "python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
 ]
 dependencies = [
-    { name = "fastkmeans", marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "joblib", marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "maturin", marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "setuptools", marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "fastkmeans", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "joblib", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "maturin", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform != 'linux') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform != 'linux') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "setuptools", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
@@ -529,9 +518,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/08/b5/2ccaf75530a5250825bd5f3c100492e39c43cf2bea84d1bf7ae3def10a85/fastkmeans-0.5.0.tar.gz", hash = "sha256:64196ba228bfa02a98358ee4d30e5af33ddf1aa44cd72e93428916d0e5d2167f", size = 17010, upload-time = "2025-05-14T05:52:38.613Z" }
@@ -814,9 +802,8 @@ wheels = [
 name = "late-interaction-kernels"
 source = { editable = "." }
 dependencies = [
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "triton", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "triton", version = "3.4.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
@@ -827,34 +814,28 @@ dependencies = [
 dev = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "pytest" },
-    { name = "pytest-xdist" },
     { name = "ruff" },
-    { name = "tabulate" },
     { name = "ty" },
 ]
 pylate = [
     { name = "pylate" },
 ]
 torch-cpu = [
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 torch-cuda = [
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" } },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.21,<3" },
-    { name = "pandas", marker = "extra == 'dev'", specifier = ">=1.5,<4" },
     { name = "pylate", marker = "extra == 'pylate'", specifier = ">=1.3.3,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7,<10" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3,<4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4,<1" },
-    { name = "tabulate", marker = "extra == 'dev'", specifier = ">=0.9,<1" },
     { name = "torch", specifier = ">=2.5,<3" },
     { name = "torch", marker = "sys_platform == 'darwin' and extra == 'torch-cpu'", specifier = ">=2.5,<3" },
     { name = "torch", marker = "sys_platform != 'darwin' and extra == 'torch-cpu'", specifier = ">=2.5,<3", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "late-interaction-kernels", extra = "torch-cpu" } },
@@ -1568,7 +1549,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/41/e79269ce215c857c935fd86bcfe91a451a584dfc27f1e068f568b9ad1ab7/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:c9132cc3f8958447b4910a1720036d9eff5928cc3179b0a51fb6d167c6cc87d8", size = 705026878, upload-time = "2025-06-06T21:52:51.348Z" },
@@ -1606,7 +1587,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/bc/7771846d3a0272026c416fbb7e5f4c1f146d6d80704534d0b187dd6f4800/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:848ef7224d6305cdb2a4df928759dca7b1201874787083b6e7550dd6765ce69a", size = 193109211, upload-time = "2025-03-07T01:44:56.873Z" },
@@ -1687,9 +1668,9 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "nvidia-cusparse-cu12", version = "12.5.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-cusparse-cu12", version = "12.5.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/32/f7cd6ce8a7690544d084ea21c26e910a97e077c9b7f07bf5de623ee19981/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:db9ed69dbef9715071232caa9b69c52ac7de3a95773c2db65bdba85916e4e5c0", size = 267229841, upload-time = "2025-03-07T01:46:54.356Z" },
@@ -1727,7 +1708,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/f7/cd777c4109681367721b00a106f491e0d0d15cfa1fd59672ce580ce42a97/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9b6c161cb130be1a07a27ea6923df8141f3c295852f4b260c65f18f3e0a091dc", size = 288117129, upload-time = "2025-03-07T01:47:40.407Z" },
@@ -2354,8 +2335,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
-    { name = "fast-plaid", version = "1.2.4.260", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "fast-plaid", version = "1.3.0.280", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "fast-plaid", version = "1.2.4.260", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "fast-plaid", version = "1.3.0.280", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
     { name = "fastkmeans" },
     { name = "ninja" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
@@ -2386,19 +2367,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7d/0d/549bd94f1a0a402dc8cf64563a117c0f3765662e2e668477624baeec44d5/pytest-9.0.3.tar.gz", hash = "sha256:b86ada508af81d19edeb213c681b1d48246c1a91d304c6c81a427674c17eb91c", size = 1572165, upload-time = "2026-04-07T17:16:18.027Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/24/a372aaf5c9b7208e7112038812994107bc65a84cd00e0354a88c2c77a617/pytest-9.0.3-py3-none-any.whl", hash = "sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9", size = 375249, upload-time = "2026-04-07T17:16:16.13Z" },
-]
-
-[[package]]
-name = "pytest-xdist"
-version = "3.8.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "execnet" },
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/78/b4/439b179d1ff526791eb921115fca8e44e596a13efeda518b9d845a619450/pytest_xdist-3.8.0.tar.gz", hash = "sha256:7e578125ec9bc6050861aa93f2d59f1d8d085595d6551c2c90b6f4fad8d3a9f1", size = 88069, upload-time = "2025-07-01T13:30:59.346Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl", hash = "sha256:202ca578cfeb7370784a8c33d6d05bc6e13b4f25b5053c30a152269fd10f0b88", size = 46396, upload-time = "2025-07-01T13:30:56.632Z" },
 ]
 
 [[package]]
@@ -2989,9 +2957,8 @@ dependencies = [
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "tqdm" },
     { name = "transformers" },
@@ -3035,19 +3002,9 @@ resolution-markers = [
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux'",
     "python_full_version == '3.11.*' and sys_platform == 'linux'",
     "python_full_version < '3.11' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.11' and sys_platform != 'linux'",
 ]
 dependencies = [
-    { name = "mpmath", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "mpmath", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ca/99/5a5b6f19ff9f083671ddf7b9632028436167cd3d33e11015754e41b249a4/sympy-1.13.1.tar.gz", hash = "sha256:9cebf7e04ff162015ce31c9c6c9144daa34a93bd082f54fd8f12deca4f47515f", size = 7533040, upload-time = "2024-07-19T09:26:51.238Z" }
 wheels = [
@@ -3059,6 +3016,16 @@ name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
@@ -3085,20 +3052,11 @@ resolution-markers = [
     "python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
 ]
 dependencies = [
-    { name = "mpmath", marker = "extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "mpmath", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
-]
-
-[[package]]
-name = "tabulate"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20d58e7ace7e5edfe65b849442b00ffcdd56be88697c6/tabulate-0.10.0.tar.gz", hash = "sha256:e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d", size = 91754, upload-time = "2026-03-04T18:55:34.402Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814, upload-time = "2026-03-04T18:55:31.284Z" },
 ]
 
 [[package]]
@@ -3203,23 +3161,13 @@ resolution-markers = [
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux'",
     "python_full_version == '3.11.*' and sys_platform == 'linux'",
     "python_full_version < '3.11' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.11' and sys_platform != 'linux'",
 ]
 dependencies = [
-    { name = "filelock", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "fsspec", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "jinja2", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "filelock", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "fsspec", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "jinja2", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cublas-cu12", version = "12.4.5.8", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cuda-cupti-cu12", version = "12.4.127", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cuda-nvrtc-cu12", version = "12.4.127", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
@@ -3233,10 +3181,10 @@ dependencies = [
     { name = "nvidia-nccl-cu12", version = "2.21.5", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-nvjitlink-cu12", version = "12.4.127", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-nvtx-cu12", version = "12.4.127", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "sympy", version = "1.13.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.12' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "sympy", version = "1.13.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "triton", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (platform_machine != 'x86_64' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "typing-extensions", marker = "extra == 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torch-2.6.0%2Bcu124-cp310-cp310-linux_x86_64.whl", hash = "sha256:7f2ba7f7c0459320a521696f6b5bccc187f59890b23c9dfb6c49b0b87c6bfc97", upload-time = "2025-01-30T00:53:02Z" },
@@ -3253,53 +3201,39 @@ wheels = [
 [[package]]
 name = "torch"
 version = "2.8.0"
-source = { registry = "https://download.pytorch.org/whl/cpu" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin'",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.11' and sys_platform == 'darwin'",
-]
-dependencies = [
-    { name = "filelock", marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "fsspec", marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "jinja2", marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.12' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "sympy", version = "1.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "typing-extensions", marker = "(sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0-cp310-none-macosx_11_0_arm64.whl", hash = "sha256:a467b49fe893a6a6cce89e3aee556edfdc64a722d7195fdfdd75cec9dea13779", upload-time = "2025-10-01T23:35:46Z" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0-cp311-none-macosx_11_0_arm64.whl", hash = "sha256:3d05017d19bc99741288e458888283a44b0ee881d53f05f72f8b1cfea8998122", upload-time = "2025-10-01T23:35:48Z" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:a47b7986bee3f61ad217d8a8ce24605809ab425baf349f97de758815edd2ef54", upload-time = "2025-10-01T23:35:50Z" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0-cp313-cp313t-macosx_14_0_arm64.whl", hash = "sha256:fbe2e149c5174ef90d29a5f84a554dfaf28e003cb4f61fa2c8c024c17ec7ca58", upload-time = "2025-10-01T23:35:52Z" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:057efd30a6778d2ee5e2374cd63a63f63311aa6f33321e627c655df60abdd390", upload-time = "2025-10-01T23:35:55Z" },
-]
-
-[[package]]
-name = "torch"
-version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "fsspec", marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "jinja2", marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "filelock", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "fsspec", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "jinja2", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'darwin') or (python_full_version < '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'darwin') or (python_full_version >= '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cuda-cupti-cu12", version = "12.8.90", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-cuda-nvrtc-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
@@ -3314,10 +3248,10 @@ dependencies = [
     { name = "nvidia-nccl-cu12", version = "2.27.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "nvidia-nvtx-cu12", version = "12.8.90", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "sympy", version = "1.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.12' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "sympy", version = "1.14.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "triton", version = "3.4.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
-    { name = "typing-extensions", marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "typing-extensions", marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/28/110f7274254f1b8476c561dada127173f994afa2b1ffc044efb773c15650/torch-2.8.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:0be92c08b44009d4131d1ff7a8060d10bafdb7ddcb7359ef8d8c5169007ea905", size = 102052793, upload-time = "2025-08-06T14:53:15.852Z" },
@@ -3455,7 +3389,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "setuptools", marker = "(extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "setuptools", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/ee/0ee5f64a87eeda19bbad9bc54ae5ca5b98186ed00055281fd40fb4beb10e/triton-3.4.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7ff2785de9bc02f500e085420273bb5cc9c9bb767584a4aa28d6e360cec70128", size = 155430069, upload-time = "2025-07-30T19:58:21.715Z" },
