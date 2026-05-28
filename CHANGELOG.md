@@ -8,110 +8,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **MPS Metal backward kernel + Metal autograd.** Adds `maxsim_train_metal`
-  (forward + saved argmax) and `maxsim_backward_metal(grad_scores, Q, D,
-  argmax, q_mask, *, kd_layout, normalize)`, mirroring Triton's
-  `maxsim_backward_unified` API one-for-one. A new
-  `_MaxSimFnMetal(torch.autograd.Function)` wires them into `maxsim_mps`,
-  so training calls run the full Metal path on Apple Silicon (forward,
-  backward, and L2-normalize Jacobian) instead of falling back to
-  `torch.compile`. Inference and unsupported-dtype paths are unchanged.
-  The L2-normalize Jacobian is fused inside the backward kernel via
-  cross-simdgroup reductions, eliminating the host-side norm +
-  projection chain.
-- **MPS Metal kernel: KD / pairs layout (4-D `D`).** The Metal MaxSim
-  kernel now accepts `D` as `[Nq, K, Ld, d]` directly, matching the
-  Triton path. Each program reads its own `K`-slab via a runtime bit
-  on `MaxSimParams.flags` (a single `select` — cheaper than doubling
-  kernel variants). One launch, no Python `K`-loop, no host-side pack.
-  PyLate's `colbert_kd_scores` and `colbert_scores_pairwise` shapes
-  now hit the Metal kernel on Apple Silicon instead of falling back
-  to `torch.compile`.
-- `benchmarks/README.md` — operator's guide to the directory: per-script
-  one-line summary, CLI conventions (`--only`, `--variants`, `--outdir`,
-  `--dtype`, `--quick`), and how to drive one bench, the whole sweep, or
-  a `RUN_ONLY`-filtered subset on a SkyPilot cluster.
-- Peak VRAM now reported by every benchmark — scripts that previously
-  only timed steps (`bench_normalize`, `bench_fp8`, `bench_compile_cache`,
-  `bench_pylate_training`, `bench_backward_method`, `bench_backward_unified`,
-  `bench_backward_0_5`, `bench_fastplaid_e2e`) now call
-  `torch.cuda.reset_peak_memory_stats()` and record `max_memory_allocated()`
-  per variant in stdout and JSON.
-- `bench_fp8.py` and `bench_fused_head_train.py` now write `--outdir`
-  JSON + Markdown sidecars alongside the existing stdout table, matching
-  the rest of the benches in the directory. `sky_run_all_benchmarks.yaml`
-  passes `--outdir "$OUT"` to both.
+- **Training on Apple Silicon.** New `maxsim_train_metal` (forward +
+  saved argmax) and `maxsim_backward_metal` Metal kernels mirror the
+  Triton `maxsim_backward_unified` API; a `_MaxSimFnMetal(autograd.
+  Function)` wires them into `maxsim_mps` so the full training path
+  (forward, backward, L2-normalize Jacobian) runs on Metal instead of
+  falling back to `torch.compile`. Inference and unsupported-dtype
+  paths are unchanged.
+- **KD / pairs layout on Metal (4-D `D`).** The MPS Metal kernel now
+  accepts `D` as `[Nq, K, Ld, d]` directly — PyLate's
+  `colbert_kd_scores` and `colbert_scores_pairwise` shapes hit the
+  Metal kernel instead of falling back to `torch.compile`.
+- Every benchmark now reports peak VRAM (`max_memory_allocated()`) per
+  variant in stdout and JSON; `bench_fp8.py` and `bench_fused_head_train.py`
+  also gained `--outdir` JSON + Markdown sidecars. `benchmarks/README.md`
+  documents the unified CLI and the SkyPilot driver.
 
 ### Changed
 
-- **MPS Metal kernel source moved to a sidecar `.metal` file.**
-  `late_interaction_kernels/mps/_maxsim.metal` holds the MSL; the Python
-  wrapper just `read_text()`s it and substitutes the tile / flag
-  constants at load time (`BLOCK_Q`, `D_MAX`, `FLAG_*`, etc.). Gives
-  IDE syntax + diagnostics on the kernel and keeps `metal.py` Python-only.
-- **MPS Metal kernel: harmonise normalize epsilon.** The MSL kernel now
-  uses `1e-12` (matching `forward.py` and `F.normalize`); the previous
-  value was `1e-6`. Identical numerically to the other backends on
-  near-zero rows.
-- **MPS Metal kernel: cache `_pack_params` upload.** Tiny LRU keyed on
-  the six u32 fields of `MaxSimParams` so the same shape doesn't pay a
-  host pack + H2D copy on every call. No-op when the cache misses.
-- **Benchmark CLI is now uniform.** Every script with a hard-coded shape
-  list accepts `--only NAME [NAME ...]` to run a subset (added to 14
-  benches; the legacy `--shape` / `--shapes` flags in `bench_flash_maxsim`,
-  `bench_mps`, `bench_inference_edge` are renamed to `--only` for the same
-  reason).
-- **Variant selection is now `--variants`.** Renamed from `--only` in
-  `bench_cached_maxsim`, `bench_pylate_lateon`, `bench_pylate_realdata`,
-  `bench_colpali_training`, `bench_colpali_realdata` so `--only` is
-  unambiguously about the experiment subset.
-- `scripts/sky_run_all_benchmarks.yaml` accepts a `RUN_ONLY` env (space-
-  separated bench tags) to run a subset. Same pattern as
-  `sky_colpali_benchmark.yaml`; replaces the standalone
-  `sky_bench_verify.yaml` smoke script.
-- **SkyPilot bench yamls consolidated and renamed.** Four user-facing
-  files now cover every operator-launched bench run:
-  - `sky_benchmark_smoke_test.yaml` (was `sky_run_benchmarks.yaml`) —
-    two-bench smoke check on a fresh CUDA host.
-  - `sky_run_all_benchmarks.yaml` — every headline table; `RUN_ONLY`
-    picks a subset.
-  - `sky_pylate_benchmark.yaml` (new) — folds the previous
-    `sky_lateon_edge.yaml`, `sky_pylate_realdata.yaml`, and
-    `sky_pylate_realdata_long.yaml` behind a `RUN_ONLY` env. Tags:
-    `lateon_contrastive`, `lateon_cached`, `realdata_contrastive`,
-    `realdata_reason`, `realdata_long_2k`, `realdata_long_4k`.
-  - `sky_colpali_benchmark.yaml` (was `sky_colpali_training.yaml`) —
-    ColQwen2 synthetic + real DocVQA; `RUN_ONLY` tags unchanged.
-- Headline benchmark ranges in `README.md` refreshed to match the 0.3.0
-  sweep in `docs/benchmarks.md`. See the per-table notes there.
-- **MPS range refreshed (M4 2025).** Apple M4 fp16 re-run shows
-  inference `metal vs eager` **1.9–3.5×** (vs 1.9–3.2× in 0.2.0) and
-  `metal vs compile` **2.2–14.3×** (vs 1.1–2.0× in 0.2.0). The Metal
-  kernel itself is unchanged for the forward; the gap widened because
-  `torch.compile` on MPS regressed sharply on long-`Ld` inputs (the
-  `compile vs eager` cell on `edge-d48` is now 0.24× — compile is 4×
-  *slower* than eager — opening the metal-vs-compile gap to 14.3×).
-  A new training (forward + backward) table lands alongside, with the
-  Metal backward 1.2–1.7× over eager and 3–4× over `torch.compile` once
-  shapes amortise launch overhead. Full tables in `docs/benchmarks.md`
-  Apple Silicon section.
-- **JSON peak-VRAM keys standardized.** Multi-variant rows now use
-  `<variant>_peak_mb` consistently (was a mix of `peak_gb`, `_peak`,
-  `mem_*_MB` across benches). Breaking for anyone parsing
-  `benchmarks/results/*.json` directly. Affected files:
-  `bench_pylate_lateon`, `bench_pylate_realdata`,
-  `bench_colpali_training`, `bench_colpali_realdata`,
-  `bench_cached_maxsim`, `bench_fastplaid`, `bench_lateon`. Stdout
-  still prints GB at training scale for readability.
-- Internal dead code removed: `pylate_compat._bool_mask` (shadowed by
-  `_mask_as_bool`) and `mps.is_mps_tensor` (exported but unreferenced).
-- `plaid._maxsim_residual_forward` and `maxsim_residual_varlen` now call
-  `Q.contiguous()` directly; the previous `ensure_contiguous_last(Q).contiguous()`
-  pattern was a no-op pair.
-- GPU CI moved from a self-hosted GitHub-hosted runner to AWS CodeBuild
-  (A10G, g5-class) and no longer auto-runs on push to `main` — to keep
-  CodeBuild spend predictable, GPU runs are now opt-in via the
-  `run-gpu-tests` PR label or `workflow_dispatch`.
+- **Benchmark CLI unified.** Experiment subsets are now `--only NAME ...`
+  on every script (replacing the legacy `--shape` / `--shapes` flags and
+  the older `--only` for variant selection, which moved to `--variants`).
+  `scripts/sky_run_all_benchmarks.yaml` and the per-domain Sky yamls
+  accept a `RUN_ONLY` env to pick a subset of tags.
+- **SkyPilot bench yamls consolidated.** Four operator-facing files now
+  cover every bench run: `sky_benchmark_smoke_test.yaml` (was
+  `sky_run_benchmarks.yaml`), `sky_run_all_benchmarks.yaml`,
+  `sky_pylate_benchmark.yaml` (new, folds the three previous
+  `sky_lateon_edge.yaml` / `sky_pylate_realdata{,_long}.yaml`), and
+  `sky_colpali_benchmark.yaml` (was `sky_colpali_training.yaml`).
+- **MPS range refreshed (M4 2025).** Inference `metal vs eager` is now
+  **1.9–3.5×** and `metal vs compile` **2.2–14.3×** (vs 1.9–3.2× and
+  1.1–2.0× in 0.2.0); the gap vs `torch.compile` widened because MPS
+  Inductor regressed sharply on long-`Ld` inputs. New training (fwd +
+  bwd) table lands alongside, with the Metal backward 1.2–1.7× over
+  eager and 3–4× over `torch.compile` once shapes amortise launch
+  overhead. Full tables in `docs/benchmarks.md` Apple Silicon section.
+- **JSON peak-VRAM keys standardized** to `<variant>_peak_mb` across
+  `bench_pylate_lateon`, `bench_pylate_realdata`, `bench_colpali_training`,
+  `bench_colpali_realdata`, `bench_cached_maxsim`, `bench_fastplaid`, and
+  `bench_lateon`. Breaking for anyone parsing `benchmarks/results/*.json`
+  directly (previously a mix of `peak_gb` / `_peak` / `mem_*_MB`).
+- Removed unreferenced exports `pylate_compat._bool_mask` (shadowed by
+  `_mask_as_bool`) and `mps.is_mps_tensor`.
+- GPU CI moved from the GitHub-hosted runner to AWS CodeBuild (A10G) and
+  no longer auto-runs on push to `main`; opt-in via the `run-gpu-tests`
+  PR label or `workflow_dispatch`.
 
 ### Removed
 
@@ -143,64 +85,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - [breaking] `reference.xtr_reference` and its three CPU-only tests in
   `tests/test_reference_cpu.py` — the XTR Triton kernel was already
   deleted in 0.2.0.
-- Dropped the `synth bs=16, 1024px` rows from the ColPali e2e bench in
-  `docs/benchmarks.md` and the matching `synth-colbert-bs16-1024[-ckpt]`
-  blocks in `scripts/sky_colpali_benchmark.yaml` (renamed from
-  `sky_colpali_training.yaml` — see Changed). Both rows were 1.00×
-  (encoder-bound) and added nothing the 448px rows didn't already cover.
-- `scripts/sky_bench_verify.yaml`. The smoke-test path is now
-  `sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" scripts/sky_run_all_benchmarks.yaml`.
-- `scripts/sky_lateon_edge.yaml`, `scripts/sky_pylate_realdata.yaml`,
-  and `scripts/sky_pylate_realdata_long.yaml` — folded into
-  `scripts/sky_pylate_benchmark.yaml` (see entry above).
 
 ### Fixed
 
-- **Triton argmax sentinel.** `forward.py:_maxsim_fwd_kernel` initialised
-  the running argmax (`m_idx`) to `0`, so a query row whose docs were
-  all masked wrote a saved argmax of `0` despite having no valid winner.
-  The `unified` and `atomic` backwards then unconditionally loaded
-  `D[d_global, 0, :]` and atomic-added into `grad_D[d_global, 0, :]`,
-  poisoning the first doc-token's gradient with a spurious
-  `grad_scores[i, j] * Q[i, s, :]`. Forward now inits `m_idx = -1`; the
-  unified / atomic backwards gate the load + atomic-add on `t >= 0`.
-  CSR backward needs no change (sorting naturally drops `-1` entries).
-  Matches the fix shipped on the MPS Metal backward.
-- `docs/benchmarks.md` Apple Silicon section now points at
-  `late_interaction_kernels.mps.metal.maxsim_inference_metal` (the
-  module was relocated under `mps/` in 0.2.0).
+- **Masked-row gradient poisoning (correctness).** When every doc token
+  was masked for a `(query, doc)` pair, the Triton forward saved an
+  argmax of `0` instead of a sentinel, and the unified / atomic
+  backwards atomic-added a spurious `grad_scores[i, j] * Q[i, s, :]`
+  into `grad_D[d_global, 0, :]`. Forward now initialises the running
+  argmax to `-1`; the unified / atomic backwards skip the scatter on
+  `t < 0`. CSR backward is unaffected (sorting naturally drops the
+  sentinel). Matches the equivalent fix on the MPS Metal backward.
 
 ### Known regressions (queued for 0.3.1)
 
-The 0.3.0 H100 sweep (NGC 25.06 / torch 2.8 / triton 3.x) surfaced a
-small set of shape-specific perf regressions vs the 0.2.0 baseline.
-None are correctness issues — every parity assertion in
-`docs/benchmarks.md` still holds — and the wider story is a net
-improvement (`visual` ColPali +23 %, `text-medium` +35 %,
-cached-contrastive vs `torch.compile` 6.7–8.5× → 15–21×). The shapes
-below regressed:
+Four shape-specific perf regressions vs 0.2.0 on the H100 sweep
+(NGC 25.06 / torch 2.8 / triton 3.x). All correctness assertions hold;
+the likely root cause for each is a winning autotune config rejected
+by the tighter `prune_forward` SRAM model (#73).
 
-- `bench_forward` `text-long` (Nq=1, Nd=1k, Lq=32, Ld=1024): LIK
-  0.093 ms → 0.121 ms (+30 %). Plausibly an autotune winner the tighter
-  `prune_forward` SRAM model (#73) now rejects on consumer Ampere too —
-  needs an explicit per-config check on H100.
-- `bench_inference_edge` `LateOn-Code-edge Nd=1k Ld=1024 d=48`:
-  0.072 ms → 0.114 ms (+58 %). Same autotune-shortlist suspicion;
-  `d=48` is the smallest embedding dim in the bench set.
-- `bench_pylate_realdata` `Contrastive bs=16 Lq=32 Ld=256`: e2e step
-  52.3 ms → 61.6 ms (+18 %). Vanilla baseline unchanged (66.3 ms →
-  64.2 ms), so the slowdown is in LIK's path. Save-argmax is on
-  (training), so the small-input bypass (#64) is *not* the cause; first
-  thing to check is whether the new `prune_forward` drops a winning
-  config for this Nq=Nd=16 shape.
-- `bench_pylate_realdata` `CachedContrastive bs=64 mini=16 Lq=32 Ld=300
-  grad-ckpt`: e2e step 305.5 ms (0.3.0 release sweep) → 318.5 ms
-  (re-measured this PR), vs vanilla 351.1 → 317.2 ms. Net effect: the
-  former 1.15× win at this shape collapsed to 1.00×. Both vanilla and
-  LIK got faster on the encoder side, but LIK lost more on the MaxSim
-  slice — likely a chunked-call autotune miss against the new
-  `prune_forward`. Highest-priority of the four since it was a
-  headline-table win.
+- `bench_forward` `text-long` (Nq=1, Nd=1k, Lq=32, Ld=1024):
+  0.093 → 0.121 ms (+30 %).
+- `bench_inference_edge` `LateOn-Code-edge Nd=1k, Ld=1024, d=48`:
+  0.072 → 0.114 ms (+58 %).
+- `bench_pylate_realdata` `Contrastive bs=16, Lq=32, Ld=256`: e2e step
+  52.3 → 61.6 ms (+18 %); vanilla baseline unchanged.
+- `bench_pylate_realdata` `CachedContrastive bs=64, mini=16, Lq=32,
+  Ld=300, grad-ckpt`: e2e step 305.5 → 318.5 ms — former 1.15× win
+  vs vanilla collapsed to 1.00×. Highest-priority of the four.
 
 ## [0.2.0] - 2026-05-22
 
