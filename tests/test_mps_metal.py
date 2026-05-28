@@ -539,8 +539,8 @@ def test_metal_path_is_used_for_inference_winning_shape(monkeypatch):
     assert len(_mps_mod._compiled_cache) == 0
 
 
-def test_train_time_call_uses_compile_path():
-    """Autograd-tracking calls must use compile (Metal is forward-only)."""
+def test_fp32_train_time_call_uses_compile_path():
+    """fp32 autograd calls fall back to compile (Metal kernels are fp16/bf16 only)."""
     from late_interaction_kernels import MaxSimScorer
     from late_interaction_kernels.mps import compile_dispatch as _mps_mod
 
