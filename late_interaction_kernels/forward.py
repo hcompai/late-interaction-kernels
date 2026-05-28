@@ -116,7 +116,11 @@ def _maxsim_fwd_kernel(
         Q_block = Q_block_f32.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
-        m_idx = tl.full([BLOCK_Q], 0, dtype=tl.int32)
+        # -1 sentinel so a fully-d-masked (i, j, s) row keeps a unique value
+        # in the saved argmax buffer; the backward gates loads + atomic-adds
+        # on `t >= 0` to skip those rows instead of writing a spurious
+        # contribution into `grad_D[d_global, 0, :]`.
+        m_idx = tl.full([BLOCK_Q], -1, dtype=tl.int32)
 
         for d_start in range(0, Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)

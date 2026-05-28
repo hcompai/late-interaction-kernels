@@ -304,6 +304,36 @@ def test_csr_is_bitwise_deterministic():
         assert torch.equal(grads[0][1], grads[k][1])
 
 
+@pytest.mark.parametrize("backward", ["unified", "atomic", "csr"])
+def test_fully_d_masked_row_does_not_poison_grad_d(backward):
+    """Argmax sentinel: a query row whose docs are all masked must not write
+    a spurious atomic-add into ``grad_D[d_global, 0, :]``.
+
+    The forward saves ``argmax = -1`` (sentinel) for that row; the backward
+    must skip the load + atomic-add for ``t < 0``. Regression for the bug
+    where ``m_idx`` defaulted to ``0`` in the forward.
+    """
+    from late_interaction_kernels import maxsim
+
+    torch.manual_seed(0)
+    Nq, Nd, Lq, Ld, d = 2, 3, 8, 16, 64
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32, requires_grad=True)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32, requires_grad=True)
+    # Mask every doc token of doc j=1. The (i, j=1) pairs have no valid winner
+    # for any query token → argmax stays at the sentinel for those slots.
+    d_mask = torch.ones(Nd, Ld, dtype=torch.bool, device="cuda")
+    d_mask[1, :] = False
+
+    grad_out = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
+    maxsim(Q, D, d_mask=d_mask, backward=backward).backward(grad_out)
+
+    # The whole D[1, :, :] slab must receive *zero* gradient — every (i, j=1, s)
+    # row was fully masked in the forward.
+    assert torch.equal(D.grad[1], torch.zeros_like(D.grad[1])), (
+        f"grad_D[1] has non-zero entries on the {backward} path; the argmax sentinel guard is missing."
+    )
+
+
 def test_atomic_is_numerically_stable_across_runs(rel):
     """fp32 ``atomic_add`` reduction order depends on thread scheduling, so the
     atomic path is *not* strictly bitwise-reproducible across runs — but the
