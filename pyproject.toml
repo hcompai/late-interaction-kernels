@@ -11,7 +11,7 @@ include = ["late_interaction_kernels"]
 [project]
 name = "late-interaction-kernels"
 dynamic = ["version"]
-description = "Fused Triton kernels for late-interaction (MaxSim) scoring — ColBERT, ColPali, ModernColBERT."
+description = "Fused Triton/Metal kernels for late-interaction (MaxSim) scoring — ColBERT, ColPali, ModernColBERT, LateOn."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -24,8 +24,8 @@ maintainers = [
   { name = "Tony Wu", email = "tony.wu@hcompany.ai" },
 ]
 keywords = [
-  "late-interaction", "maxsim", "colbert", "colpali", "moderncolbert",
-  "triton", "retrieval", "ir", "rerank", "flash-attention", "gpu-kernels",
+  "late-interaction", "maxsim", "colbert", "colpali", "moderncolbert", "lateon",
+  "triton", "metal", "mps", "retrieval", "ir", "rerank", "plaid", "gpu-kernels",
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -39,34 +39,26 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  # The actual torch index (CPU vs CUDA) is selected by the `torch-cpu` /
-  # `torch-cuda` extras below. Plain `uv sync` without either extra falls
-  # back to PyPI's default wheel.
+  # Torch index (CPU/CUDA) is selected by the `torch-cpu`/`torch-cuda` extras;
+  # plain `uv sync` without an extra falls back to PyPI's default wheel.
   "torch>=2.5,<3",
-  # Triton ships with CUDA torch wheels on Linux. On macOS / Windows the
-  # kernels cannot run, but the reference implementation and imports do.
+  # Triton only ships on Linux CUDA wheels; macOS/Windows use the pure-PyTorch reference.
   "triton>=3.0,<4; platform_system=='Linux'",
 ]
 
 [project.optional-dependencies]
-# Everything needed to run tests and benchmarks locally.
+# Everything needed to run tests and linting locally.
 dev = [
   "numpy>=1.21,<3",
   "pytest>=7,<10",
   "ruff>=0.4,<1",
-  # ty is alpha (0.0.x); every 0.0.z release can break. Cap below 0.1 and
-  # revisit on each bump (see [tool.ty.rules] notes below).
+  # ty is alpha; every 0.0.z can break — cap below 0.1 and revisit each bump.
   "ty>=0.0.20,<0.1",
 ]
-# PyLate integration (drop-in for `pylate.scores.colbert_scores`). 1.3 is
-# the first release with the `(queries_mask, documents_mask)` signature
-# we patch against — older PyLate (1.2.x) used a single `mask=` kwarg and
-# is not supported.
+# PyLate drop-in (`patch_pylate()`). >=1.3.3: first release with the
+# `(queries_mask, documents_mask)` signature we patch against.
 pylate = ["pylate>=1.3.3,<2"]
-# Pick exactly one of these to choose the torch wheel source. CI uses
-# `torch-cpu` to skip the multi-GB CUDA wheel; local GPU dev uses
-# `torch-cuda`. The `[tool.uv]` conflict block below makes them mutually
-# exclusive so the lockfile resolves cleanly for both.
+# Mutually exclusive wheel sources; CI uses `torch-cpu`, GPU dev uses `torch-cuda`.
 torch-cpu = ["torch>=2.5,<3"]
 torch-cuda = ["torch>=2.5,<3"]
 
@@ -75,7 +67,7 @@ Homepage = "https://github.com/hcompai/late-interaction-kernels"
 Repository = "https://github.com/hcompai/late-interaction-kernels"
 Issues = "https://github.com/hcompai/late-interaction-kernels/issues"
 Changelog = "https://github.com/hcompai/late-interaction-kernels/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/hcompai/late-interaction-kernels#readme"
+Documentation = "https://hcompai.github.io/late-interaction-kernels/"
 
 [tool.ruff]
 line-length = 110
@@ -87,11 +79,8 @@ select = ["E", "F", "I", "B", "UP"]
 # B023: benchmark closures intentionally capture loop vars.
 ignore = ["E501", "B008", "E741", "B023"]
 
-# Torch wheel source is picked per-extra: `--extra torch-cpu` for CI / CPU
-# laptops, `--extra torch-cuda` for local GPU dev. The conflict block keeps
-# them mutually exclusive so the lockfile stays consistent. On macOS,
-# PyPI's default torch wheel already supports MPS, so we skip the CPU
-# index there (the `pytorch-cpu` index has no Darwin wheels).
+# Per-extra wheel source: `--extra torch-cpu` for CI/CPU, `--extra torch-cuda` for GPU.
+# PyPI's default torch supports MPS on macOS; pytorch-cpu has no Darwin wheels.
 [tool.uv]
 conflicts = [[{ extra = "torch-cpu" }, { extra = "torch-cuda" }]]
 
@@ -112,42 +101,28 @@ torch = [
 ]
 
 [tool.ty.src]
-# Only type-check the shipped package and the test suite. Benchmarks and
-# scripts are exploratory and not part of the public surface.
+# Benchmarks/scripts are exploratory; exclude them from type-checking.
 include = ["late_interaction_kernels", "tests"]
 
 [tool.ty.rules]
-# ty is still alpha (0.0.x) and trips on a few patterns that are pervasive
-# in this codebase. The rules below are silenced because the diagnostics
-# they emit are dominated by alpha-ty narrowing limitations and torch's
-# loose `Tensor | None` typing — revisit on each ty bump.
+# Alpha-ty narrowing gaps + torch's loose typing produce too many false positives;
+# revisit on each ty bump.
 
-# Triton ships only with CUDA torch on Linux; on the CPU dev wheel and any
-# non-Linux platform it cannot be resolved. Pylate is an optional extra
-# not installed for `--extra dev`. Both are intentionally unresolvable in
-# the default environment, so we silence at the project level rather than
-# sprinkling per-line ignores across ~30 import sites.
+# Triton (Linux-only) and pylate (optional extra) are intentionally absent in the dev
+# environment — silence project-wide rather than sprinkling ~30 per-line ignores.
 unresolved-import = "ignore"
-# torch.autograd.Function.backward has a deliberately broad runtime
-# signature; every Function override fires this rule.
+# autograd.Function.backward has a deliberately broad signature; every override fires this.
 invalid-method-override = "ignore"
-# `x.grad`, `tensor_or_none.stride()`, accumulator-pattern variables that
-# start as None and are unconditionally bound in a loop — ty doesn't
-# narrow these. autograd code and tests rely on this pattern heavily.
+# ty doesn't narrow accumulator-pattern vars (`.grad`, `.stride()`, None→bound-in-loop).
 unresolved-attribute = "ignore"
 not-subscriptable = "ignore"
 invalid-argument-type = "ignore"
 unsupported-operator = "ignore"
 invalid-return-type = "ignore"
 no-matching-overload = "ignore"
-# Triton kernel launches accept runtime meta-arguments (`num_warps`,
-# `num_stages`, `num_ctas`, ...) that are not in the @triton.jit function's
-# static signature; triton's launch protocol injects them. Only fires on
-# Linux where triton actually resolves.
+# Triton's launch protocol injects `num_warps`, `num_stages`, etc. at runtime.
 unknown-argument = "ignore"
-# Pre-existing `# type: ignore` comments in pylate_compat.py become "unused"
-# once we silence `unresolved-import` above. They are still load-bearing
-# for any other type checker someone might run, so leave them in place.
+# `# type: ignore` in pylate_compat.py stays load-bearing for other type checkers.
 unused-type-ignore-comment = "ignore"
 
 [tool.pytest.ini_options]
