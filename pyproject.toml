@@ -52,11 +52,8 @@ dependencies = [
 # Everything needed to run tests and benchmarks locally.
 dev = [
   "numpy>=1.21,<3",
-  "pandas>=1.5,<4",
   "pytest>=7,<10",
-  "pytest-xdist>=3,<4",
   "ruff>=0.4,<1",
-  "tabulate>=0.9,<1",
   # ty is alpha (0.0.x); every 0.0.z release can break. Cap below 0.1 and
   # revisit on each bump (see [tool.ty.rules] notes below).
   "ty>=0.0.20,<0.1",
