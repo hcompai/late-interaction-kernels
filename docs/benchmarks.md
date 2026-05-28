@@ -53,8 +53,10 @@ python benchmarks/bench_flash_maxsim.py
 python benchmarks/bench_decompress_maxsim.py     # vs PyTorch transliteration
 python benchmarks/bench_fastplaid_e2e.py         # vs `fast_plaid.engine.search()`
 
-# Apple Silicon (MPS): torch.compile dispatch vs eager reference
-python benchmarks/bench_mps.py
+# Apple Silicon (MPS): Metal kernel vs torch.compile vs eager
+python benchmarks/bench_mps.py                  # forward / cross-product
+python benchmarks/bench_mps.py --layout kd      # KD / pairs (4-D D)
+python benchmarks/bench_mps.py --mode train     # forward + backward
 
 # everything at once (writes to $OUTDIR)
 OUTDIR=benchmarks/results bash scripts/run_all_benchmarks.sh
@@ -570,12 +572,15 @@ you fit ~5–10× more of them than vanilla PyLate.
 `MaxSimScorer` and `retrieve` work on `mps:0` tensors. Two
 implementations land on Apple Silicon and the dispatch picks per call:
 
-* **`metal`** — fused `simdgroup_matrix` kernel
-  (`late_interaction_kernels.mps.metal.maxsim_inference_metal`, JIT-compiled
-  via `torch.mps.compile_shader`). Forward-only; never materialises the
-  `[Nq · Nd · Lq · Ld]` similarity tensor.
-* **`compile`** — `torch.compile`-fused dense reference. Autograd-aware,
-  carries every training-time call.
+* **`metal`** — fused `simdgroup_matrix` kernels for both forward
+  (`maxsim_inference_metal`) and forward + backward (`maxsim_train_metal`
+  / `maxsim_backward_metal`), JIT-compiled via `torch.mps.compile_shader`.
+  Never materialises the `[Nq · Nd · Lq · Ld]` similarity tensor and now
+  also handles autograd-tracking training calls (via `_MaxSimFnMetal`)
+  when the dtype / shape suit the kernel.
+* **`compile`** — `torch.compile`-fused dense reference. Autograd-aware
+  fallback for fp32 inputs, `d > 128`, and tiny shapes the Metal launch
+  overhead doesn't amortise on.
 
 Apple M4, fp16, 30-iter median (`benchmarks/bench_mps.py`). `metal`
 needs `d ≤ 128` and `d % 8 == 0`; outside that the dispatch transparently
@@ -617,3 +622,14 @@ into a single load pass). The cooperative D load stages each row
 through per-thread registers so the L2-normalize fold pays one LDS
 write instead of three. Tolerances stay inside 5e-3 relative for fp16
 and 3e-2 for bf16.
+
+The same kernel family also covers training on Apple Silicon: an
+argmax-saving forward (`maxsim_train_metal`) plus a single-pass
+backward (`maxsim_backward_metal`) that mirrors Triton's
+`maxsim_backward_unified` — `grad_Q` is row-owned, `grad_D` scatters
+via `atomic_uint` CAS (M1-compatible), and the L2-normalize Jacobian
+is folded into the kernel writes. `KD / pairs` layouts (4-D `D` of
+shape `[Nq, K, Ld, d]`) route to the same launch via a runtime flag
+bit, matching PyLate's `colbert_kd_scores` / `colbert_scores_pairwise`.
+Run `python benchmarks/bench_mps.py --mode train` (forward + backward)
+and `--layout kd` (KD shapes) to reproduce.

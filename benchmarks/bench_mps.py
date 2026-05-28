@@ -1,4 +1,4 @@
-"""MPS forward benchmark: Metal MMA kernel vs ``torch.compile`` vs eager.
+"""MPS forward / training benchmark: Metal MMA kernel vs ``torch.compile`` vs eager.
 
 Three implementations land on Apple Silicon:
 
@@ -21,11 +21,13 @@ overhead to amortise.
 
 Usage::
 
-    python benchmarks/bench_mps.py
+    python benchmarks/bench_mps.py                     # cross-product forward
+    python benchmarks/bench_mps.py --layout kd         # KD / pairs (4-D D)
+    python benchmarks/bench_mps.py --mode train        # forward + backward
     python benchmarks/bench_mps.py --quick
     python benchmarks/bench_mps.py --dtype bf16
 
-Writes ``benchmarks/results/mps_<chip>_<dtype>.{md,json}``.
+Writes ``benchmarks/results/mps_<chip>_<dtype>{_train}.{md,json}``.
 """
 
 import argparse
