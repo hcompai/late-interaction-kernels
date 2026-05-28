@@ -76,12 +76,14 @@ def _bwd_dQ_kernel(
                 d_global = q_idx * Nd + j
             else:
                 d_global = j
-            v = tl.load(
-                D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                mask=km,
-                other=0.0,
-            ).to(tl.float32)
-            acc += gs * v
+            # `t == -1` sentinel: forward had no active doc for this (q, j, s).
+            if t >= 0:
+                v = tl.load(
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
+                    mask=km,
+                    other=0.0,
+                ).to(tl.float32)
+                acc += gs * v
 
     tl.store(
         grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
@@ -146,16 +148,18 @@ def _bwd_dD_kernel(
             q_active = qm != 0
         if q_active:
             t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
-            qv = tl.load(
-                Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
-                mask=km,
-                other=0.0,
-            ).to(tl.float32)
-            tl.atomic_add(
-                grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
-                gs * qv,
-                mask=km,
-            )
+            # `t == -1` sentinel: forward had no active doc for this (i, j, s).
+            if t >= 0:
+                qv = tl.load(
+                    Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
+                    mask=km,
+                    other=0.0,
+                ).to(tl.float32)
+                tl.atomic_add(
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    gs * qv,
+                    mask=km,
+                )
 
 
 # ---------------------------------------------------------------------------

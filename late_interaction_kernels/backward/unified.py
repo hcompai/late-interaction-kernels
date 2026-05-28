@@ -172,19 +172,23 @@ if _HAS_TRITON:
                 d_global = i * Nd + j
             else:
                 d_global = j
-            dv = tl.load(
-                D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                mask=km,
-                other=0.0,
-            ).to(tl.float32)
+            # `t == -1` sentinel: forward saw no active doc for this (i, j, s)
+            # row — skip the load + atomic-add so we don't poison
+            # `grad_D[d_global, 0, :]`.
+            if t >= 0:
+                dv = tl.load(
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
+                    mask=km,
+                    other=0.0,
+                ).to(tl.float32)
 
-            acc_Q += gs * dv
+                acc_Q += gs * dv
 
-            tl.atomic_add(
-                grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
-                gs * qv,
-                mask=km,
-            )
+                tl.atomic_add(
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    gs * qv,
+                    mask=km,
+                )
 
         tl.store(
             grad_Q_ptr + i * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
