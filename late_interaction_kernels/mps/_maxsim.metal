@@ -159,7 +159,9 @@ inline void maxsim_inference_impl(
             const uint j_global = kd_layout ? (i * Nd + j) : j;
 
             float running_max = -INFINITY;
-            int running_argmax = 0;
+            // -1 sentinel so the backward's `t < 0` guard fires on rows
+            // where every doc token was masked out (no valid argmax).
+            int running_argmax = -1;
 
             for (uint d_start = 0; d_start < Ld; d_start += BLOCK_D) {{
                 const uint t = d_start + tid;
@@ -218,7 +220,7 @@ inline void maxsim_inference_impl(
 
                 if (s_valid) {{
                     float local_max = -INFINITY;
-                    int local_argmax = 0;
+                    int local_argmax = -1;
                     const uint row_base = tid * BLOCK_D;
                     for (uint n = 0; n < BLOCK_D; ++n) {{
                         if (d_active_tile[n] != 0) {{
@@ -387,7 +389,10 @@ inline void maxsim_bwd_impl(
     const bool has_q_mask = (p.flags & {FLAG_HAS_Q_MASK}u) != 0u;
     const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
 
-    if (s >= Lq || tid >= d) return;
+    // Dispatched grid is exactly (Nq, Lq, d), so `s < Lq` and `tid < d` for
+    // every spawned thread. Any out-of-range early-return would skip the
+    // `threadgroup_reduce_sum` barriers below and deadlock the survivors;
+    // we assert dispatch correctness on the host instead.
 
     bool q_active = true;
     if (has_q_mask) {{

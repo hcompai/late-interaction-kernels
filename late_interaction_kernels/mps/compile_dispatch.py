@@ -222,7 +222,7 @@ class _MaxSimFnMetal(torch.autograd.Function):
         scores, argmax, fwd_ctx = _metal.maxsim_train_metal(
             Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize
         )
-        ctx.save_for_backward(fwd_ctx["Q"], fwd_ctx["D"], argmax, fwd_ctx["q_mask_i8"])
+        ctx.save_for_backward(fwd_ctx.Q, fwd_ctx.D, argmax, fwd_ctx.q_mask_i8)
         ctx.normalize = normalize
         ctx.kd_layout = kd_layout
         ctx.d_input_shape = D.shape
@@ -240,7 +240,7 @@ class _MaxSimFnMetal(torch.autograd.Function):
             kd_layout=ctx.kd_layout,
             normalize=ctx.normalize,
         )
-        if ctx.kd_layout:
+        if ctx.kd_layout and grad_D.shape != ctx.d_input_shape:
             grad_D = grad_D.view(ctx.d_input_shape)
         return grad_Q, grad_D, None, None, None, None
 
@@ -283,6 +283,12 @@ def maxsim_mps(
     if needs_grad and (forced == "metal" or _metal_train_supported(Q, D)):
         kd_layout = D.dim() == 4
         return _MaxSimFnMetal.apply(Q, D, q_mask, d_mask, normalize, kd_layout)
+    # `forced == "metal"` with no grad: the autograd path above doesn't
+    # apply, so route to the inference kernel directly rather than
+    # silently falling through to compile.
+    if forced == "metal" and _metal.is_available() and _metal.supports(Q, D):
+        with torch.no_grad():
+            return _metal.maxsim_inference_metal(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
     return _compile_path(Q, D, q_mask, d_mask, normalize)
 
 

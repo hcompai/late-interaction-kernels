@@ -36,7 +36,7 @@ import struct
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 
@@ -383,6 +383,20 @@ def maxsim_inference_metal(
     return out
 
 
+class MaxSimFwdCtx(NamedTuple):
+    """Forward-pass tensors that the backward needs verbatim.
+
+    ``Q`` / ``D`` are the contiguous, kernel-ready buffers (D flattened
+    to ``[Nq * K, Ld, d]`` in KD mode); ``q_mask_i8`` is ``None`` when
+    no mask was supplied, else the int8 form the kernel saw.
+    """
+
+    Q: torch.Tensor
+    D: torch.Tensor
+    q_mask_i8: torch.Tensor | None
+    kd_layout: bool
+
+
 def maxsim_train_metal(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -390,13 +404,13 @@ def maxsim_train_metal(
     d_mask: torch.Tensor | None = None,
     *,
     normalize: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor, dict]:
+) -> tuple[torch.Tensor, torch.Tensor, MaxSimFwdCtx]:
     """Forward + per-(i, s, j) argmax save. Returns ``(scores, argmax, ctx)``.
 
     ``argmax`` is ``[Nq * Nd, Lq]`` int32 (Nd = K in KD mode), matching
-    the Triton ``maxsim_backward_unified`` contract. ``ctx`` carries the
-    contiguous Q / D / q_mask the kernel saw so the backward doesn't
-    redo broadcasts.
+    the Triton ``maxsim_backward_unified`` contract. ``ctx`` carries
+    the contiguous Q / D / q_mask the kernel saw so the backward
+    doesn't redo broadcasts.
     """
     if not is_available():
         raise RuntimeError(
@@ -419,7 +433,9 @@ def maxsim_train_metal(
     flags, q_mask_i8, d_mask_i8 = _prepare_flags_and_masks(q_mask, d_mask, normalize, kd_layout)
 
     scores = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
-    argmax = torch.zeros(Nq * Nd, Lq, device="mps", dtype=torch.int32)
+    # -1 sentinel: any (i, s, j) row the kernel doesn't touch (e.g. when
+    # the whole tile is d-masked) keeps -1, and the backward skips it.
+    argmax = torch.full((Nq * Nd, Lq), -1, device="mps", dtype=torch.int32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
 
     j_blocks = (Nd + j_per_tg - 1) // j_per_tg
@@ -437,12 +453,12 @@ def maxsim_train_metal(
         group_size=(1, 1, _THREADS_PER_GROUP),
     )
 
-    ctx = {
-        "Q": Q,
-        "D": D,
-        "q_mask_i8": q_mask_i8 if q_mask is not None else None,
-        "kd_layout": kd_layout,
-    }
+    ctx = MaxSimFwdCtx(
+        Q=Q,
+        D=D,
+        q_mask_i8=q_mask_i8 if q_mask is not None else None,
+        kd_layout=kd_layout,
+    )
     return scores, argmax, ctx
 
 
@@ -453,7 +469,7 @@ def maxsim_backward_metal(
     argmax: torch.Tensor,
     q_mask: torch.Tensor | None = None,
     *,
-    kd_layout: bool = False,
+    kd_layout: bool | None = None,
     normalize: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """``grad_Q``, ``grad_D`` for the fused MaxSim. Mirrors Triton's
@@ -463,19 +479,22 @@ def maxsim_backward_metal(
         grad_scores: ``[Nq, Nd]`` fp32 upstream gradient.
         Q: ``[Nq, Lq, d]`` contiguous, fp16 / bf16. Pass the *raw* Q
             when ``normalize=True`` (kernel normalizes internally).
-        D: ``[Nd, Ld, d]`` (cross-product) or ``[Nq * K, Ld, d]`` (KD,
-            same flat view the forward saw). Same raw/normalized rule
-            as ``Q``.
+        D: ``[Nd, Ld, d]`` (cross-product) or ``[Nq, K, Ld, d]`` /
+            ``[Nq * K, Ld, d]`` (KD: either the natural 4-D or the
+            flat view the forward saw — both accepted). Same
+            raw/normalized rule as ``Q``.
         argmax: ``[Nq * Nd, Lq]`` int32 winner buffer from
             :func:`maxsim_train_metal`.
         q_mask: optional ``[Nq, Lq]`` int8 mask (``1`` = valid).
-        kd_layout: ``True`` if ``D`` is the flat KD view.
+        kd_layout: ``True`` if ``D`` is the flat KD view. Auto-detected
+            (`D.dim() == 4`) when left as ``None``.
         normalize: when ``True``, fold the L2-normalize Jacobian into
             the writes. Eliminates the host-side norm + projection
             ops that otherwise dominate the backward step.
 
     Returns:
         ``(grad_Q, grad_D)`` cast back to ``Q.dtype`` / ``D.dtype``.
+        ``grad_D`` matches the original ``D`` shape (4-D in -> 4-D out).
     """
     if not is_available():
         raise RuntimeError("MPS Metal path unavailable.")
@@ -487,6 +506,16 @@ def maxsim_backward_metal(
         argmax = argmax.to(torch.int32)
     if q_mask is not None and q_mask.dtype != torch.int8:
         q_mask = q_mask.to(torch.int8)
+
+    d_input_shape = D.shape
+    if D.dim() == 4:
+        if kd_layout is False:
+            raise ValueError("Got 4-D D but kd_layout=False; pass kd_layout=True or omit the flag.")
+        kd_layout = True
+        Nq_d, K, Ld_4d, d_4d = D.shape
+        D = D.contiguous().view(Nq_d * K, Ld_4d, d_4d)
+    elif kd_layout is None:
+        kd_layout = False
 
     Q = Q.contiguous()
     D = D.contiguous()
@@ -533,7 +562,10 @@ def maxsim_backward_metal(
         group_size=(1, 1, d),
     )
 
-    return grad_Q.to(Q.dtype), grad_D.to(D.dtype)
+    grad_D = grad_D.to(D.dtype)
+    if len(d_input_shape) == 4:
+        grad_D = grad_D.view(d_input_shape)
+    return grad_Q.to(Q.dtype), grad_D
 
 
 __all__ = [

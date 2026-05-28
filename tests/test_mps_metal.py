@@ -762,8 +762,8 @@ def test_metal_backward_KD_layout_matches_reference():
     Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
     D4 = torch.randn(Nq, K, Ld, d, device="mps", dtype=torch.float16)
     _, argmax, fwd_ctx = _metal.maxsim_train_metal(Q, D4, normalize=False)
-    # fwd_ctx['D'] is the flattened [Nq*K, Ld, d] view the kernel saw
-    D_flat = fwd_ctx["D"]
+    # fwd_ctx.D is the flattened [Nq*K, Ld, d] view the kernel saw
+    D_flat = fwd_ctx.D
     gs = torch.randn(Nq, K, device="mps", dtype=torch.float32)
     gQ, gD = _metal.maxsim_backward_metal(gs, Q, D_flat, argmax, kd_layout=True)
 
@@ -784,6 +784,46 @@ def test_metal_backward_KD_layout_matches_reference():
     assert (gD.view(Nq, K, Ld, d).float() - ref_gD).abs().max().item() / max(
         ref_gD.abs().max().item(), 1e-6
     ) < 5e-3
+
+
+def test_metal_backward_accepts_4d_D_directly():
+    """`maxsim_backward_metal` accepts the natural 4-D D the train kernel saw,
+    mirroring `maxsim_train_metal`. grad_D comes back in the same 4-D shape."""
+    Nq, K, Lq, Ld, d = 2, 4, 8, 16, 32
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D4 = torch.randn(Nq, K, Ld, d, device="mps", dtype=torch.float16)
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D4, normalize=False)
+    gs = torch.randn(Nq, K, device="mps", dtype=torch.float32)
+
+    # 4-D path (auto-detects kd_layout).
+    gQ_4d, gD_4d = _metal.maxsim_backward_metal(gs, Q, D4, argmax)
+    assert gD_4d.shape == D4.shape
+
+    # 3-D (flat) path: same kernel, same numbers.
+    D_flat = D4.contiguous().view(Nq * K, Ld, d)
+    gQ_3d, gD_3d = _metal.maxsim_backward_metal(gs, Q, D_flat, argmax, kd_layout=True)
+    assert torch.equal(gQ_4d, gQ_3d)
+    assert torch.equal(gD_4d.view(Nq * K, Ld, d), gD_3d)
+
+
+def test_metal_backward_argmax_sentinel_skips_fully_masked_rows():
+    """A fully-d-masked (i, s, j) row writes argmax=-1; the backward must skip it
+    (no spurious atomic_add into D[d_global, 0, :])."""
+    Nq, Nd, Lq, Ld, d = 1, 1, 4, 8, 32
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="mps", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="mps", dtype=torch.float16)
+    d_mask = torch.zeros(Nd, Ld, dtype=torch.bool, device="mps")  # everything masked
+
+    _, argmax, _ = _metal.maxsim_train_metal(Q, D, d_mask=d_mask, normalize=False)
+    # Every save slot keeps the -1 sentinel (no valid argmax was ever produced).
+    assert (argmax == -1).all()
+
+    gs = torch.randn(Nq, Nd, device="mps", dtype=torch.float32)
+    _, gD = _metal.maxsim_backward_metal(gs, Q, D, argmax)
+    # No scatter happened -> grad_D is all zeros.
+    assert torch.equal(gD, torch.zeros_like(gD))
 
 
 # ============================================================

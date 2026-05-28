@@ -170,12 +170,15 @@ def bench_one_train(name, Nq, Nd, Lq, Ld, d, dtype):
     metal_fn = _metal_train_call()
     if _metal.is_available() and _metal.supports(Q, D):
         # Force the Metal autograd path so we measure the kernel and not
-        # whichever path the heuristic happens to pick.
+        # whichever path the heuristic happens to pick. try/finally so
+        # a kernel error doesn't leak the env var into later shapes.
         os.environ["LIK_FORCE_MPS_BACKEND"] = "metal"
-        t, sd = _time_op(lambda: _train_step(metal_fn, Q, D, gs))
-        m = _peak_mb(lambda: _train_step(metal_fn, Q, D, gs))
-        rows.append(("metal", t, sd, m))
-        os.environ.pop("LIK_FORCE_MPS_BACKEND", None)
+        try:
+            t, sd = _time_op(lambda: _train_step(metal_fn, Q, D, gs))
+            m = _peak_mb(lambda: _train_step(metal_fn, Q, D, gs))
+            rows.append(("metal", t, sd, m))
+        finally:
+            os.environ.pop("LIK_FORCE_MPS_BACKEND", None)
     else:
         rows.append(("metal", float("nan"), float("nan"), float("nan")))
 
