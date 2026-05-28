@@ -44,6 +44,12 @@ the existing split: internal `_forward` returning `(scores, argmax)`,
 [`publish.yml`](.github/workflows/publish.yml) builds and uploads to PyPI
 via OIDC — no token needed.
 
+> [!NOTE]
+> Pushing the tag also triggers `CI`, `CPU CI`, and `GPU CI` on the tagged
+> commit in parallel with `publish.yml`. Confirm they're green on the
+> [Actions page](https://github.com/hcompai/late-interaction-kernels/actions)
+> so a broken release is caught immediately.
+
 ## License
 
 By contributing you agree your work is licensed under Apache 2.0

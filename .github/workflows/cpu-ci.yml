@@ -5,11 +5,14 @@ permissions:
 
 # Runs CPU-safe tests across supported Python versions. Triggered:
 #   - on pushes to main that touch CPU-relevant code;
+#   - on every `v*` tag push (path filter is silently skipped for tag pushes
+#     per GitHub Actions docs, so release tags always run);
 #   - on PRs that touch CPU-relevant code;
 #   - manually via workflow_dispatch (e.g. to force a run on a docs-only PR).
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "late_interaction_kernels/**"
       - "tests/**"

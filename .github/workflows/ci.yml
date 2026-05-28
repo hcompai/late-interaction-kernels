@@ -3,12 +3,13 @@ name: CI
 permissions:
   contents: read
 
-# Lint + typecheck are cheap and always run on every PR and push to main.
-# Path-gated test workflows live in cpu-ci.yml (CPU smoke) and gpu-ci.yml.
+# Lint + typecheck are cheap and always run on every PR, push to main, and
+# version tag. Path-gated test workflows live in cpu-ci.yml and gpu-ci.yml.
 on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
