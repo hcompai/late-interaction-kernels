@@ -8,20 +8,24 @@ Two MaxSim implementations cover the gap:
 
 * :mod:`.compile_dispatch` (this module) ships a ``torch.compile``-fused reference.
   Inductor lowers the einsum + max + sum chain to a single MPSGraph,
-  typically ≈2× faster than eager. The compile path is autograd-aware,
-  so it carries every training-time call.
-* :mod:`.metal` ships a fused forward kernel built on Apple's
-  ``simdgroup_matrix`` MMA. It saves the ``[Lq, Ld]`` similarity tensor
-  and beats the compiled path by ≈1.2-1.6× on inference shapes with
-  realistic doc batches.
+  typically ≈2× faster than eager. The compile path is autograd-aware
+  and accepts any dtype, so it covers everything the Metal kernel
+  can't.
+* :mod:`.metal` ships fused forward + backward kernels built on Apple's
+  ``simdgroup_matrix`` MMA. The forward never materialises the
+  ``[Lq, Ld]`` similarity tile; the backward is single-pass
+  argmax-conditioned (``grad_Q`` row-owned, ``grad_D`` scattered via
+  ``atomic_uint`` CAS) with the L2-normalize Jacobian folded in.
 
-For inference we route to the Metal kernel when its assumptions hold
-(fp16 / bf16 inputs, ``d`` ≤ 128 and divisible by 8) and the workload
-is large enough that the kernel's launch overhead amortises. The
-heuristic is shape-only — measured on M-series silicon — and falls
-back to the compile path for everything else, including all training
-calls. ``LIK_DISABLE_COMPILE=1`` and ``LIK_FORCE_MPS_BACKEND={metal,
-compile,reference}`` give explicit overrides.
+We route to the Metal kernel when its assumptions hold (fp16 / bf16
+inputs, ``d`` ≤ 128 and divisible by 8) and the workload is large
+enough that the launch overhead amortises — both for inference and
+for autograd-tracking training calls (via ``_MaxSimFnMetal``). The
+heuristic is shape-only, measured on M-series silicon, and falls back
+to the compile path for everything else (fp32 inputs, tiny batches,
+``d > 128``, etc.). ``LIK_DISABLE_COMPILE=1`` and
+``LIK_FORCE_MPS_BACKEND={metal,compile,reference}`` give explicit
+overrides.
 """
 
 import os

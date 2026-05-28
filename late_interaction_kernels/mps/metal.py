@@ -1,9 +1,12 @@
-"""Fused MaxSim forward on MPS via Metal ``simdgroup_matrix`` MMA.
+"""Fused MaxSim forward + backward on MPS via Metal ``simdgroup_matrix`` MMA.
 
-Direct Metal-side analogue of :mod:`late_interaction_kernels.forward`:
-the same FlashAttention-style outer-product tiling, but the inner GEMM
-runs on Apple's ``simdgroup_matrix<T, 8, 8>`` MMA instead of CUDA tensor
-cores. The ``[Nq · Nd · Lq · Ld]`` similarity tensor never reaches HBM.
+Direct Metal-side analogue of :mod:`late_interaction_kernels.forward`
+and :func:`maxsim_backward_unified`: the same FlashAttention-style
+outer-product tiling on the forward, the same argmax-conditioned
+single-pass backward (``grad_Q`` row-owned, ``grad_D`` scattered via
+``atomic_uint`` CAS). The inner GEMM runs on Apple's
+``simdgroup_matrix<T, 8, 8>`` MMA instead of CUDA tensor cores; the
+``[Nq · Nd · Lq · Ld]`` similarity tensor never reaches HBM.
 
 Each threadgroup serves ``J_PER_TG`` consecutive ``j`` values, loading
 Q exactly once and hoisting it into a register-resident
@@ -13,11 +16,14 @@ group layout. Two persistence levels are dispatched by ``Nd``:
 
 * ``J_PER_TG = 1`` for tiny corpora where the launch grid needs to be
   wide to keep the GPU saturated;
-* ``J_PER_TG = 8`` for the typical inference regime, amortising the Q
-  load and the register-cache build 8× per threadgroup.
+* ``J_PER_TG = 8`` for the typical inference / training regime,
+  amortising the Q load and the register-cache build 8× per
+  threadgroup.
 
 D streams in 32-row tiles through threadgroup memory with the optional
-L2-normalize folded into the cooperative load.
+L2-normalize folded into the cooperative load. The training forward
+additionally writes the per-(i, s, j) argmax; the matching backward
+optionally folds the L2-normalize Jacobian into its writes.
 
 Constraints (everything outside falls back to ``torch.compile``):
 
