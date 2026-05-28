@@ -582,36 +582,36 @@ implementations land on Apple Silicon and the dispatch picks per call:
   fallback for fp32 inputs, `d > 128`, and tiny shapes the Metal launch
   overhead doesn't amortise on.
 
-Apple M4, fp16, 30-iter median (`benchmarks/bench_mps.py`). `metal`
-needs `d ≤ 128` and `d % 8 == 0`; outside that the dispatch transparently
-falls back to `compile`.
+MacBook Air Apple M4 (2025, 16 GB unified memory), fp16, 30-iter median
+(`benchmarks/bench_mps.py`). `metal` needs `d ≤ 128` and `d % 8 == 0`;
+outside that the dispatch transparently falls back to `compile`.
 
 
 | shape                                          | metal    | compile  | eager    | metal vs eager | metal vs compile | compile vs eager |
 | ---------------------------------------------- | -------- | -------- | -------- | -------------- | ---------------- | ---------------- |
-| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.60 ms  | 17.41 ms | 17.13 ms | **1.99×**      | 2.02×            | 0.98×            |
-| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 16.16 ms | 64.34 ms | 28.24 ms | **1.75×**      | 3.98×            | 0.44×            |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 65.3 ms  | 171.7 ms | 167.7 ms | **2.57×**      | 2.63×            | 0.98×            |
-| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 3.09 ms  | 13.22 ms | 5.82 ms  | **1.88×**      | 4.28×            | 0.44×            |
-| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 16.18 ms | 64.76 ms | 28.19 ms | **1.74×**      | 4.00×            | 0.44×            |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 39.21 ms | 441.1 ms | 105.7 ms | **2.70×**      | 11.25×           | 0.24×            |
-| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.83 ms  | 13.86 ms | 9.66 ms  | **2.00×**      | 2.87×            | 0.70×            |
-| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.73 ms  | 9.27 ms  | 2.29 ms  | 0.40× → 1.62×  | 0.62× (compile)  | 0.25×            |
+| `rerank-short` (Nq=1, Nd=1000, Lq=32, Ld=300)  | 8.45 ms  | 18.33 ms | 18.04 ms | **2.14×**      | 2.17×            | 0.98×            |
+| `rerank-mid` (Nq=1, Nd=500, Lq=32, Ld=1024)    | 15.86 ms | 65.40 ms | 31.28 ms | **1.97×**      | 4.12×            | 0.48×            |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)     | 57.33 ms | 184.88 ms| 181.66 ms| **3.17×**      | 3.22×            | 0.98×            |
+| `colpali` (Nq=1, Nd=100, Lq=32, Ld=1024)       | 2.94 ms  | 13.51 ms | 6.45 ms  | **2.19×**      | 4.59×            | 0.48×            |
+| `colpali-big` (Nq=1, Nd=500, Lq=32, Ld=1024)   | 16.11 ms | 66.91 ms | 30.15 ms | **1.87×**      | 4.15×            | 0.45×            |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=1024, d=48) | 31.98 ms | 457.1 ms | 111.7 ms | **3.49×**      | 14.29×           | 0.24×            |
+| `edge-d64` (Nq=1, Nd=1k, Lq=32, Ld=300, d=64)  | 4.67 ms  | 14.09 ms | 10.55 ms | **2.26×**      | 3.02×            | 0.75×            |
+| `train-batch` (Nq=Nd=32, Lq=32, Ld=200)        | 5.44 ms  |  9.76 ms |  2.36 ms | 0.43×          | 1.80× (compile)  | 0.24×            |
 
 
 For someone moving from plain PyTorch to this library, the headline is
-`metal vs eager`: **1.7–2.7×** on every realistic inference shape. On
+`metal vs eager`: **1.9–3.5×** on every realistic inference shape. On
 `train-batch` the Metal kernel's launch overhead dominates and eager
-actually wins (2.29 ms vs metal's 5.73 ms) — the dispatch heuristic
+actually wins (2.36 ms vs metal's 5.44 ms) — the dispatch heuristic
 (`Nq * Nd ≥ 64 ∧ Ld ≥ 192`) is tuned to route this regime away from
 metal. Override with `LIK_FORCE_MPS_BACKEND={metal,compile,reference}`
 or `LIK_DISABLE_COMPILE=1` if you need explicit control.
 
 Memory is the second story: because `metal` streams `D` in 32-row tiles
 through threadgroup memory, peak working-set is one output tensor
-(8 MB) regardless of the corpus size. On `rerank-10k` and `edge-d48`
-the compile / eager paths materialise 2.5–4 GB intermediates —
-**~300–500×** memory reduction.
+(8 MB) regardless of the corpus size. On `rerank-10k` the compile /
+eager paths materialise 2.5–4.0 GB intermediates and on `edge-d48`
+0.75–1.5 GB — **~95–500×** memory reduction.
 
 The Metal kernel uses Apple's 8×8 `simdgroup_matrix` MMA (the Metal
 analogue of CUDA tensor cores) on top of a *persistent* threadgroup
@@ -633,3 +633,25 @@ shape `[Nq, K, Ld, d]`) route to the same launch via a runtime flag
 bit, matching PyLate's `colbert_kd_scores` / `colbert_scores_pairwise`.
 Run `python benchmarks/bench_mps.py --mode train` (forward + backward)
 and `--layout kd` (KD shapes) to reproduce.
+
+Training (forward + backward) on the same MacBook Air M4, fp16, 30-iter
+median:
+
+
+| shape                                       | metal   | compile  | eager   | metal vs eager | metal vs compile |
+| ------------------------------------------- | ------- | -------- | ------- | -------------- | ---------------- |
+| `train-bs8` (Nq=Nd=8, Lq=32, Ld=64)         | 0.52 ms |  0.52 ms | 1.34 ms | **2.58×**      | 1.00×            |
+| `train-bs16` (Nq=Nd=16, Lq=32, Ld=128)      | 2.35 ms |  3.37 ms | 1.93 ms | 0.82×          | 1.44×            |
+| `train-bs32` (Nq=Nd=32, Lq=32, Ld=200)      | 6.19 ms | 24.69 ms | 7.43 ms | **1.20×**      | **3.99×**        |
+| `train-bs8-long` (Nq=Nd=8, Lq=32, Ld=512)   | 1.44 ms |  4.84 ms | 2.29 ms | **1.60×**      | **3.36×**        |
+| `train-d64` (Nq=Nd=16, Lq=32, Ld=256, d=64) | 1.65 ms |  4.96 ms | 2.83 ms | **1.71×**      | **3.00×**        |
+
+
+Same launch-overhead story as forward `train-batch`: on `train-bs16`
+(`Nq · Nd · Ld = 32 768`, matmul work ≈ 17 M FMAs split across the two
+backward passes) Metal's per-launch fixed cost doesn't amortise against
+eager's already-fast native ops and the kernel runs 0.82× of eager —
+reproducibly across runs. From `Ld ≥ 200` or `d = 64` (which halves
+matmul cost relative to the scatter) Metal pulls ahead 1.2–1.7×, and
+the gap vs `torch.compile` opens to 3–4× because Inductor still
+materialises the `[Nq, Nd, Lq, Ld]` score tile for the backward.
