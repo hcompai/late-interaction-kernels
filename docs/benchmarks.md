@@ -342,12 +342,12 @@ batches (e.g. `Nd ≥ 256` with `Ld = 128`).
 
 | shape                            | atomic | csr  | unified | auto | auto picks |
 | -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.60   | 0.78 | 0.46    | 0.50 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.51   | 0.70 | 0.54    | 0.54 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 1.78   | 1.17 | 1.62    | 1.17 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.59   | 0.77 | 0.77    | 0.77 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 0.87   | 0.78 | 0.45    | 0.45 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 0.81   | 0.78 | 1.25    | 1.25 | unified    |
+| `train-32` (32 × 32, Ld=128)     | 0.48   | 0.80 | 0.61    | 0.61 | unified    |
+| `train-128` (128 × 128, Ld=128)  | 0.65   | 0.76 | 0.57    | 0.58 | unified    |
+| `train-256` (256 × 256, Ld=128)  | 2.45   | 1.69 | 2.12    | 1.71 | **csr**    |
+| `retrieval` (16 × 512, Ld=300)   | 0.77   | 0.74 | 0.93    | 0.93 | unified    |
+| `long-Lq` (Lq=1024, Ld=64)       | 1.02   | 0.76 | 0.51    | 0.52 | unified    |
+| `huge-Nd` (16 × 1024, Ld=128)    | 1.18   | 1.00 | 1.46    | 1.46 | unified    |
 
 
 CSR is bitwise-reproducible across runs (no atomics); `atomic` /
