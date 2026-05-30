@@ -148,8 +148,8 @@ def patched_colbert_kd_scores(
         raise ValueError(f"colbert_kd_scores expects D.dim()==4, got {D.dim()}")
 
     # Single fused launch over all Nq*K pairs via the 4-D dispatch in
-    # ``maxsim`` (kd_layout=True). No more per-query Python loop — that loop
-    # was the catastrophic regression Raphael flagged in pylate#224 §2/§4.
+    # ``maxsim`` (kd_layout=True), avoiding the per-query Python loop that
+    # caused the regression in pylate#224 §2/§4.
     return _dispatch_maxsim(Q, D, q_mask, d_mask, path)
 
 

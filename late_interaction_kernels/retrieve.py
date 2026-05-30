@@ -54,11 +54,9 @@ def _score(
         from late_interaction_kernels.autograd import maxsim
 
         # `inference=True` is a stronger contract than auto-dispatch:
-        # `MaxSimScorer.score()` advertises "does not participate in
-        # autograd" even when the inputs have ``requires_grad=True``.
-        # ``torch.no_grad()`` enforces that. The training branch
-        # (`inference=False`) lets `maxsim` route through autograd as
-        # usual.
+        # `score()` must not participate in autograd even when inputs have
+        # ``requires_grad=True``, so force ``no_grad()``. Training
+        # (`inference=False`) routes through autograd as usual.
         with torch.no_grad() if inference else torch.enable_grad():
             return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 

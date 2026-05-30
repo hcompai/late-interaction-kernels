@@ -51,7 +51,7 @@ def maxsim_backward_unified_reference(
     Df = D.to(torch.float32)
 
     m_idx = argmax.view(Nq, Nd, Lq).long()  # [Nq, Nd, Lq]
-    # Gather winning D rows:  D_win[i, j, q] = D[j, argmax[i, j, q]]
+    # D_win[i, j, q] = D[j, argmax[i, j, q]]
     j_idx = torch.arange(Nd, device=D.device).view(1, Nd, 1).expand(Nq, Nd, Lq)
     D_win = Df[j_idx, m_idx]  # [Nq, Nd, Lq, d]
 

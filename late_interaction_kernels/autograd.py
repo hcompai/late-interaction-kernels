@@ -89,10 +89,9 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
     global _WARNED_UNNORMALIZED
     if _WARNED_UNNORMALIZED or os.environ.get("LIK_SUPPRESS_NORM_WARN", "0") == "1":
         return
-    # Cheap sanity check: a handful of token norms.
+    # Cheap heuristic: inspect the median L2 norm over the first 64 tokens.
     with torch.no_grad():
         sample = Q.detach()
-        # Flatten leading dims, inspect up to the first 64 tokens.
         sample = sample.reshape(-1, sample.shape[-1])[:64]
         if sample.numel() == 0:
             return

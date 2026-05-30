@@ -56,7 +56,7 @@ class PackedBatch:
     as ``max_seqlen_d`` to skip the kernel's own D2H sync."""
 
     def __iter__(self):
-        """Allow tuple-style unpacking:
+        """Yield fields in order for tuple-style unpacking:
         ``Q, cu_q, D, cu_d, pq, pd, max_lq, max_ld = pack_padded(...)``.
         """
         yield self.Q_packed

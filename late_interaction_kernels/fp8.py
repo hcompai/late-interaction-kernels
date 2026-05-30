@@ -55,7 +55,6 @@ def quantize_fp8_per_token(
     """
     amax = X.abs().amax(dim=-1, keepdim=False).clamp_min(1e-6).to(torch.float32)
     scale = amax / _FP8_E4M3_MAX
-    # Broadcast along the last axis
     X_fp8 = (X.to(torch.float32) / scale.unsqueeze(-1)).clamp(-_FP8_E4M3_MAX, _FP8_E4M3_MAX).to(dtype)
     return X_fp8.contiguous(), scale
 

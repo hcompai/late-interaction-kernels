@@ -89,7 +89,7 @@ def _fused_head_fwd_kernel(
 
     score_acc = tl.zeros([], dtype=tl.float32)
 
-    # ---- optional bias load (small, once per program) ------------------
+    # Bias is small and constant across tiles, so load it once per program.
     if has_bias:
         bias_vec = tl.load(b_ptr + out_off, mask=out_mask, other=0.0).to(tl.float32)
     else:

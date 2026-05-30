@@ -138,9 +138,8 @@ def _bwd_dD_kernel(
     else:
         d_global = d_idx
 
-    # One query-token at a time (Lq is tiny). For each s, read Q[i, s, :],
-    # the winner index t = argmax[i, j, s], and atomic-add gs * Q[i, s, :]
-    # into grad_D[d_global, t, :].
+    # Scalar loop over query tokens: Lq is tiny, so vectorizing the scatter
+    # buys nothing and complicates the per-s argmax/atomic_add.
     for s in range(0, Lq):
         q_active = True
         if has_q_mask:

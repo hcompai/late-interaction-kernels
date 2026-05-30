@@ -64,13 +64,11 @@ def _plaid_approx_score_kernel(
         # Clamp to valid centroid range so the gather never reads out of bounds.
         codes = tl.where(codes < n_centroids, codes, 0)
 
-        # Gather [BLOCK_D, Lq] scores from query_centroid_scores.
         tile = tl.load(
             qcs_ptr + codes[:, None] * stride_qcs_c + q_off[None, :] * stride_qcs_l,
             mask=d_valid[:, None] & q_valid[None, :],
             other=float("-inf"),
         )
-        # Mask out invalid doc positions.
         tile = tl.where(d_valid[:, None], tile, float("-inf"))
         m = tl.maximum(m, tl.max(tile, axis=0))
 
@@ -207,15 +205,12 @@ def _maxsim_residual_kernel(
     emb_off = tl.arange(0, d_pad)
     emb_mask = emb_off < d
 
-    # --- Load one query row tile at a time, but reuse doc emb per d-tile.
     score_acc = tl.zeros([], dtype=tl.float32)
 
-    # Pre-compute which bytes each feature dim comes from. nbits is a constexpr.
-    # feature f -> byte index = f // codes_per_byte, slot = f % codes_per_byte.
+    # Map each feature to its packed location: byte byte_idx[f], bit slot slot_idx[f].
+    # Extraction is then code = (byte >> shift[f]) & ((1 << nbits) - 1).
     byte_idx = (emb_off // codes_per_byte).to(tl.int32)
     slot_idx = (emb_off % codes_per_byte).to(tl.int32)
-    # Mask to extract one code per feature from the byte.
-    # shift = slot_idx * nbits ; code = (byte >> shift) & ((1 << nbits) - 1)
     shift = (slot_idx * nbits).to(tl.int32)
     code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
 
@@ -241,7 +236,6 @@ def _maxsim_residual_kernel(
             d_off = d_start + tl.arange(0, BLOCK_D)
             d_valid = d_off < doc_len
 
-            # Load and gather centroid rows.
             cent_codes = tl.load(
                 codes_ptr + d_idx * stride_codes_n + d_off * stride_codes_l,
                 mask=d_valid,
@@ -253,9 +247,8 @@ def _maxsim_residual_kernel(
                 other=0.0,
             ).to(tl.float32)
 
-            # Load packed residual bytes for this tile, expand to per-feature codes.
-            # For each (d-token, feature), we index into bytes at position byte_idx[f].
-            # BLOCK_D × d_pad uint8 load.
+            # Each feature reads its source byte at byte_idx[f], then extracts
+            # its bucket code from the bit slot; see the shift/code_mask setup above.
             byte_vals = tl.load(
                 residuals_ptr
                 + d_idx * stride_res_n
@@ -266,7 +259,6 @@ def _maxsim_residual_kernel(
             ).to(tl.int32)
             bucket_codes = (byte_vals >> shift[None, :]) & code_mask[None, :]
 
-            # Gather bucket weights.
             bucket_vals = tl.load(
                 bucket_weights_ptr + bucket_codes,
                 mask=d_valid[:, None] & emb_mask[None, :],

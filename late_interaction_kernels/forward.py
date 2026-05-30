@@ -147,8 +147,8 @@ def _maxsim_fwd_kernel(
                 D_block_f32 = D_block_f32 * d_inv[:, None]
             D_block = D_block_f32.to(COMPUTE_DTYPE)
 
-            # tl.dot needs inputs with the same dtype; Q_block and D_block are
-            # both COMPUTE_DTYPE. Accumulator is fp32.
+            # Q_block and D_block share COMPUTE_DTYPE (tl.dot requires matching
+            # operand dtypes); accumulate in fp32.
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
             S = tl.where(d_active[None, :], S, float("-inf"))
 
@@ -266,7 +266,7 @@ def _run_forward(
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
-    # Triton doesn't like None pointers; substitute something.
+    # Triton rejects None pointers; pass a live tensor the kernel won't read.
     q_mask_ptr = q_mask if has_q_mask else Q
     d_mask_ptr = d_mask if has_d_mask else D
     argmax_ptr = argmax if save_argmax else scores

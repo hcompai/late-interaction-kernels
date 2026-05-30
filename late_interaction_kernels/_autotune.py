@@ -50,7 +50,7 @@ def autotune_kwargs() -> dict:
 
 
 def _cfg(kwargs, *, num_warps, num_stages):
-    """Build a ``triton.Config`` with no warp-spec kwargs (see module docstring)."""
+    """Build a ``triton.Config`` with no warp-spec kwargs."""
     return triton.Config(kwargs, num_warps=num_warps, num_stages=num_stages)
 
 
