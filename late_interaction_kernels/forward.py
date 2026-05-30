@@ -253,17 +253,16 @@ def _run_forward(
             )
         K = Nd_total // Nq
         Ld = D.shape[1]
-        Nd_kernel = K
+        Nd_eff = K  # candidates per query
     else:
-        K = D.shape[0]  # actually Nd, kept named for the constexpr arg
-        Nd_kernel = K
+        Nd_eff = D.shape[0]  # total doc count in the cross-product batch
         Ld = D.shape[1]
     d_pad = next_pow2(d)
     compute_dtype = pick_compute_dtype(Q, D)
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
-    scores = torch.empty(Nq, Nd_kernel, device=Q.device, dtype=torch.float32)
-    argmax = torch.empty(Nq * Nd_kernel, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
+    scores = torch.empty(Nq, Nd_eff, device=Q.device, dtype=torch.float32)
+    argmax = torch.empty(Nq * Nd_eff, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
@@ -276,7 +275,7 @@ def _run_forward(
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)
     a_strides = (argmax.stride(0), argmax.stride(1)) if save_argmax else (0, 0)
 
-    grid = (Nq * Nd_kernel,)
+    grid = (Nq * Nd_eff,)
     args = (
         Q,
         D,
@@ -285,7 +284,7 @@ def _run_forward(
         scores,
         argmax_ptr,
         Nq,
-        Nd_kernel,
+        Nd_eff,
         Lq,
         Ld,
         d,
@@ -310,11 +309,11 @@ def _run_forward(
         normalize,
         kd_layout,
     )
-    # Bypass eligibility uses ``Nd_kernel`` (= Nd for in-batch, K for KD/pairs)
+    # Bypass eligibility uses ``Nd_eff`` (= Nd for in-batch, K for KD/pairs)
     # so the per-program work estimate matches what the kernel will actually
     # do. KD/pairs of size (Nq=4, K=16) lands in the bypass band just like
     # in-batch (Nq=4, Nd=16) — the launch budget is the same.
-    if _should_bypass_autotune(Nq, Nd_kernel, Lq, Ld, d, save_argmax):
+    if _should_bypass_autotune(Nq, Nd_eff, Lq, Ld, d, save_argmax):
         # Bypass: launch the underlying JIT directly with fixed constexpr
         # block sizes and fixed launch attrs. ``_maxsim_fwd_kernel.fn`` is the
         # ``JITFunction`` wrapped by ``@triton.autotune`` — calling it via
