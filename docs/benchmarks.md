@@ -192,12 +192,12 @@ the backward correctly applies the L2-norm Jacobian.
 
 | shape                                  | `F.normalize` + maxsim | fused    | speedup   | explicit peak | fused peak | mem ratio |
 | -------------------------------------- | ---------------------- | -------- | --------- | ------------- | ---------- | --------- |
-| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.463 ms               | 0.099 ms | 4.7×      |   368 MB      |   74 MB    | **5.0×**  |
-| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.465 ms               | 0.104 ms | **14.1×** |  1254 MB      |  250 MB    | **5.0×**  |
-| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.272 ms               | 0.102 ms | 2.7×      |    12 MB      |    3 MB    | **4.8×**  |
-| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.248 ms               | 0.090 ms | 2.8×      |    40 MB      |    8 MB    | **5.0×**  |
-| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.283 ms               | 0.132 ms | 2.1×      |   161 MB      |   32 MB    | **5.0×**  |
-| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.285 ms | **14.7×** |  3674 MB      |  733 MB    | **5.0×**  |
+| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.673 ms               | 0.100 ms | 6.7×      |   368 MB      |   74 MB    | **5.0×**  |
+| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.623 ms               | 0.099 ms | **16.4×** |  1254 MB      |  250 MB    | **5.0×**  |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.441 ms               | 0.098 ms | 4.5×      |    12 MB      |    3 MB    | **4.7×**  |
+| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.421 ms               | 0.075 ms | 5.6×      |    40 MB      |    8 MB    | **5.0×**  |
+| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.590 ms               | 0.131 ms | 4.5×      |   161 MB      |   32 MB    | **5.0×**  |
+| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.357 ms               | 0.284 ms | **15.3×** |  3674 MB      |  733 MB    | **5.0×**  |
 
 The explicit path writes a normalized copy of `D` to HBM and re-reads
 it during the matmul; the fused path streams the same data through
