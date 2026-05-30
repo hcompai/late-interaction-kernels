@@ -361,7 +361,7 @@ def maxsim_inference_metal(
 
     flags, q_mask_i8, d_mask_i8 = _prepare_flags_and_masks(q_mask, d_mask, normalize, kd_layout)
 
-    out = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
+    scores = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
 
     j_blocks = (Nd + j_per_tg - 1) // j_per_tg
@@ -372,21 +372,21 @@ def maxsim_inference_metal(
         D,
         q_mask_i8,
         d_mask_i8,
-        out,
+        scores,
         params,
         threads=(Nq, j_blocks, _THREADS_PER_GROUP),
         group_size=(1, 1, _THREADS_PER_GROUP),
     )
 
     if kd_layout:
-        return out
+        return scores
     if q_was_2d and d_was_2d:
-        return out.reshape(())
+        return scores.reshape(())
     if q_was_2d:
-        return out.squeeze(0)
+        return scores.squeeze(0)
     if d_was_2d:
-        return out.squeeze(-1)
-    return out
+        return scores.squeeze(-1)
+    return scores
 
 
 class MaxSimFwdCtx(NamedTuple):
