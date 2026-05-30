@@ -388,14 +388,14 @@ is asserted before timing on every shape that fits in HBM:
 
 | shape                                     | fwd LIK | fwd naive | bwd LIK | bwd naive | peak LIK | peak naive |
 | ----------------------------------------- | ------- | --------- | ------- | --------- | -------- | ---------- |
-| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.09 ms | 0.15 ms   | 0.57 ms | 0.56 ms   |  96 MB   | 152 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.09 ms | 0.21 ms   | 0.44 ms | 0.58 ms   | 128 MB   | 240 MB     |
-| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.12**| 0.65      |**0.57** | 1.82      |**193 MB**|**672 MB**  |
-| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.10 ms | 0.24 ms   | 0.58 ms | 0.78 ms   | 320 MB   | 416 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.14 ms | **OOM**   | 0.56 ms | **OOM**   | 192 MB   | OOM        |
-| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.57 ms | **OOM**   | 321 MB   | OOM        |
-| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.19 ms | **OOM**   | 1.56 ms | **OOM**   |  2.1 GB  | OOM        |
-| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 1.05 ms | **OOM**   | 576 MB   | OOM        |
+| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.08 ms | 0.15 ms   | 0.65 ms | 0.64 ms   |  96 MB   | 152 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.09 ms | 0.21 ms   | 0.61 ms | 0.64 ms   | 128 MB   | 240 MB     |
+| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.12**| 0.65      |**0.54** | 1.82      |**193 MB**|**672 MB**  |
+| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.09 ms | 0.24 ms   | 0.53 ms | 0.78 ms   | 320 MB   | 416 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.12 ms | **OOM**   | 0.43 ms | **OOM**   | 192 MB   | OOM        |
+| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.44 ms | **OOM**   | 321 MB   | OOM        |
+| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.18 ms | **OOM**   | 1.36 ms | **OOM**   |  2.1 GB  | OOM        |
+| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 0.55 ms | **OOM**   | 576 MB   | OOM        |
 
 
 At `Ld ≥ 8k` naive OOMs on the `[Nq, Nd, Lq, Ld]` similarity scratch
