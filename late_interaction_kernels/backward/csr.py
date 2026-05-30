@@ -49,17 +49,17 @@ def _build_csr(
     """
     # Reshape [Nq*Nd, Lq] -> [Nq, Nd, Lq] -> [Nd, Nq, Lq] -> [Nd, Nq*Lq]
     # .contiguous() is required because the Triton kernel reads flat strides.
-    a = argmax.view(Nq, Nd, Lq).permute(1, 0, 2).contiguous().view(Nd, Nq * Lq)
+    argmax_by_doc = argmax.view(Nq, Nd, Lq).permute(1, 0, 2).contiguous().view(Nd, Nq * Lq)
 
-    # Sort each j-row. `values` is sorted argmax ids; `perm` is the original
-    # flat index k = i*Lq + s that landed there.
-    sorted_t, perm = a.sort(dim=1)
+    # Sort each d_idx-row. `values` is sorted argmax ids; `perm` is the original
+    # flat index k = q_idx*Lq + s that landed there.
+    sorted_argmax, perm = argmax_by_doc.sort(dim=1)
 
     # row_ptr via batched searchsorted.
     # boundaries[j, :] = [0, 1, ..., Ld], expanded per doc-batch.
-    boundaries = torch.arange(Ld + 1, device=argmax.device, dtype=sorted_t.dtype)
+    boundaries = torch.arange(Ld + 1, device=argmax.device, dtype=sorted_argmax.dtype)
     boundaries = boundaries.unsqueeze(0).expand(Nd, -1).contiguous()
-    row_ptr = torch.searchsorted(sorted_t, boundaries).to(torch.int32)
+    row_ptr = torch.searchsorted(sorted_argmax, boundaries).to(torch.int32)
 
     return row_ptr, perm.to(torch.int32)
 

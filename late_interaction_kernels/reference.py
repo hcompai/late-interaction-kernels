@@ -131,11 +131,11 @@ def unpack_residuals_reference(residuals: torch.Tensor, nbits: int, d: int) -> t
     mask = (1 << nbits) - 1
     rs = residuals.to(torch.int32)
     feats = []
-    for f in range(d):
-        byte_idx = f // codes_per_byte
-        slot = f % codes_per_byte
-        val = (rs[..., byte_idx] >> (slot * nbits)) & mask
-        feats.append(val)
+    for feature_idx in range(d):
+        byte_idx = feature_idx // codes_per_byte
+        slot = feature_idx % codes_per_byte
+        bucket_code = (rs[..., byte_idx] >> (slot * nbits)) & mask
+        feats.append(bucket_code)
     return torch.stack(feats, dim=-1)
 
 

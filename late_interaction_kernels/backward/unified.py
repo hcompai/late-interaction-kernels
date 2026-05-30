@@ -77,8 +77,8 @@ def maxsim_backward_unified_reference(
     # a giant scatter. On GPU this reference is slow-but-correct.
     for d_idx in range(Nd):
         m_idx_j = m_idx[:, d_idx, :]  # [Nq, Lq]
-        cont = contrib_d[:, d_idx, :, :]  # [Nq, Lq, d]
-        grad_D[d_idx].index_add_(0, m_idx_j.reshape(-1), cont.reshape(-1, d))
+        contrib_slice = contrib_d[:, d_idx, :, :]  # [Nq, Lq, d]
+        grad_D[d_idx].index_add_(0, m_idx_j.reshape(-1), contrib_slice.reshape(-1, d))
 
     return grad_Q.to(Q.dtype), grad_D.to(D.dtype)
 
