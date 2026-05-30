@@ -126,20 +126,20 @@ def _fused_head_fwd_kernel(
             # Accumulate in fp32 across the d_model split-K loop.
             D_tile_f32 = tl.zeros([BLOCK_D, d_out_pad], dtype=tl.float32)
             for k_start in range(0, d_model, BLOCK_K):
-                k_off = k_start + tl.arange(0, BLOCK_K)
-                k_mask = k_off < d_model
+                emb_off = k_start + tl.arange(0, BLOCK_K)
+                emb_mask = emb_off < d_model
 
                 H_tile = tl.load(
-                    H_ptr + d_idx * stride_h_n + d_off[:, None] * stride_h_l + k_off[None, :] * stride_h_d,
-                    mask=d_valid[:, None] & k_mask[None, :],
+                    H_ptr + d_idx * stride_h_n + d_off[:, None] * stride_h_l + emb_off[None, :] * stride_h_d,
+                    mask=d_valid[:, None] & emb_mask[None, :],
                     other=0.0,
                 ).to(COMPUTE_DTYPE)
 
                 # W is [d_out, d_model]; we want D = H @ W.T → load W tile
                 # as [d_out_pad, BLOCK_K] and transpose in the matmul.
                 W_tile = tl.load(
-                    W_ptr + out_off[:, None] * stride_w_out + k_off[None, :] * stride_w_in,
-                    mask=out_mask[:, None] & k_mask[None, :],
+                    W_ptr + out_off[:, None] * stride_w_out + emb_off[None, :] * stride_w_in,
+                    mask=out_mask[:, None] & emb_mask[None, :],
                     other=0.0,
                 ).to(COMPUTE_DTYPE)
 
@@ -357,9 +357,9 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         # Winning positions: argmax is [Nq*Nd, Lq] → we want a [Nq, Nd, Lq]
         # view plus a flat [N] "(j, t_winner) in the Nd·Ld grid" index for
         # scatter / gather against H_d.
-        am = argmax.view(Nq, Nd, Lq).long()
+        m_idx = argmax.view(Nq, Nd, Lq).long()
         j_idx = torch.arange(Nd, device=H_d.device, dtype=torch.long).view(1, Nd, 1).expand(Nq, Nd, Lq)
-        flat_jt = (j_idx * Ld + am).reshape(-1)  # [N]
+        flat_jt = (j_idx * Ld + m_idx).reshape(-1)  # [N]
 
         # Step 1 — gather H at winners, one row per (i, j, s). Size
         # [N, d_model]. Keep it flat to avoid per-j python loops.
