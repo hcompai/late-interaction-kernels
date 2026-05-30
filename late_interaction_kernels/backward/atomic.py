@@ -58,8 +58,8 @@ def _bwd_dQ_kernel(
     q_idx = pid // Lq
     s = pid % Lq
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
     q_active = True
@@ -79,16 +79,16 @@ def _bwd_dQ_kernel(
             # `t == -1` sentinel: forward had no active doc for this (q, j, s).
             if t >= 0:
                 v = tl.load(
-                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                    mask=km,
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
                 acc += gs * v
 
     tl.store(
-        grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+        grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
         acc,
-        mask=km,
+        mask=emb_mask,
     )
 
 
@@ -130,8 +130,8 @@ def _bwd_dD_kernel(
 
     gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     if kd_layout:
         d_global = q_idx * Nd + d_idx
@@ -151,14 +151,14 @@ def _bwd_dD_kernel(
             # `t == -1` sentinel: forward had no active doc for this (i, j, s).
             if t >= 0:
                 qv = tl.load(
-                    Q_ptr + q_idx * stride_q_n + s * stride_q_l + k * stride_q_k,
-                    mask=km,
+                    Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
                 tl.atomic_add(
-                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
 

@@ -80,8 +80,8 @@ def _maxsim_fwd_kernel(
     else:
         d_global = d_idx
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     score_acc = tl.zeros([], dtype=tl.float32)
 
@@ -103,8 +103,8 @@ def _maxsim_fwd_kernel(
             q_active = q_valid
 
         Q_block_f32 = tl.load(
-            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + emb_off[None, :] * stride_q_d,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(tl.float32)
         if normalize:
@@ -137,8 +137,8 @@ def _maxsim_fwd_kernel(
                 d_active = d_valid
 
             D_block_f32 = tl.load(
-                D_ptr + d_global * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
-                mask=d_valid[:, None] & k_mask[None, :],
+                D_ptr + d_global * stride_d_n + d_off[:, None] * stride_d_l + emb_off[None, :] * stride_d_d,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
             if normalize:

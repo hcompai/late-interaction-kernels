@@ -83,16 +83,16 @@ def _scatter_fwd_kernel(
                 )
         return
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     for q_start in range(0, max_lq, BLOCK_Q):
         q_off = q_start + tl.arange(0, BLOCK_Q)
         q_valid = q_off < lq
 
         Q_block = tl.load(
-            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + k_off[None, :] * stride_q_k,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + emb_off[None, :] * stride_q_k,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(COMPUTE_DTYPE)
 
@@ -104,8 +104,8 @@ def _scatter_fwd_kernel(
             d_valid = d_off < ld
 
             D_block = tl.load(
-                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + k_off[None, :] * stride_d_k,
-                mask=d_valid[:, None] & k_mask[None, :],
+                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + emb_off[None, :] * stride_d_k,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(COMPUTE_DTYPE)
 

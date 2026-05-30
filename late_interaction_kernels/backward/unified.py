@@ -132,8 +132,8 @@ if _HAS_TRITON:
         q_idx = pid // Lq
         s = pid % Lq
 
-        k = tl.arange(0, d_pad)
-        km = k < d
+        emb_off = tl.arange(0, d_pad)
+        emb_mask = emb_off < d
 
         q_active = True
         if has_q_mask:
@@ -144,9 +144,9 @@ if _HAS_TRITON:
         # leftover garbage from a previous launch).
         if not q_active:
             tl.store(
-                grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+                grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
                 tl.zeros([d_pad], dtype=tl.float32),
-                mask=km,
+                mask=emb_mask,
             )
             return
 
@@ -154,8 +154,8 @@ if _HAS_TRITON:
         # atomic_add into grad_D. This is the single biggest HBM win
         # vs the two-pass backward.
         qv = tl.load(
-            Q_ptr + q_idx * stride_q_n + s * stride_q_l + k * stride_q_k,
-            mask=km,
+            Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
+            mask=emb_mask,
             other=0.0,
         ).to(tl.float32)
 
@@ -176,23 +176,23 @@ if _HAS_TRITON:
             # `grad_D[d_global, 0, :]`.
             if t >= 0:
                 dv = tl.load(
-                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                    mask=km,
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
 
                 acc_Q += gs * dv
 
                 tl.atomic_add(
-                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
         tl.store(
-            grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+            grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
             acc_Q,
-            mask=km,
+            mask=emb_mask,
         )
 
 
