@@ -180,12 +180,12 @@ def _varlen_bwd_dQ_kernel(
         valid = (t >= 0) & (ld > 0)
         if valid:
             gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
-            v = tl.load(
+            dv = tl.load(
                 D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
                 mask=km,
                 other=0.0,
             ).to(tl.float32)
-            acc += gs * v
+            acc += gs * dv
 
     tl.store(
         grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,

@@ -186,7 +186,7 @@ def _scatter_bwd_dQ_kernel(
 
     k = tl.arange(0, d_pad)
     km = k < d
-    v = tl.load(
+    dv = tl.load(
         D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
         mask=km,
         other=0.0,
@@ -194,7 +194,7 @@ def _scatter_bwd_dQ_kernel(
 
     tl.atomic_add(
         grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,
-        gs * v,
+        gs * dv,
         mask=km,
     )
 

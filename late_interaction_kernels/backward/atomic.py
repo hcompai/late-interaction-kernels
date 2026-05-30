@@ -78,12 +78,12 @@ def _bwd_dQ_kernel(
                 d_global = d_idx
             # `t == -1` sentinel: forward had no active doc for this (q, j, s).
             if t >= 0:
-                v = tl.load(
+                dv = tl.load(
                     D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
                     mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
-                acc += gs * v
+                acc += gs * dv
 
     tl.store(
         grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
