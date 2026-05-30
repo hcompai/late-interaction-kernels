@@ -286,15 +286,15 @@ def retrieve(
             d_mask_chunk = d_mask[start:end] if d_mask is not None else None
             s_chunk = _score_chunk(Q, D_chunk, q_mask, d_mask_chunk)
             k_here = min(k, end - start)
-            ch_s, ch_i = torch.topk(s_chunk, k_here, dim=-1, largest=largest, sorted=True)
-            ch_i = ch_i + start
+            chunk_scores, chunk_indices = torch.topk(s_chunk, k_here, dim=-1, largest=largest, sorted=True)
+            chunk_indices = chunk_indices + start
             if topk_s is None:
-                topk_s, topk_i = ch_s, ch_i
+                topk_s, topk_i = chunk_scores, chunk_indices
             else:
-                cat_s = torch.cat([topk_s, ch_s], dim=-1)
-                cat_i = torch.cat([topk_i, ch_i], dim=-1)
-                topk_s, gather_idx = torch.topk(cat_s, k, dim=-1, largest=largest, sorted=sorted)
-                topk_i = torch.gather(cat_i, -1, gather_idx)
+                merged_scores = torch.cat([topk_s, chunk_scores], dim=-1)
+                merged_indices = torch.cat([topk_i, chunk_indices], dim=-1)
+                topk_s, gather_idx = torch.topk(merged_scores, k, dim=-1, largest=largest, sorted=sorted)
+                topk_i = torch.gather(merged_indices, -1, gather_idx)
 
     if q_was_2d:
         topk_s = topk_s.squeeze(0)

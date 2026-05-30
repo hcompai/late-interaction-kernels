@@ -64,21 +64,21 @@ def maxsim_topk(
                 normalize=normalize,
             )
             k_here = min(k, end - start)
-            ch_s, ch_i = torch.topk(s_chunk, k_here, dim=-1, largest=largest, sorted=True)
-            ch_i = ch_i + start
+            chunk_scores, chunk_indices = torch.topk(s_chunk, k_here, dim=-1, largest=largest, sorted=True)
+            chunk_indices = chunk_indices + start
             if topk_scores is None:
-                topk_scores, topk_idx = ch_s, ch_i
+                topk_scores, topk_idx = chunk_scores, chunk_indices
             else:
-                cat_s = torch.cat([topk_scores, ch_s], dim=-1)
-                cat_i = torch.cat([topk_idx, ch_i], dim=-1)
+                merged_scores = torch.cat([topk_scores, chunk_scores], dim=-1)
+                merged_indices = torch.cat([topk_idx, chunk_indices], dim=-1)
                 topk_scores, gather_idx = torch.topk(
-                    cat_s,
+                    merged_scores,
                     k,
                     dim=-1,
                     largest=largest,
                     sorted=sorted,
                 )
-                topk_idx = torch.gather(cat_i, -1, gather_idx)
+                topk_idx = torch.gather(merged_indices, -1, gather_idx)
 
     if q_was_2d:
         topk_scores = topk_scores.squeeze(0)
