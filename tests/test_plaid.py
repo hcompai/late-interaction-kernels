@@ -129,6 +129,29 @@ def test_residual_unpack_roundtrips(nbits):
     assert (fast - ref).abs().max().item() / max(1e-6, ref.abs().max().item()) < tol
 
 
+def test_residual_backward_rejects_empty_docs():
+    """A zero-length doc has no MaxSim winner, so the autograd path has no
+    correct gradient to return — it must raise rather than leak a spurious one.
+    Inference still scores an empty doc 0.
+    """
+    from late_interaction_kernels.plaid import maxsim_residual
+
+    idx = _make_quant_index(Nd=4, max_Ld=16, d=128, n_centroids=32, nbits=2)
+    doc_lengths = idx["doc_lengths"].clone()
+    doc_lengths[1] = 0  # empty document
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
+    args = (idx["codes"], idx["residuals"], doc_lengths, idx["centroids"], idx["bucket_weights"])
+
+    # Inference path: empty doc is supported and scores 0.
+    scores = maxsim_residual(Q, *args, nbits=2, normalize=False)
+    assert torch.all(scores[:, 1] == 0.0)
+
+    # Autograd path: reject instead of emitting a wrong gradient.
+    Q_grad = Q.clone().requires_grad_(True)
+    with pytest.raises(ValueError, match="zero-length document"):
+        maxsim_residual(Q_grad, *args, nbits=2, normalize=False)
+
+
 @pytest.mark.parametrize("nbits", [2, 4])
 def test_residual_normalize_matches_reference(nbits):
     from late_interaction_kernels.plaid import maxsim_residual, maxsim_residual_reference

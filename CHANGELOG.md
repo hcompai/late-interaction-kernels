@@ -19,6 +19,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   estimate with the padded embedding dim (`next_pow2(d)`) instead of the
   raw `d`. For non-power-of-2 `d` the old estimate undercounted SMEM by
   up to ~2x and could admit configs that overflow at launch.
+- `maxsim_residual` now raises on zero-length documents when `Q` requires
+  grad. An empty doc has no MaxSim winner, so the backward had no correct
+  gradient and would gather a stale index-0 winner; it now fails fast.
+  Inference (no grad) is unchanged and still scores an empty doc 0.
 
 ## [0.3.0] - 2026-05-28
 
