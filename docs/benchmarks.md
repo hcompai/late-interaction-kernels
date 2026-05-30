@@ -522,12 +522,12 @@ fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
 
 | shape                                       | fused    | naive (fp32) | speedup   | fused mem | naive mem |
 | ------------------------------------------- | -------- | ------------ | --------- | --------- | --------- |
-| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.116 ms | 0.397 ms     | **3.4×**  | 0.0 MB    | 314 MB    |
-| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.491 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
-| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.050 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
-| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.253 ms | 3.039 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.106 ms | 0.397 ms     | **3.8×**  | 0.0 MB    | 314 MB    |
+| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.490 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.039 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
+| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.254 ms | 3.036 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
 | mxbai-edge `Nd=1 000, Ld=4 096, d=64`       | 0.172 ms | 1.754 ms     | **10.2×** | 0.0 MB    | 1.5 GB    |
-| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.332 ms | 3.577 ms     | **10.8×** | 0.1 MB    | 3.0 GB    |
+| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.331 ms | 3.565 ms     | **10.8×** | 0.1 MB    | 3.0 GB    |
 
 
 ## Where this kernel actually moves the e2e needle
