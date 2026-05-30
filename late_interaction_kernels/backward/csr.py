@@ -108,7 +108,7 @@ def _bwd_dD_csr_kernel(
     t = pid % Ld
 
     emb_off = tl.arange(0, d_pad)
-    km = emb_off < d
+    emb_mask = emb_off < d
 
     start = tl.load(row_ptr_ptr + d_idx * stride_rp_n + t * stride_rp_l).to(tl.int32)
     end = tl.load(row_ptr_ptr + d_idx * stride_rp_n + (t + 1) * stride_rp_l).to(tl.int32)
@@ -124,14 +124,14 @@ def _bwd_dD_csr_kernel(
 
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
-            q_active = qm != 0
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
 
         if q_active:
             gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
             qv = tl.load(
                 Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
-                mask=km,
+                mask=emb_mask,
                 other=0.0,
             ).to(tl.float32)
             acc += gs * qv
@@ -139,7 +139,7 @@ def _bwd_dD_csr_kernel(
     tl.store(
         grad_D_ptr + d_idx * stride_gd_n + t * stride_gd_l + emb_off * stride_gd_k,
         acc,
-        mask=km,
+        mask=emb_mask,
     )
 
 

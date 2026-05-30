@@ -113,12 +113,12 @@ def _fused_head_fwd_kernel(
             d_valid = d_off < Ld
 
             if has_d_mask:
-                dm = tl.load(
+                d_mask_val = tl.load(
                     d_mask_ptr + d_idx * stride_dm_n + d_off * stride_dm_l,
                     mask=d_valid,
                     other=0,
                 ).to(tl.int1)
-                d_active = d_valid & dm
+                d_active = d_valid & d_mask_val
             else:
                 d_active = d_valid
 

@@ -64,8 +64,8 @@ def _bwd_dQ_kernel(
 
     q_active = True
     if has_q_mask:
-        qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
-        q_active = qm != 0
+        q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+        q_active = q_mask_val != 0
 
     if q_active:
         for d_idx in range(0, Nd):
@@ -144,8 +144,8 @@ def _bwd_dD_kernel(
     for s in range(0, Lq):
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
-            q_active = qm != 0
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
         if q_active:
             t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq).to(tl.int32)
             # `t == -1` sentinel: forward had no active doc for this (i, j, s).

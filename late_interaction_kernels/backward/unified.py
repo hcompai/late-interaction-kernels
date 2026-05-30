@@ -137,8 +137,8 @@ if _HAS_TRITON:
 
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
-            q_active = qm != 0
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
 
         # Always zero the grad_Q row (masked rows must produce zeros, not
         # leftover garbage from a previous launch).

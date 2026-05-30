@@ -93,12 +93,12 @@ def _maxsim_fwd_kernel(
         q_valid = q_off < Lq
 
         if has_q_mask:
-            qm = tl.load(
+            q_mask_val = tl.load(
                 q_mask_ptr + q_idx * stride_qm_n + q_off * stride_qm_l,
                 mask=q_valid,
                 other=0,
             ).to(tl.int1)
-            q_active = q_valid & qm
+            q_active = q_valid & q_mask_val
         else:
             q_active = q_valid
 
@@ -127,12 +127,12 @@ def _maxsim_fwd_kernel(
             d_valid = d_off < Ld
 
             if has_d_mask:
-                dm = tl.load(
+                d_mask_val = tl.load(
                     d_mask_ptr + d_global * stride_dm_n + d_off * stride_dm_l,
                     mask=d_valid,
                     other=0,
                 ).to(tl.int1)
-                d_active = d_valid & dm
+                d_active = d_valid & d_mask_val
             else:
                 d_active = d_valid
 
