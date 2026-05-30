@@ -228,9 +228,9 @@ def _maxsim_residual_kernel(
             other=0.0,
         ).to(tl.float32)
         if normalize:
-            qn = tl.sum(Qf * Qf, axis=1)
-            qinv = 1.0 / tl.sqrt(tl.maximum(qn, 1e-12))
-            Qf = Qf * qinv[:, None]
+            q_norm_sq = tl.sum(Qf * Qf, axis=1)
+            q_inv_norm = 1.0 / tl.sqrt(tl.maximum(q_norm_sq, 1e-12))
+            Qf = Qf * q_inv_norm[:, None]
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
@@ -276,9 +276,9 @@ def _maxsim_residual_kernel(
             emb = cent + bucket_vals
 
             if normalize:
-                en = tl.sum(emb * emb, axis=1)
-                einv = tl.rsqrt(tl.maximum(en, 1e-12))
-                emb = emb * einv[:, None]
+                emb_norm_sq = tl.sum(emb * emb, axis=1)
+                emb_inv_norm = tl.rsqrt(tl.maximum(emb_norm_sq, 1e-12))
+                emb = emb * emb_inv_norm[:, None]
 
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
@@ -392,9 +392,9 @@ def _maxsim_residual_bwd_dQ_kernel(
         emb = cent + bucket_vals
 
         if normalize:
-            en = tl.sum(emb * emb)
-            einv = 1.0 / tl.sqrt(tl.maximum(en, 1e-12))
-            emb = emb * einv
+            emb_norm_sq = tl.sum(emb * emb)
+            emb_inv_norm = 1.0 / tl.sqrt(tl.maximum(emb_norm_sq, 1e-12))
+            emb = emb * emb_inv_norm
 
         acc += gs * emb
 
@@ -741,9 +741,9 @@ def _maxsim_residual_varlen_kernel(
             other=0.0,
         ).to(tl.float32)
         if normalize:
-            qn = tl.sum(Qf * Qf, axis=1)
-            qinv = tl.rsqrt(tl.maximum(qn, 1e-12))
-            Qf = Qf * qinv[:, None]
+            q_norm_sq = tl.sum(Qf * Qf, axis=1)
+            q_inv_norm = tl.rsqrt(tl.maximum(q_norm_sq, 1e-12))
+            Qf = Qf * q_inv_norm[:, None]
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
@@ -781,9 +781,9 @@ def _maxsim_residual_varlen_kernel(
 
             emb = cent + bucket_vals
             if normalize:
-                en = tl.sum(emb * emb, axis=1)
-                einv = tl.rsqrt(tl.maximum(en, 1e-12))
-                emb = emb * einv[:, None]
+                emb_norm_sq = tl.sum(emb * emb, axis=1)
+                emb_inv_norm = tl.rsqrt(tl.maximum(emb_norm_sq, 1e-12))
+                emb = emb * emb_inv_norm[:, None]
 
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
