@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`maxsim_from_hidden` backward leaked a spurious gradient for fully
+  d-masked documents.** A document with every token masked out scores 0
+  in the forward, but the backward gathered a stale index-0 winner and
+  added a non-zero contribution to `grad_Q` / `grad_H_d` / `grad_W` /
+  `grad_b`. The fused-head kernel now writes a `-1` argmax sentinel for
+  query rows with no valid winner and the backward gates on it, matching
+  the main `maxsim` path and the unfused reference (zero gradient).
+- Forward-kernel autotune config pruning now sizes its shared-memory
+  estimate with the padded embedding dim (`next_pow2(d)`) instead of the
+  raw `d`. For non-power-of-2 `d` the old estimate undercounted SMEM by
+  up to ~2x and could admit configs that overflow at launch.
+
 ## [0.3.0] - 2026-05-28
 
 ### Added

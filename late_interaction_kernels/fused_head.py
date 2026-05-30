@@ -172,6 +172,12 @@ def _fused_head_fwd_kernel(
         score_acc += tl.sum(m)
 
         if save_argmax:
+            # -1 marks query rows with no valid doc-token winner (e.g. a
+            # fully d-masked doc): m stayed -inf, so there is no real argmax.
+            # The backward gates on `>= 0` and contributes no gradient for
+            # these rows, matching the forward which scored them 0. Without
+            # the sentinel a stale index-0 winner leaks a spurious gradient.
+            m_idx = tl.where(m_finite, m_idx, -1)
             tl.store(
                 argmax_ptr + pid * stride_a_pair + q_off * stride_a_lq,
                 m_idx,
@@ -358,6 +364,12 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         # view plus a flat [N] "(j, t_winner) in the Nd·Ld grid" index for
         # scatter / gather against H_d.
         m_idx = argmax.view(Nq, Nd, Lq).long()
+        # -1 marks (i, j, s) rows with no valid winner (fully d-masked doc).
+        # Clamp the gather index in-bounds (the gathered value is zeroed out
+        # below) and carry a mask so these rows contribute no gradient —
+        # matching the forward, which scored them 0.
+        winner_valid = (m_idx >= 0).view(Nq, Nd, Lq, 1).to(torch.float32)
+        m_idx = m_idx.clamp_min(0)
         j_idx = torch.arange(Nd, device=H_d.device, dtype=torch.long).view(1, Nd, 1).expand(Nq, Nd, Lq)
         flat_jt = (j_idx * Ld + m_idx).reshape(-1)  # [N]
 
@@ -386,7 +398,7 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         # Step 3 — grad_Q = Σ_j grad_scores · D_hat_win  (fp32 matmul).
         gQ = None
         if need_Q:
-            gQ = torch.einsum("ij,ijsd->isd", grad_scores, D_hat_win_view)
+            gQ = torch.einsum("ij,ijsd->isd", grad_scores, D_hat_win_view * winner_valid)
 
         # Step 4 — closed-form normalize-Jacobian pullback.
         #     g_hat[i,j,s,:]     = grad_scores[i,j] · Q[i,s,:]
@@ -396,6 +408,9 @@ class _MaxSimFromHiddenFn(torch.autograd.Function):
         Q_f32 = Q.to(torch.float32)
         grad_D_hat = grad_scores.view(Nq, Nd, 1, 1) * Q_f32.view(Nq, 1, Lq, d_out)
         del Q_f32
+        # Zero the D-side pullback (grad_W / grad_b / grad_H) at rows with no
+        # valid winner so a fully d-masked doc leaks no gradient.
+        grad_D_hat = grad_D_hat * winner_valid
         if normalize:
             dot = (D_hat_win_view * grad_D_hat).sum(dim=-1, keepdim=True)  # [Nq, Nd, Lq, 1]
             grad_D_unnorm_flat = ((grad_D_hat - D_hat_win_view * dot) / norm.view(Nq, Nd, Lq, 1)).reshape(
