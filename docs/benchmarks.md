@@ -157,31 +157,32 @@ plain forward only.
 
 | shape                                             | ours  | flash-maxsim | speedup |
 | ------------------------------------------------- | ----- | ------------ | ------- |
-| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.138 | 0.132        | 0.96×   |
-| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.191 | 0.189        | 0.99×   |
-| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.252 | 0.296        | 1.17×   |
-| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.481 | 0.567        | 1.18×   |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.348 | 0.353        | 1.01×   |
-| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.127 | 0.127        | 1.00×   |
-| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.297 | 0.322        | 1.08×   |
-| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.114 | 0.108        | 0.95×   |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.358 | 0.369        | 1.03×   |
-| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.231 | 0.229        | 0.99×   |
+| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.130 | 0.130        | 1.00×   |
+| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.183 | 0.187        | 1.02×   |
+| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.244 | 0.288        | 1.18×   |
+| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.475 | 0.565        | 1.19×   |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.340 | 0.351        | 1.03×   |
+| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.118 | 0.124        | 1.04×   |
+| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.290 | 0.318        | 1.10×   |
+| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.112 | 0.105        | 0.94×   |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.354 | 0.365        | 1.03×   |
+| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.221 | 0.229        | 1.03×   |
 
 
 The two kernels are within ±3% on tight rerank / short-context shapes
-and LIK pulls ahead by 1.08–1.21× on the wide ones (`rerank-very-long`,
-`rerank-colpali`, `train-in-batch-128`); on `rerank-short` and
-`train-long-doc` both are saturated by L2-normalized HBM traffic and
-LIK loses by a fraction of a percent. Both kernels are fused (neither
+and LIK pulls ahead by 1.10–1.19× on the wide ones (`rerank-very-long`,
+`rerank-colpali`, `train-in-batch-128`); `rerank-short` is a dead heat
+and on `train-long-doc` both are saturated by HBM traffic with LIK
+trailing ~6%. Both kernels are fused (neither
 materialises the score tile), so peak working set is sub-100 KB on
 every shape and there's no memory column to compare. The real differentiators are
 elsewhere: a fused `normalize=True` (no extra HBM round-trip), a real
 autograd-aware backward (`unified` / `csr` / `atomic`), packed/varlen,
 PLAID residual decompression, and a fused D-side projection head —
 none of which `flash-maxsim` ships. `bench_flash_maxsim.py` also
-covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`) and pairwise
-(`Q[B, Lq, d] × D[B, Ld, d] → [B]`) forwards where LIK is +3 to +14%.
+covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +1 to
++13%) and pairwise (`Q[B, Lq, d] × D[B, Ld, d] → [B]`, within ±8%)
+forwards.
 
 ## Fused L2-normalize
 
