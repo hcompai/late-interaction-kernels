@@ -68,14 +68,14 @@ def _bwd_dQ_kernel(
         q_active = qm != 0
 
     if q_active:
-        for j in range(0, Nd):
-            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
-            t = tl.load(argmax_ptr + (q_idx * Nd + j) * stride_a_pair + s * stride_a_lq)
+        for d_idx in range(0, Nd):
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+            t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq)
             t = t.to(tl.int32)
             if kd_layout:
-                d_global = q_idx * Nd + j
+                d_global = q_idx * Nd + d_idx
             else:
-                d_global = j
+                d_global = d_idx
             # `t == -1` sentinel: forward had no active doc for this (q, j, s).
             if t >= 0:
                 v = tl.load(
@@ -125,18 +125,18 @@ def _bwd_dD_kernel(
     kd_layout: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    i = pid // Nd
-    j = pid % Nd
+    q_idx = pid // Nd
+    d_idx = pid % Nd
 
-    gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+    gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
     k = tl.arange(0, d_pad)
     km = k < d
 
     if kd_layout:
-        d_global = i * Nd + j
+        d_global = q_idx * Nd + d_idx
     else:
-        d_global = j
+        d_global = d_idx
 
     # One query-token at a time (Lq is tiny). For each s, read Q[i, s, :],
     # the winner index t = argmax[i, j, s], and atomic-add gs * Q[i, s, :]
@@ -144,14 +144,14 @@ def _bwd_dD_kernel(
     for s in range(0, Lq):
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + i * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
             q_active = qm != 0
         if q_active:
-            t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
+            t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq).to(tl.int32)
             # `t == -1` sentinel: forward had no active doc for this (i, j, s).
             if t >= 0:
                 qv = tl.load(
-                    Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
+                    Q_ptr + q_idx * stride_q_n + s * stride_q_l + k * stride_q_k,
                     mask=km,
                     other=0.0,
                 ).to(tl.float32)

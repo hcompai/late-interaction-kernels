@@ -368,18 +368,18 @@ def _maxsim_residual_bwd_dQ_kernel(
 
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
-    for j in range(0, Nd):
-        gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
-        t = tl.load(argmax_ptr + q_idx * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+    for d_idx in range(0, Nd):
+        gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+        t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
 
-        cent_code = tl.load(codes_ptr + j * stride_codes_n + t * stride_codes_l).to(tl.int32)
+        cent_code = tl.load(codes_ptr + d_idx * stride_codes_n + t * stride_codes_l).to(tl.int32)
         cent = tl.load(
             centroids_ptr + cent_code * stride_cent_c + k_off * stride_cent_d,
             mask=k_mask,
             other=0.0,
         ).to(tl.float32)
         byte_vals = tl.load(
-            residuals_ptr + j * stride_res_n + t * stride_res_l + byte_idx * stride_res_p,
+            residuals_ptr + d_idx * stride_res_n + t * stride_res_l + byte_idx * stride_res_p,
             mask=k_mask,
             other=0,
         ).to(tl.int32)

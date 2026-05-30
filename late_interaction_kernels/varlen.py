@@ -170,16 +170,16 @@ def _varlen_bwd_dQ_kernel(
     km = k < d
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
-    for j in range(0, Nd):
-        d_lo = tl.load(cu_d_ptr + j).to(tl.int32)
-        d_hi = tl.load(cu_d_ptr + j + 1).to(tl.int32)
+    for d_idx in range(0, Nd):
+        d_lo = tl.load(cu_d_ptr + d_idx).to(tl.int32)
+        d_hi = tl.load(cu_d_ptr + d_idx + 1).to(tl.int32)
         ld = d_hi - d_lo
 
-        t = tl.load(argmax_ptr + q_idx * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+        t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
         # t == -1 on empty docs or invalid positions; skip those safely.
         valid = (t >= 0) & (ld > 0)
         if valid:
-            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
             v = tl.load(
                 D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
                 mask=km,
@@ -222,25 +222,25 @@ def _varlen_bwd_dD_kernel(
     stride_gd_k,
 ):
     pid = tl.program_id(0)
-    i = pid // Nd
-    j = pid % Nd
+    q_idx = pid // Nd
+    d_idx = pid % Nd
 
-    q_lo = tl.load(cu_q_ptr + i).to(tl.int32)
-    q_hi = tl.load(cu_q_ptr + i + 1).to(tl.int32)
+    q_lo = tl.load(cu_q_ptr + q_idx).to(tl.int32)
+    q_hi = tl.load(cu_q_ptr + q_idx + 1).to(tl.int32)
     lq = q_hi - q_lo
-    d_lo = tl.load(cu_d_ptr + j).to(tl.int32)
+    d_lo = tl.load(cu_d_ptr + d_idx).to(tl.int32)
 
     if lq == 0:
         return
 
-    gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+    gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
     k = tl.arange(0, d_pad)
     km = k < d
 
     for s in range(0, max_lq):
         if s < lq:
-            t = tl.load(argmax_ptr + i * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+            t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
             if t >= 0:
                 qv = tl.load(
                     Q_ptr + (q_lo + s) * stride_q_t + k * stride_q_k,

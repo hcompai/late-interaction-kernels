@@ -104,40 +104,40 @@ def _bwd_dD_csr_kernel(
     ``perm[j, row_ptr[j, t] : row_ptr[j, t+1]]``. No atomics, one store.
     """
     pid = tl.program_id(0)
-    j = pid // Ld
+    d_idx = pid // Ld
     t = pid % Ld
 
     k_off = tl.arange(0, d_pad)
     km = k_off < d
 
-    start = tl.load(row_ptr_ptr + j * stride_rp_n + t * stride_rp_l).to(tl.int32)
-    end = tl.load(row_ptr_ptr + j * stride_rp_n + (t + 1) * stride_rp_l).to(tl.int32)
+    start = tl.load(row_ptr_ptr + d_idx * stride_rp_n + t * stride_rp_l).to(tl.int32)
+    end = tl.load(row_ptr_ptr + d_idx * stride_rp_n + (t + 1) * stride_rp_l).to(tl.int32)
 
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
     # Dynamic-bound loop — Triton lowers this to a while loop on the GPU.
     # Empty bucket (start == end) skips the body and we store zeros below.
     for off in range(start, end):
-        flat = tl.load(perm_ptr + j * stride_perm_n + off * stride_perm_f).to(tl.int32)
-        i = flat // Lq
+        flat = tl.load(perm_ptr + d_idx * stride_perm_n + off * stride_perm_f).to(tl.int32)
+        q_idx = flat // Lq
         s = flat % Lq
 
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + i * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
             q_active = qm != 0
 
         if q_active:
-            gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
             qv = tl.load(
-                Q_ptr + i * stride_q_n + s * stride_q_l + k_off * stride_q_k,
+                Q_ptr + q_idx * stride_q_n + s * stride_q_l + k_off * stride_q_k,
                 mask=km,
                 other=0.0,
             ).to(tl.float32)
             acc += gs * qv
 
     tl.store(
-        grad_D_ptr + j * stride_gd_n + t * stride_gd_l + k_off * stride_gd_k,
+        grad_D_ptr + d_idx * stride_gd_n + t * stride_gd_l + k_off * stride_gd_k,
         acc,
         mask=km,
     )

@@ -70,15 +70,15 @@ def _maxsim_fwd_kernel(
 ):
     pid = tl.program_id(0)
     q_idx = pid // Nd
-    k_idx = pid - q_idx * Nd
-    # Cross-product: every query scores the same Nd docs → d_global = k_idx
+    d_idx = pid - q_idx * Nd
+    # Cross-product: every query scores the same Nd docs → d_global = d_idx
     # KD / pairs:    each query owns its slab of Nd docs in a flattened
-    #                D[Nq * Nd, Ld, d] view → d_global = pid (= q_idx*Nd + k_idx).
+    #                D[Nq * Nd, Ld, d] view → d_global = pid (= q_idx*Nd + d_idx).
     # ``d_mask`` follows the same indexing as ``D``.
     if kd_layout:
         d_global = pid
     else:
-        d_global = k_idx
+        d_global = d_idx
 
     k_off = tl.arange(0, d_pad)
     k_mask = k_off < d
@@ -173,7 +173,7 @@ def _maxsim_fwd_kernel(
             )
 
     # Output is always [Nq, Nd] (Nd = K_per_query in KD/pairs mode).
-    tl.store(scores_ptr + q_idx * stride_s_n + k_idx * stride_s_d, score_acc)
+    tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
 
 # Small-input bypass: for tiny shapes (inference / REPL / tests) the autotune
