@@ -2,7 +2,7 @@
 
 Single H100 80 GB SXM, bf16 inputs (fp16 for LateOn / ModernColBERT
 shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
-`torch 2.8` (NGC 25.06), `triton 3.x`, CUDA 12.9.
+`torch 2.8.0+cu128`, `triton 3.4`, CUDA 12.8.
 
 **Fair-comparison protocol.** Every speedup on this page is measured at
 **matched numerics**: each baseline runs the inner einsum / matmul with
@@ -119,25 +119,25 @@ CUDA events):
 
 | shape                                                   | LIK      | eager (fp32 acc) | `torch.compile` (fp32 acc) | LIK vs eager | LIK vs compile | naive scratch |
 | ------------------------------------------------------- | -------- | ---------------- | -------------------------- | ------------ | -------------- | ------------- |
-| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.105 ms | 0.262 ms         | 0.273 ms                   | 2.5×         | 2.6×           | 183 MB → 0    |
-| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.106 ms | 0.793 ms         | 0.880 ms                   | **7.5×**     | **8.3×**       | 626 MB → 0    |
-| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.103 ms | 1.538 ms         | 1.604 ms                   | **14.9×**    | **15.5×**      | 1.0 GB → 0    |
-| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.738 ms | 9.354 ms         | 9.178 ms                   | **12.7×**    | **12.4×**      | 4.5 GB → 0    |
-| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.136 ms | 1.190 ms         | 1.192 ms                   | 8.7×         | 8.8×           | 916 MB → 0    |
-| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.351 ms         | 2.354 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
-| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.125 ms | 0.126 ms         | 0.172 ms                   | 1.0×         | 1.4×           | 43 MB → 0     |
-| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.540 ms         | 1.541 ms                   | **6.8×**     | **6.8×**       | 621 MB → 0    |
-| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.109 ms | 0.840 ms         | 0.841 ms                   | 7.7×         | 7.7×           | 623 MB → 0    |
-| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.805 ms         | 0.806 ms                   | 7.2×         | 7.2×           | 604 MB → 0    |
-| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.099 ms | 0.768 ms         | 0.768 ms                   | **7.8×**     | **7.8×**       | 626 MB → 0    |
-| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.260 ms | 2.961 ms         | 2.959 ms                   | **11.4×**    | **11.4×**      | 2.5 GB → 0    |
-| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.099 ms | 0.168 ms         | 0.171 ms                   | 1.7×         | 1.7×           | 110 MB → 0    |
-| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.398 ms         | 1.400 ms                   | **10.8×**    | **10.8×**      | 1.1 GB → 0    |
+| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.094 ms | 0.263 ms         | 0.273 ms                   | 2.8×         | 2.9×           | 183 MB → 0    |
+| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.096 ms | 0.793 ms         | 0.880 ms                   | **8.3×**     | **9.2×**       | 626 MB → 0    |
+| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.097 ms | 1.538 ms         | 1.603 ms                   | **15.9×**    | **16.5×**      | 1.0 GB → 0    |
+| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.731 ms | 9.330 ms         | 9.173 ms                   | **12.8×**    | **12.6×**      | 4.5 GB → 0    |
+| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.129 ms | 1.195 ms         | 1.196 ms                   | 9.3×         | 9.3×           | 916 MB → 0    |
+| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.354 ms         | 2.352 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
+| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.097 ms | 0.127 ms         | 0.169 ms                   | 1.3×         | 1.7×           | 43 MB → 0     |
+| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.539 ms         | 1.540 ms                   | **6.8×**     | **6.8×**       | 621 MB → 0    |
+| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.108 ms | 0.837 ms         | 0.837 ms                   | 7.8×         | 7.8×           | 623 MB → 0    |
+| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.821 ms         | 0.821 ms                   | 7.3×         | 7.3×           | 604 MB → 0    |
+| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.095 ms | 0.767 ms         | 0.768 ms                   | **8.1×**     | **8.1×**       | 626 MB → 0    |
+| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.260 ms | 2.961 ms         | 2.961 ms                   | **11.4×**    | **11.4×**      | 2.5 GB → 0    |
+| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.096 ms | 0.168 ms         | 0.166 ms                   | 1.7×         | 1.7×           | 110 MB → 0    |
+| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.398 ms         | 1.399 ms                   | **10.8×**    | **10.8×**      | 1.1 GB → 0    |
 
 
-On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-15×; the
+On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-16×; the
 HBM round-trip on the similarity tile dominates. On tiny shapes the
-kernel-launch + autotune overhead caps the win at ~1.5-2.5×.
+kernel-launch + autotune overhead caps the win at ~1.3-2.9×.
 
 The `naive scratch` column shows naive peak → LIK peak; LIK never
 materialises the `[Nq · Nd · Lq · Ld]` similarity tile, so its peak
