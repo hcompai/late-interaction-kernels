@@ -50,10 +50,10 @@ def maxsim_backward_unified_reference(
     Qf = Q.to(torch.float32)
     Df = D.to(torch.float32)
 
-    am = argmax.view(Nq, Nd, Lq).long()  # [Nq, Nd, Lq]
+    m_idx = argmax.view(Nq, Nd, Lq).long()  # [Nq, Nd, Lq]
     # Gather winning D rows:  D_win[i, j, q] = D[j, argmax[i, j, q]]
     j_idx = torch.arange(Nd, device=D.device).view(1, Nd, 1).expand(Nq, Nd, Lq)
-    D_win = Df[j_idx, am]  # [Nq, Nd, Lq, d]
+    D_win = Df[j_idx, m_idx]  # [Nq, Nd, Lq, d]
 
     if q_mask is not None:
         m = q_mask.to(torch.bool).view(Nq, 1, Lq, 1)  # broadcast mask
@@ -76,10 +76,9 @@ def maxsim_backward_unified_reference(
     # Flatten (i, j, q) → assemble indices and index_add_ per-j to avoid
     # a giant scatter. On GPU this reference is slow-but-correct.
     for d_idx in range(Nd):
-        am_j = am[:, d_idx, :]  # [Nq, Lq]
+        m_idx_j = m_idx[:, d_idx, :]  # [Nq, Lq]
         cont = contrib_d[:, d_idx, :, :]  # [Nq, Lq, d]
-        # grad_D[j].index_add_(0, am_j.flatten(), cont.reshape(-1, d))
-        grad_D[d_idx].index_add_(0, am_j.reshape(-1), cont.reshape(-1, d))
+        grad_D[d_idx].index_add_(0, m_idx_j.reshape(-1), cont.reshape(-1, d))
 
     return grad_Q.to(Q.dtype), grad_D.to(D.dtype)
 

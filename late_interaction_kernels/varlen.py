@@ -92,7 +92,7 @@ def _varlen_fwd_kernel(
         ).to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
-        am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+        m_idx = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
@@ -110,17 +110,17 @@ def _varlen_fwd_kernel(
             tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
             update = tile_max > m
             m = tl.where(update, tile_max, m)
-            am = tl.where(update, tile_arg, am)
+            m_idx = tl.where(update, tile_arg, m_idx)
 
         m = tl.where(q_valid & (m != float("-inf")), m, 0.0)
         score_acc += tl.sum(m)
 
         if SAVE_ARGMAX:
             # Store -1 for padding query positions; the bwd uses it as "skip".
-            am_out = tl.where(q_valid, am, -1)
+            m_idx_out = tl.where(q_valid, m_idx, -1)
             tl.store(
                 argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
-                am_out,
+                m_idx_out,
                 mask=q_off < max_lq,
             )
 
