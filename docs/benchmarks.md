@@ -19,6 +19,9 @@ pip install -e ".[dev,pylate]"
 # forward (reranking / inference)
 python benchmarks/bench_forward.py
 
+# long-query chunking (Lq > 512): forward + training
+python benchmarks/bench_chunking.py
+
 # backward — auto / atomic / csr / unified sweep
 python benchmarks/bench_backward_method.py
 python benchmarks/bench_backward_unified.py
@@ -183,6 +186,34 @@ none of which `flash-maxsim` ships. `bench_flash_maxsim.py` also
 covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +1 to
 +13%) and pairwise (`Q[B, Lq, d] × D[B, Ld, d] → [B]`, within ±8%)
 forwards.
+
+### Long-query chunking (`Lq > 512`)
+
+For long queries (ColPali-scale `Lq ≈ 1k` visual patches) the un-chunked
+kernel serialises a long `static_range` loop inside each program. Since
+MaxSim is a sum over query tokens of a per-token max, splitting the query
+axis into fixed 128-token chunks and summing the per-chunk scores is
+numerically exact, and launches more, shorter programs that keep the H100
+busy. It fires only above a measured crossover (`Lq > 512`); shorter
+queries fall through to the existing core unchanged. `bench_chunking.py`,
+H100 80 GB SXM, bf16, median over CUDA events:
+
+| shape                                  | un-chunked | chunked  | speedup  | vs flash |
+| -------------------------------------- | ---------- | -------- | -------- | -------- |
+| in-batch `Nq=Nd=16, Lq=768, Ld=512`    | 0.260 ms   | 0.147 ms | **1.77×** | 1.38×   |
+| in-batch `Nq=Nd=64, Lq=768, Ld=512`    | 1.358 ms   | 0.912 ms | **1.49×** | 1.52×   |
+| in-batch `Nq=Nd=32, Lq=1024, Ld=1024`  | 0.731 ms   | 0.588 ms | **1.24×** | 1.53×   |
+| tail `Nq=Nd=16, Lq=1030, Ld=1024`      | 0.472 ms   | 0.327 ms | **1.44×** | 1.24×   |
+| rerank `Nq=1, Nd=500, Lq=1024, Ld=1024`| 0.436 ms   | 0.440 ms | 0.99×    | 1.18×   |
+| boundary `Nq=Nd=128, Lq=512` (≤ cutoff)| 2.278 ms   | 2.288 ms | 1.00×    | 1.49×   |
+
+The split is implemented as a thin dispatch around the shared forward core
+(no kernel change) and autograd flows through the reshape + sum, so training
+is covered too — neutral-to-better there (large batches `+19–32%`, small
+batches sit in the launch-bound noise floor). It also collapses the per-`Lq`
+autotune sweep onto a small bounded number of cache entries. Chunking is
+cross-product-only: the KD/pairs path (4-D `D`) already saturates its
+`Nq·K` grid, so it stays un-chunked.
 
 ## Fused L2-normalize
 

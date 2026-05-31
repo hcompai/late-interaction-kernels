@@ -32,6 +32,7 @@ choices accepted by `--only`.
 | script | what it isolates |
 | --- | --- |
 | `bench_forward.py` | Fused forward `maxsim` vs eager fp32 einsum vs `torch.compile` across 14 shapes. |
+| `bench_chunking.py` | Long-query (`Lq > 512`) chunking: forward + training vs the un-chunked core, with flash as an external reference. |
 | `bench_inference_edge.py` | Small-d (`d ∈ {48, 64}`) edge ColBERT regimes, `inference_mode`. |
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
 | `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `csr` vs `atomic` vs naive. |

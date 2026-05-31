@@ -161,20 +161,18 @@ def test_colpali_range_lq_buckets(rel):
     assert rel(fast, ref) < 5e-3
 
 
-def test_lq_above_ceil_passes_through_with_warning(rel):
-    """Lq above the bucket ceiling falls back to per-Lq autotune + warns once.
+def test_very_long_lq_chunks_without_autotune_blowup(rel):
+    """A query far above the old bucket ceiling is chunked, not warned about.
 
-    Long-context callers should use ``maxsim_varlen``, but ``maxsim`` must
-    still return correct scores when handed a large Lq directly — and emit
-    a one-shot warning so the autotune fallback isn't silent.
+    Query-token chunking splits any ``Lq > _LQ_CHUNK`` into 128-token blocks,
+    so the kernel only ever sees ``Lq == 128`` on the cross-product path. That
+    both returns correct scores and pins the autotune cache to a single entry
+    — no per-Lq sweep, no long-context fallback warning.
     """
     import warnings as _warnings
 
-    from late_interaction_kernels import autograd as _autograd
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.reference import maxsim_reference
-
-    _autograd._WARNED_LQ_OVER_CEIL = False  # reset the one-shot flag
 
     Q = torch.randn(1, 5000, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(2, 256, 128, device="cuda", dtype=torch.float16)
@@ -186,11 +184,9 @@ def test_lq_above_ceil_passes_through_with_warning(rel):
 
     assert fast.shape == (1, 2)
     assert rel(fast, ref) < 5e-3
-    assert any(
-        "Lq=5000" in str(w.message) and "maxsim_varlen" in str(w.message)
-        for w in caught
-        if issubclass(w.category, RuntimeWarning)
-    ), "expected a one-shot RuntimeWarning pointing at maxsim_varlen"
+    assert not any(
+        "maxsim_varlen" in str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)
+    ), "chunking should handle very long Lq without the long-context fallback warning"
 
 
 def test_non_pow2_lq_gradient_shape():
@@ -211,3 +207,144 @@ def test_non_pow2_lq_gradient_shape():
     assert D.grad is not None and D.grad.shape == D.shape
     assert torch.all(torch.isfinite(Q.grad))
     assert torch.all(torch.isfinite(D.grad))
+
+
+# --- query-token chunking (large Lq) ---------------------------------------
+# When Lq exceeds the chunk size the forward splits the query into 128-token
+# blocks and sums the per-block MaxSim. These pin the chunked path to the
+# reference across the ColPali-scale Lq grid, including tail padding (Lq not a
+# multiple of 128), masks, normalize, and the backward.
+
+# (Nq, Nd, Lq, Ld, d). All Lq > _LQ_CHUNK_MIN so chunking actually fires, and
+# the grid spans exact multiples (1024 = 8·128) and non-multiples needing tail
+# padding (700, 1030 ≈ ColPali visual patches) of the 128 chunk.
+CHUNK_SHAPES = [
+    (2, 4, 700, 256, 128),
+    (4, 6, 1024, 320, 128),
+    (1, 8, 1024, 1024, 128),
+    (1, 2, 1030, 256, 128),
+]
+CHUNK_IDS = [f"Nq{s[0]}_Nd{s[1]}_Lq{s[2]}_Ld{s[3]}" for s in CHUNK_SHAPES]
+
+
+@pytest.mark.parametrize("shape", CHUNK_SHAPES, ids=CHUNK_IDS)
+@pytest.mark.parametrize("normalize", [False, True])
+def test_chunked_forward_parity(shape, normalize, rel):
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Nq, Nd, Lq, Ld, d = shape
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D, normalize=normalize).float()
+    ref = maxsim_reference(Q.float(), D.float(), normalize=normalize)
+
+    assert fast.shape == (Nq, Nd), f"chunking leaked into the output shape: {fast.shape}"
+    assert rel(fast, ref) < 5e-3
+
+
+def test_chunked_forward_parity_with_masks(rel):
+    """Tail padding must compose with a caller-supplied q_mask + d_mask."""
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Nq, Nd, Lq, Ld, d = 3, 5, 1030, 384, 128
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
+    q_mask = torch.rand(Nq, Lq, device="cuda") > 0.2
+    d_mask = torch.rand(Nd, Ld, device="cuda") > 0.2
+    q_mask[:, 0] = True
+    d_mask[:, 0] = True
+
+    fast = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=True).float()
+    ref = maxsim_reference(Q.float(), D.float(), q_mask, d_mask, normalize=True)
+    assert rel(fast, ref) < 5e-3
+
+
+@pytest.mark.parametrize("Lq", [768, 1030])
+@pytest.mark.parametrize("normalize", [False, True])
+def test_chunked_backward_matches_unchunked(Lq, normalize, rel):
+    """Chunked forward+backward == the un-chunked kernel on the same inputs.
+
+    Comparing against the un-chunked *kernel* core (not the dense fp32
+    reference) isolates the chunking algebra: both paths run the identical
+    Triton kernel, so they make the identical argmax decisions and any
+    residual difference is just fp32 accumulation order in the chunk sum and
+    the atomic ``grad_D`` scatter.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.autograd import _maxsim_cross
+
+    Nq, Nd, Ld, d = 2, 4, 256, 128
+    torch.manual_seed(0)
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16)
+    g = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
+
+    Qk = Q.clone().requires_grad_(True)
+    Dk = D.clone().requires_grad_(True)
+    sk = maxsim(Qk, Dk, normalize=normalize)
+    sk.backward(g)
+
+    Qb = Q.clone().requires_grad_(True)
+    Db = D.clone().requires_grad_(True)
+    sb = _maxsim_cross(Qb, Db, None, None, normalize, "auto")
+    sb.backward(g)
+
+    assert rel(sk, sb) < 5e-3
+    assert Qk.grad.shape == Q.shape and Dk.grad.shape == D.shape
+    assert rel(Qk.grad.float(), Qb.grad.float()) < 1e-2
+    assert rel(Dk.grad.float(), Db.grad.float()) < 1e-2
+
+
+def test_kd_long_lq_stays_correct_unchunked(rel):
+    """The KD/pairs path (4-D D) does not chunk, but stays correct at long Lq.
+
+    Chunking is cross-product-only: the KD path scores each query against its
+    own K-slab, so the reshape-into-batch trick would need to copy D K-ways,
+    and the no-copy per-chunk loop measurably regresses (KD already saturates
+    the Nq*K grid). KD therefore runs the un-chunked kernel even at ColPali Lq
+    — this pins that it's still numerically correct there.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Nq, K, Lq, Ld, d = 3, 4, 1030, 256, 128
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nq, K, Ld, d, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D, normalize=True).float()
+    ref = torch.stack(
+        [maxsim_reference(Q[i : i + 1].float(), D[i].float(), normalize=True)[0] for i in range(Nq)]
+    )
+    assert fast.shape == (Nq, K)
+    assert rel(fast, ref) < 5e-3
+
+
+def test_kd_over_ceil_still_warns():
+    """KD remains the only path that warns above the bucket ceiling.
+
+    Cross-product chunks any Lq > 512 silently (``_should_chunk_lq``), so it
+    never reaches ``_bucket_lq`` with a raw long Lq. KD has no chunked path and
+    still buckets, so Lq > _LQ_BUCKET_CEIL must surface the long-context
+    fallback warning pointing at ``maxsim_varlen`` — locking the asymmetry in
+    deliberately. Tested at ``_bucket_lq`` directly: instantiating the kernel at
+    Lq=5000 would unroll the static_range loop (the very cost the warning is
+    about), so the unit-level check is both precise and fast.
+    """
+    import warnings as _warnings
+
+    import late_interaction_kernels.autograd as _ag
+    from late_interaction_kernels.autograd import _bucket_lq
+
+    _ag._WARNED_LQ_OVER_CEIL = False  # reset the one-shot flag
+    Q = torch.randn(2, 5000, 128, device="cuda", dtype=torch.float16)
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        Qb, _ = _bucket_lq(Q, None)
+    assert Qb.shape[-2] == 5000, "over-ceiling Lq passes through un-bucketed"
+    assert any("maxsim_varlen" in str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)), (
+        "KD path must still warn above the bucket ceiling"
+    )

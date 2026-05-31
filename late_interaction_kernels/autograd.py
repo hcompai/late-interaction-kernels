@@ -46,6 +46,12 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
     """
     Lq = Q.shape[-2]
     if Lq > _LQ_BUCKET_CEIL:
+        # Cross-product callers never reach this branch anymore: `maxsim`
+        # chunks any Lq > _LQ_CHUNK_MIN down to _LQ_CHUNK before bucketing
+        # (see `_should_chunk_lq` / `_maxsim_cross_chunked`). It now only
+        # fires for the KD/pairs path (4-D D, `_maxsim_kd`), which has no
+        # chunked equivalent (per-chunk KD launches regress — KD already
+        # saturates the grid), so long-Lq KD should use `maxsim_varlen`.
         global _WARNED_LQ_OVER_CEIL
         if not _WARNED_LQ_OVER_CEIL:
             warnings.warn(
@@ -70,6 +76,35 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
     else:
         q_mask = F.pad(q_mask, (0, pad), value=False)
     return Q, q_mask
+
+
+# Query-token chunk size for the large-Lq forward. Splitting Lq into fixed
+# blocks of this many tokens and summing the per-block MaxSim is exact
+# (MaxSim is a sum over query tokens of a per-token max), but launches
+# ``ceil(Lq / chunk)`` more programs — which keeps the H100 busy when a long
+# query (ColPali ~1k visual patches) would otherwise serialise a long
+# ``static_range`` loop inside one program. Picking a power-of-two chunk also
+# pins the kernel's ``Lq`` constexpr, so large-Lq workloads collapse onto a
+# small constant number of autotune entries instead of one per Lq bucket: one
+# when Lq is an exact multiple of the chunk (no tail, has_q_mask=False) and one
+# for the tail-padded case (has_q_mask=True), times two again if a user d_mask
+# is in play. Bounded by a tiny constant, vs the per-Lq sweep it replaces.
+# The 128 value is measured on H100 (interacts with the smallest autotune
+# BLOCK_Q); the optimum may shift on A100/T4.
+_LQ_CHUNK = 128
+
+# Only chunk once the query is long enough that the per-program serial loop
+# dominates the extra-program launch/scheduling overhead. Below the crossover
+# the un-chunked launch keeps the grid lean (and is already the faster path);
+# above it, chunking both fills the GPU and shortens the inner loop. The
+# crossover measured on H100 sits between Lq=512 (neutral) and Lq=1024 (up to
+# +40%), so we trigger strictly above 512 — short/medium queries (ColBERT
+# Lq≤32, Lq=256/512 long-form) are left untouched.
+_LQ_CHUNK_MIN = 512
+
+
+def _should_chunk_lq(Lq: int) -> bool:
+    return Lq > _LQ_CHUNK_MIN
 
 
 _VALID_METHODS = ("auto", "atomic", "csr", "unified")
@@ -239,6 +274,72 @@ def _maxsim_kd(
     return scores
 
 
+def _maxsim_cross(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    normalize: bool,
+    method: str,
+) -> torch.Tensor:
+    """Cross-product core: ``Q[Nq, Lq, d] x D[Nd, Ld, d] -> [Nq, Nd]``.
+
+    Buckets ``Lq`` for autotune-cache reuse, then runs the fused kernel
+    (autograd-aware when either input needs a gradient, plain forward
+    otherwise). Inputs are assumed already 3-D and validated by the caller.
+    """
+    Q, q_mask = _bucket_lq(Q, q_mask)
+
+    Q = Q.contiguous()
+    D = D.contiguous()
+    q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
+    d_mask_i8 = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
+
+    # Skip the argmax save when neither input needs a backward — the fused
+    # kernel is otherwise identical. Same pattern as `maxsim_varlen` and
+    # `maxsim_residual`.
+    if Q.requires_grad or D.requires_grad:
+        return _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method, False)
+    scores, _ = _run_forward(
+        Q, D, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize, kd_layout=False
+    )
+    return scores
+
+
+def _maxsim_cross_chunked(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+    normalize: bool,
+    method: str,
+) -> torch.Tensor:
+    """Large-Lq cross product via query-token chunking.
+
+    Reshapes the ``Lq`` axis into ``nc = ceil(Lq / _LQ_CHUNK)`` blocks, scores
+    each ``(query, chunk)`` as an independent query through :func:`_maxsim_cross`
+    (so the kernel always sees ``Lq == _LQ_CHUNK``), then sums the chunk scores
+    back per original query. Numerically identical to the un-chunked path.
+    """
+    Nq, Lq, d = Q.shape
+    nc = (Lq + _LQ_CHUNK - 1) // _LQ_CHUNK
+    pad = nc * _LQ_CHUNK - Lq
+    if pad:
+        # Mask the padding tokens out: a zero row would otherwise contribute a
+        # spurious max. Fold into the caller's q_mask when present.
+        Q = F.pad(Q, (0, 0, 0, pad))
+        if q_mask is None:
+            q_mask = torch.ones(Nq, Lq + pad, dtype=torch.bool, device=Q.device)
+            q_mask[:, Lq:] = False
+        else:
+            q_mask = F.pad(q_mask, (0, pad), value=False)
+
+    Qc = Q.reshape(Nq * nc, _LQ_CHUNK, d)
+    qmc = q_mask.reshape(Nq * nc, _LQ_CHUNK) if q_mask is not None else None
+    scores = _maxsim_cross(Qc, D, qmc, d_mask, normalize, method)  # [Nq*nc, Nd]
+    return scores.view(Nq, nc, scores.shape[-1]).sum(dim=1)
+
+
 def maxsim(
     Q: torch.Tensor,
     D: torch.Tensor,
@@ -328,25 +429,14 @@ def maxsim(
     if not normalize:
         _maybe_warn_unnormalized(Q)
 
-    # Bucket Lq to the next power of two so autotune caches one config per
-    # bucket instead of one per distinct Lq seen in training. Caller-visible
-    # output shape is unaffected.
-    Q, q_mask = _bucket_lq(Q, q_mask)
-
-    Q = Q.contiguous()
-    D = D.contiguous()
-    q_mask_i8 = q_mask.contiguous().to(torch.int8) if q_mask is not None else None
-    d_mask_i8 = d_mask.contiguous().to(torch.int8) if d_mask is not None else None
-
-    # Skip the argmax save when neither input needs a backward — the fused
-    # kernel is otherwise identical. Same pattern as `maxsim_varlen` and
-    # `maxsim_residual`.
-    if Q.requires_grad or D.requires_grad:
-        scores = _MaxSimFn.apply(Q, D, q_mask_i8, d_mask_i8, normalize, method, False)
+    # Long queries (ColPali-scale Lq) split into fixed 128-token chunks: more
+    # programs on the grid, shorter per-program loops, and a single autotune
+    # entry. The per-chunk MaxSim sums back to the exact full-Lq score, and
+    # the sum is a plain tensor op so autograd flows through unchanged.
+    if _should_chunk_lq(Q.shape[-2]):
+        scores = _maxsim_cross_chunked(Q, D, q_mask, d_mask, normalize, method)
     else:
-        scores, _ = _run_forward(
-            Q, D, q_mask_i8, d_mask_i8, save_argmax=False, normalize=normalize, kd_layout=False
-        )
+        scores = _maxsim_cross(Q, D, q_mask, d_mask, normalize, method)
 
     if q_was_2d and d_was_2d:
         return scores.reshape(())
