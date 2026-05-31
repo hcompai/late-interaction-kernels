@@ -46,6 +46,12 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
     """
     Lq = Q.shape[-2]
     if Lq > _LQ_BUCKET_CEIL:
+        # Cross-product callers never reach this branch anymore: `maxsim`
+        # chunks any Lq > _LQ_CHUNK_MIN down to _LQ_CHUNK before bucketing
+        # (see `_should_chunk_lq` / `_maxsim_cross_chunked`). It now only
+        # fires for the KD/pairs path (4-D D, `_maxsim_kd`), which has no
+        # chunked equivalent (per-chunk KD launches regress — KD already
+        # saturates the grid), so long-Lq KD should use `maxsim_varlen`.
         global _WARNED_LQ_OVER_CEIL
         if not _WARNED_LQ_OVER_CEIL:
             warnings.warn(
@@ -78,8 +84,13 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
 # ``ceil(Lq / chunk)`` more programs — which keeps the H100 busy when a long
 # query (ColPali ~1k visual patches) would otherwise serialise a long
 # ``static_range`` loop inside one program. Picking a power-of-two chunk also
-# pins the kernel's ``Lq`` constexpr to a single value, so the autotune cache
-# collapses every large-Lq workload onto one entry instead of one per bucket.
+# pins the kernel's ``Lq`` constexpr, so large-Lq workloads collapse onto a
+# small constant number of autotune entries instead of one per Lq bucket: one
+# when Lq is an exact multiple of the chunk (no tail, has_q_mask=False) and one
+# for the tail-padded case (has_q_mask=True), times two again if a user d_mask
+# is in play. Bounded by a tiny constant, vs the per-Lq sweep it replaces.
+# The 128 value is measured on H100 (interacts with the smallest autotune
+# BLOCK_Q); the optimum may shift on A100/T4.
 _LQ_CHUNK = 128
 
 # Only chunk once the query is long enough that the per-program serial loop

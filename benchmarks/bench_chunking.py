@@ -84,6 +84,39 @@ def main():
         )
     print(f"\nworst chunked/unchunked speedup: {worst:.2f}x (>=0.97 = no regression)")
 
+    # --- training (forward + backward) on the chunked regime --------------
+    # The grad path chunks too (Q.reshape fans D into nc autograd nodes); the
+    # grad_D atomic scatter does the same total atomic adds either way, so the
+    # expectation is neutral-to-better — large batches win big (Nq=64: +30%),
+    # while at tiny batches (Nq=Nd=16) the step is dominated by the un-chunked
+    # backward and the result sits in the noise (the same 16x16 batch flips
+    # sign between Lq=1024 and Lq=1030 run to run), so the guard is looser here.
+    _TRAIN_REGRESSION = 0.90
+    print(f"\n{'shape (train fwd+bwd)':40s} {'unchunked':>10s} {'chunked':>10s} {'speedup':>8s}")
+    worst_tr = 1e9
+    for name, Nq, Nd, Lq, Ld, d in SHAPES:
+        if Lq <= 512:  # only the chunked regime is interesting for training
+            continue
+        Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype, requires_grad=True)
+        D = torch.randn(Nd, Ld, d, device="cuda", dtype=dtype, requires_grad=True)
+        g = torch.randn(Nq, Nd, device="cuda", dtype=dtype)
+
+        def _unchunk():
+            Q.grad = D.grad = None
+            _maxsim_cross(Q, D, None, None, False, "auto").backward(g)
+
+        def _chunk():
+            Q.grad = D.grad = None
+            maxsim(Q, D).backward(g)
+
+        t_un = cuda_time(_unchunk, warmup=10, iters=30)
+        t_ch = cuda_time(_chunk, warmup=10, iters=30)
+        sp = t_un / t_ch
+        worst_tr = min(worst_tr, sp)
+        flag = "  <-- REGRESSION" if sp < _TRAIN_REGRESSION else ""
+        print(f"{name:40s} {t_un:9.3f}m {t_ch:9.3f}m {sp:7.2f}x{flag}")
+    print(f"\nworst chunked/unchunked train speedup: {worst_tr:.2f}x (>={_TRAIN_REGRESSION} = no regression)")
+
 
 if __name__ == "__main__":
     main()

@@ -296,3 +296,55 @@ def test_chunked_backward_matches_unchunked(Lq, normalize, rel):
     assert Qk.grad.shape == Q.shape and Dk.grad.shape == D.shape
     assert rel(Qk.grad.float(), Qb.grad.float()) < 1e-2
     assert rel(Dk.grad.float(), Db.grad.float()) < 1e-2
+
+
+def test_kd_long_lq_stays_correct_unchunked(rel):
+    """The KD/pairs path (4-D D) does not chunk, but stays correct at long Lq.
+
+    Chunking is cross-product-only: the KD path scores each query against its
+    own K-slab, so the reshape-into-batch trick would need to copy D K-ways,
+    and the no-copy per-chunk loop measurably regresses (KD already saturates
+    the Nq*K grid). KD therefore runs the un-chunked kernel even at ColPali Lq
+    — this pins that it's still numerically correct there.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Nq, K, Lq, Ld, d = 3, 4, 1030, 256, 128
+    Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float16)
+    D = torch.randn(Nq, K, Ld, d, device="cuda", dtype=torch.float16)
+
+    fast = maxsim(Q, D, normalize=True).float()
+    ref = torch.stack(
+        [maxsim_reference(Q[i : i + 1].float(), D[i].float(), normalize=True)[0] for i in range(Nq)]
+    )
+    assert fast.shape == (Nq, K)
+    assert rel(fast, ref) < 5e-3
+
+
+def test_kd_over_ceil_still_warns():
+    """KD remains the only path that warns above the bucket ceiling.
+
+    Cross-product chunks any Lq > 512 silently (``_should_chunk_lq``), so it
+    never reaches ``_bucket_lq`` with a raw long Lq. KD has no chunked path and
+    still buckets, so Lq > _LQ_BUCKET_CEIL must surface the long-context
+    fallback warning pointing at ``maxsim_varlen`` — locking the asymmetry in
+    deliberately. Tested at ``_bucket_lq`` directly: instantiating the kernel at
+    Lq=5000 would unroll the static_range loop (the very cost the warning is
+    about), so the unit-level check is both precise and fast.
+    """
+    import warnings as _warnings
+
+    import late_interaction_kernels.autograd as _ag
+    from late_interaction_kernels.autograd import _bucket_lq
+
+    _ag._WARNED_LQ_OVER_CEIL = False  # reset the one-shot flag
+    Q = torch.randn(2, 5000, 128, device="cuda", dtype=torch.float16)
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        Qb, _ = _bucket_lq(Q, None)
+    assert Qb.shape[-2] == 5000, "over-ceiling Lq passes through un-bucketed"
+    assert any("maxsim_varlen" in str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)), (
+        "KD path must still warn above the bucket ceiling"
+    )

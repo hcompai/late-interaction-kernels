@@ -103,6 +103,32 @@ def test_large_lq_chunks_to_single_autotune_entry():
     )
 
 
+def test_chunked_tail_padding_bounds_cache_at_two_entries():
+    """Tail-padded long Lq adds at most one extra entry (has_q_mask=True).
+
+    Exact multiples of 128 chunk with no tail → has_q_mask=False; a non-multiple
+    (e.g. 1030) synthesizes a q_mask → has_q_mask=True. The two land on distinct
+    autotune keys, so a workload mixing both is bounded at exactly 2 — still a
+    tiny constant vs the per-Lq sweep, but not literally one.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    for lq in (1024, 2048):  # exact multiples → one shared (has_q_mask=False) entry
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        _ = maxsim(Q, D)
+    for lq in (1030, 1670):  # tail-padded → one shared (has_q_mask=True) entry
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        _ = maxsim(Q, D)
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 2, (
+        f"mixed exact-multiple and tail-padded long Lq must bound the cache at 2; got {len(cache)}"
+    )
+
+
 def test_scatter_kernel_compiles_once_for_varying_max_ld():
     """Many distinct ``max_ld`` values share one autotune-cache entry."""
     from late_interaction_kernels.score_pairs import _scatter_fwd_kernel, score_pairs_packed
