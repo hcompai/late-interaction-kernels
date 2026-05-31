@@ -76,6 +76,33 @@ def test_forward_kernel_buckets_lq_to_pow2():
     assert len(cache) == 1, f"Lq=17..31 should bucket to a single autotune entry; got {len(cache)}"
 
 
+def test_large_lq_chunks_to_single_autotune_entry():
+    """Long queries collapse onto the Lq=128 autotune entry via chunking.
+
+    Without chunking, Lq ∈ {1024, 2048, 4096} would each get its own bucket →
+    3 autotune sweeps (and an unbounded set as ColPali patch counts vary).
+    Query-token chunking rewrites every long Lq to the 128-token chunk, so
+    they share one entry — the *same* entry a native Lq=128 call uses.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # requires_grad routes through autograd (save_argmax=True) so the
+    # small-input bypass never fires and the autotuner always runs. All Lq are
+    # exact multiples of 128 (no tail pad → has_q_mask stays False, matching
+    # the native Lq=128 key).
+    D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    for lq in (128, 1024, 2048, 4096):
+        Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+        _ = maxsim(Q, D)
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 1, (
+        f"chunking must collapse every long Lq onto the Lq=128 entry; got {len(cache)} entries"
+    )
+
+
 def test_scatter_kernel_compiles_once_for_varying_max_ld():
     """Many distinct ``max_ld`` values share one autotune-cache entry."""
     from late_interaction_kernels.score_pairs import _scatter_fwd_kernel, score_pairs_packed
