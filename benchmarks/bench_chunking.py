@@ -5,8 +5,9 @@ Compares the chunked public ``maxsim`` against the un-chunked kernel core
 (ColPali visual patches, long-doc rerank, in-batch contrastive at long Lq).
 flash-maxsim is shown only as an external reference point.
 
-  sky exec lik-invest --gpus H100:1 \
-    "cd ~/sky_workdir && source .venv/bin/activate && python benchmarks/bench_chunking.py"
+Usage::
+
+    python benchmarks/bench_chunking.py
 """
 
 import statistics
