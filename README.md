@@ -128,7 +128,7 @@ is asserted at `atol=1e-2` before timing.
 | ----------------------------------------------------------- | ------------------ |
 | Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 1.7-16×        |
 | Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
-| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 4.6-6.6×           |
+| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 5.0-6.9×           |
 | PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 8-23× full / 18-51× partial |
 | Fused D-side head (training)                                | 1.5-4.5× on `Nd · Ld` large |
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |

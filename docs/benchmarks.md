@@ -6,6 +6,10 @@ shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
 head-to-head numbers were last refreshed for the 0.4.0 release
 (query-token chunking for long queries).
 
+Baseline package versions used for the comparison columns:
+`flash-maxsim 0.2.1`, `pylate 1.3.3`, `fast-plaid 1.4.6.280`,
+`torch.compile` from the same `torch 2.8.0`.
+
 **Fair-comparison protocol.** Every speedup on this page is measured at
 **matched numerics**: each baseline runs the inner einsum / matmul with
 an fp32 accumulator just like the fused kernel, and parity vs the eager
