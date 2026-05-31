@@ -1216,6 +1216,37 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     to trade block size against occupancy.
   </p>
 
+  <h3 id="chunking">Long-query chunking</h3>
+
+  <p>
+    For ColPali-scale queries ($L_q \approx 1024$ visual patches), the outer
+    loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
+    inside one program, leaving the rest of the SM grid idle. Because MaxSim
+    is a sum over query tokens of a per-token max, it decomposes exactly:
+  </p>
+
+  <p>
+    $$\text{score}[i, j] = \sum_{c=0}^{n_c - 1} \sum_{s \in \text{chunk}_c} \max_t \langle \Qm_{i, s},\, \Dm_{j, t} \rangle.$$
+  </p>
+
+  <p>
+    <code>maxsim()</code> exploits this whenever $L_q &gt; 512$ by
+    reshaping $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ into
+    $\Qm_c \in \mathbb{R}^{N_q n_c \times 128 \times d}$ (128 tokens per
+    chunk, $n_c = \lceil L_q / 128 \rceil$), running the kernel over the
+    larger batch, and summing the chunk scores back per original query.
+    The reshape and sum are plain tensor ops — autograd flows through them
+    unchanged so no custom backward is needed.
+  </p>
+
+  <p>
+    Two gains at once: more programs on the grid (better SM utilisation)
+    and the kernel always sees $L_q = 128$, pinning the autotune cache to a
+    small constant rather than one entry per distinct query length.
+    Short queries ($L_q \leq 512$) fall through to the un-chunked call,
+    so there is no regression on ColBERT or long-document shapes.
+  </p>
+
   <h3>Step through the algorithm</h3>
   <p>
     Below is a toy execution with $L_q = 4$, $L_d = 12$, $d = 4$,
@@ -1441,6 +1472,36 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     tie-break) on the forward, so only the $\nabla_{\Dm}$ reduction order
     distinguishes them numerically.
   </p>
+
+  <h3>Backward launch-param autotuning</h3>
+
+  <p>
+    Unlike the forward, the backward kernels have no block-tiling dimensions to
+    sweep — each is one Triton program per output row that streams a single
+    embedding vector through a loop over docs or CSR bucket entries. The only
+    useful launch knobs are <code>num_warps</code> and
+    <code>num_stages</code>. The stock value (<code>num_warps=4</code>)
+    over-subscribes these narrow programs; on H100 the optimum is 1–2 warps.
+  </p>
+
+  <p>
+    All four backward kernels are now <code>@triton.autotune</code>d over a
+    small <code>(num_warps, num_stages)</code> grid via a shared config
+    module. The autotune key mirrors the forward key —
+    <code>(Lq, d_pad, has_q_mask, kd_layout)</code> for the layout-aware
+    kernels, <code>(Lq, d_pad, has_q_mask)</code> for CSR — so the cache
+    holds one entry per training regime regardless of batch size.
+    Atomic-accumulating kernels use <code>reset_to_zero</code> so the
+    autotuner's internal benchmark trials don't accumulate onto each other.
+  </p>
+
+  <div class="note">
+    <strong>End-to-end training speed.</strong> Measured on H100 (bf16),
+    full training step (forward + backward): colbert-B256 <strong>1.21×</strong>,
+    colpali-B16 <strong>1.87×</strong>, colpali-B32 <strong>1.56×</strong>
+    vs the prior fixed-launch backward, all at lower peak memory.
+    See <code>docs/benchmarks.md</code> for the full table.
+  </div>
 </section>
 
 <!-- ============================================================ -->
