@@ -77,6 +77,7 @@ def main():
 
         t_fm = m_fm = float("nan")
         if HAS_FM:
+
             def _fm():
                 flash_maxsim_batched_train(Q, D).backward(g)
                 Q.grad = None
