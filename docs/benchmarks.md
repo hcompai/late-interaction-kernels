@@ -2,7 +2,7 @@
 
 Single H100 80 GB SXM, bf16 inputs (fp16 for LateOn / ModernColBERT
 shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
-`torch 2.8` (NGC 25.06), `triton 3.x`, CUDA 12.9.
+`torch 2.8.0+cu128`, `triton 3.4`, CUDA 12.8.
 
 **Fair-comparison protocol.** Every speedup on this page is measured at
 **matched numerics**: each baseline runs the inner einsum / matmul with
@@ -119,25 +119,25 @@ CUDA events):
 
 | shape                                                   | LIK      | eager (fp32 acc) | `torch.compile` (fp32 acc) | LIK vs eager | LIK vs compile | naive scratch |
 | ------------------------------------------------------- | -------- | ---------------- | -------------------------- | ------------ | -------------- | ------------- |
-| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.105 ms | 0.262 ms         | 0.273 ms                   | 2.5×         | 2.6×           | 183 MB → 0    |
-| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.106 ms | 0.793 ms         | 0.880 ms                   | **7.5×**     | **8.3×**       | 626 MB → 0    |
-| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.103 ms | 1.538 ms         | 1.604 ms                   | **14.9×**    | **15.5×**      | 1.0 GB → 0    |
-| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.738 ms | 9.354 ms         | 9.178 ms                   | **12.7×**    | **12.4×**      | 4.5 GB → 0    |
-| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.136 ms | 1.190 ms         | 1.192 ms                   | 8.7×         | 8.8×           | 916 MB → 0    |
-| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.351 ms         | 2.354 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
-| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.125 ms | 0.126 ms         | 0.172 ms                   | 1.0×         | 1.4×           | 43 MB → 0     |
-| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.540 ms         | 1.541 ms                   | **6.8×**     | **6.8×**       | 621 MB → 0    |
-| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.109 ms | 0.840 ms         | 0.841 ms                   | 7.7×         | 7.7×           | 623 MB → 0    |
-| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.805 ms         | 0.806 ms                   | 7.2×         | 7.2×           | 604 MB → 0    |
-| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.099 ms | 0.768 ms         | 0.768 ms                   | **7.8×**     | **7.8×**       | 626 MB → 0    |
-| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.260 ms | 2.961 ms         | 2.959 ms                   | **11.4×**    | **11.4×**      | 2.5 GB → 0    |
-| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.099 ms | 0.168 ms         | 0.171 ms                   | 1.7×         | 1.7×           | 110 MB → 0    |
-| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.398 ms         | 1.400 ms                   | **10.8×**    | **10.8×**      | 1.1 GB → 0    |
+| text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.094 ms | 0.263 ms         | 0.273 ms                   | 2.8×         | 2.9×           | 183 MB → 0    |
+| text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.096 ms | 0.793 ms         | 0.880 ms                   | **8.3×**     | **9.2×**       | 626 MB → 0    |
+| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.097 ms | 1.538 ms         | 1.603 ms                   | **15.9×**    | **16.5×**      | 1.0 GB → 0    |
+| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.731 ms | 9.330 ms         | 9.173 ms                   | **12.8×**    | **12.6×**      | 4.5 GB → 0    |
+| corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.129 ms | 1.195 ms         | 1.196 ms                   | 9.3×         | 9.3×           | 916 MB → 0    |
+| corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.354 ms         | 2.352 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
+| train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.097 ms | 0.127 ms         | 0.169 ms                   | 1.3×         | 1.7×           | 43 MB → 0     |
+| train-batch-128 `Nq=Nd=128, Lq=32, Ld=300`              | 0.226 ms | 1.539 ms         | 1.540 ms                   | **6.8×**     | **6.8×**       | 621 MB → 0    |
+| large-d-512 `Nq=1, Nd=1k, Lq=32, Ld=300, d=512`         | 0.108 ms | 0.837 ms         | 0.837 ms                   | 7.8×         | 7.8×           | 623 MB → 0    |
+| large-d-1024 `Nq=1, Nd=500, Lq=32, Ld=300, d=1024`      | 0.112 ms | 0.821 ms         | 0.821 ms                   | 7.3×         | 7.3×           | 604 MB → 0    |
+| lateon-code-edge-rerank `Nd=1k, Ld=2048, d=48`          | 0.095 ms | 0.767 ms         | 0.768 ms                   | **8.1×**     | **8.1×**       | 626 MB → 0    |
+| lateon-code-edge-big `Nd=4k, Ld=2048, d=48`             | 0.260 ms | 2.961 ms         | 2.961 ms                   | **11.4×**    | **11.4×**      | 2.5 GB → 0    |
+| mxbai-edge-rerank `Nd=1k, Ld=300, d=64`                 | 0.096 ms | 0.168 ms         | 0.166 ms                   | 1.7×         | 1.7×           | 110 MB → 0    |
+| mxbai-edge-corpus-10k `Nd=10k, Ld=300, d=64`            | 0.130 ms | 1.398 ms         | 1.399 ms                   | **10.8×**    | **10.8×**      | 1.1 GB → 0    |
 
 
-On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-15×; the
+On wide shapes (`Lq · Ld` large) LIK beats both baselines by 7-16×; the
 HBM round-trip on the similarity tile dominates. On tiny shapes the
-kernel-launch + autotune overhead caps the win at ~1.5-2.5×.
+kernel-launch + autotune overhead caps the win at ~1.3-2.9×.
 
 The `naive scratch` column shows naive peak → LIK peak; LIK never
 materialises the `[Nq · Nd · Lq · Ld]` similarity tile, so its peak
@@ -157,31 +157,32 @@ plain forward only.
 
 | shape                                             | ours  | flash-maxsim | speedup |
 | ------------------------------------------------- | ----- | ------------ | ------- |
-| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.138 | 0.132        | 0.96×   |
-| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.191 | 0.189        | 0.99×   |
-| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.252 | 0.296        | 1.17×   |
-| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.481 | 0.567        | 1.18×   |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.348 | 0.353        | 1.01×   |
-| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.127 | 0.127        | 1.00×   |
-| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.297 | 0.322        | 1.08×   |
-| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.114 | 0.108        | 0.95×   |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.358 | 0.369        | 1.03×   |
-| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.231 | 0.229        | 0.99×   |
+| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.130 | 0.130        | 1.00×   |
+| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.183 | 0.187        | 1.02×   |
+| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.244 | 0.288        | 1.18×   |
+| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.475 | 0.565        | 1.19×   |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.340 | 0.351        | 1.03×   |
+| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.118 | 0.124        | 1.04×   |
+| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.290 | 0.318        | 1.10×   |
+| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.112 | 0.105        | 0.94×   |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.354 | 0.365        | 1.03×   |
+| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.221 | 0.229        | 1.03×   |
 
 
 The two kernels are within ±3% on tight rerank / short-context shapes
-and LIK pulls ahead by 1.08–1.21× on the wide ones (`rerank-very-long`,
-`rerank-colpali`, `train-in-batch-128`); on `rerank-short` and
-`train-long-doc` both are saturated by L2-normalized HBM traffic and
-LIK loses by a fraction of a percent. Both kernels are fused (neither
+and LIK pulls ahead by 1.10–1.19× on the wide ones (`rerank-very-long`,
+`rerank-colpali`, `train-in-batch-128`); `rerank-short` is a dead heat
+and on `train-long-doc` both are saturated by HBM traffic with LIK
+trailing ~6%. Both kernels are fused (neither
 materialises the score tile), so peak working set is sub-100 KB on
 every shape and there's no memory column to compare. The real differentiators are
 elsewhere: a fused `normalize=True` (no extra HBM round-trip), a real
 autograd-aware backward (`unified` / `csr` / `atomic`), packed/varlen,
 PLAID residual decompression, and a fused D-side projection head —
 none of which `flash-maxsim` ships. `bench_flash_maxsim.py` also
-covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`) and pairwise
-(`Q[B, Lq, d] × D[B, Ld, d] → [B]`) forwards where LIK is +3 to +14%.
+covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +1 to
++13%) and pairwise (`Q[B, Lq, d] × D[B, Ld, d] → [B]`, within ±8%)
+forwards.
 
 ## Fused L2-normalize
 
@@ -192,12 +193,12 @@ the backward correctly applies the L2-norm Jacobian.
 
 | shape                                  | `F.normalize` + maxsim | fused    | speedup   | explicit peak | fused peak | mem ratio |
 | -------------------------------------- | ---------------------- | -------- | --------- | ------------- | ---------- | --------- |
-| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.463 ms               | 0.099 ms | 4.7×      |   368 MB      |   74 MB    | **5.0×**  |
-| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.465 ms               | 0.104 ms | **14.1×** |  1254 MB      |  250 MB    | **5.0×**  |
-| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.272 ms               | 0.102 ms | 2.7×      |    12 MB      |    3 MB    | **4.8×**  |
-| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.248 ms               | 0.090 ms | 2.8×      |    40 MB      |    8 MB    | **5.0×**  |
-| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.283 ms               | 0.132 ms | 2.1×      |   161 MB      |   32 MB    | **5.0×**  |
-| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.197 ms               | 0.285 ms | **14.7×** |  3674 MB      |  733 MB    | **5.0×**  |
+| text-short (`Nq=1, Nd=1k, Ld=300`)     | 0.673 ms               | 0.100 ms | 6.7×      |   368 MB      |   74 MB    | **5.0×**  |
+| text-long (`Nq=1, Nd=1k, Ld=1024`)     | 1.623 ms               | 0.099 ms | **16.4×** |  1254 MB      |  250 MB    | **5.0×**  |
+| bigbatch-300 (`Nq=32, Nd=32, Ld=300`)  | 0.441 ms               | 0.098 ms | 4.5×      |    12 MB      |    3 MB    | **4.7×**  |
+| bigbatch-2k (`Nq=8, Nd=16, Ld=2048`)   | 0.421 ms               | 0.075 ms | 5.6×      |    40 MB      |    8 MB    | **5.0×**  |
+| bigbatch-8k (`Nq=8, Nd=16, Ld=8192`)   | 0.590 ms               | 0.131 ms | 4.5×      |   161 MB      |   32 MB    | **5.0×**  |
+| corpus-10k (`Nq=1, Nd=10k, Ld=300`)    | 4.357 ms               | 0.284 ms | **15.3×** |  3674 MB      |  733 MB    | **5.0×**  |
 
 The explicit path writes a normalized copy of `D` to HBM and re-reads
 it during the matmul; the fused path streams the same data through
@@ -341,12 +342,12 @@ batches (e.g. `Nd ≥ 256` with `Ld = 128`).
 
 | shape                            | atomic | csr  | unified | auto | auto picks |
 | -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.60   | 0.78 | 0.46    | 0.50 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.51   | 0.70 | 0.54    | 0.54 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 1.78   | 1.17 | 1.62    | 1.17 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.59   | 0.77 | 0.77    | 0.77 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 0.87   | 0.78 | 0.45    | 0.45 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 0.81   | 0.78 | 1.25    | 1.25 | unified    |
+| `train-32` (32 × 32, Ld=128)     | 0.48   | 0.80 | 0.61    | 0.61 | unified    |
+| `train-128` (128 × 128, Ld=128)  | 0.65   | 0.76 | 0.57    | 0.58 | unified    |
+| `train-256` (256 × 256, Ld=128)  | 2.45   | 1.69 | 2.12    | 1.71 | **csr**    |
+| `retrieval` (16 × 512, Ld=300)   | 0.77   | 0.74 | 0.93    | 0.93 | unified    |
+| `long-Lq` (Lq=1024, Ld=64)       | 1.02   | 0.76 | 0.51    | 0.52 | unified    |
+| `huge-Nd` (16 × 1024, Ld=128)    | 1.18   | 1.00 | 1.46    | 1.46 | unified    |
 
 
 CSR is bitwise-reproducible across runs (no atomics); `atomic` /
@@ -387,14 +388,14 @@ is asserted before timing on every shape that fits in HBM:
 
 | shape                                     | fwd LIK | fwd naive | bwd LIK | bwd naive | peak LIK | peak naive |
 | ----------------------------------------- | ------- | --------- | ------- | --------- | -------- | ---------- |
-| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.09 ms | 0.15 ms   | 0.57 ms | 0.56 ms   |  96 MB   | 152 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.09 ms | 0.21 ms   | 0.44 ms | 0.58 ms   | 128 MB   | 240 MB     |
-| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.12**| 0.65      |**0.57** | 1.82      |**193 MB**|**672 MB**  |
-| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.10 ms | 0.24 ms   | 0.58 ms | 0.78 ms   | 320 MB   | 416 MB     |
-| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.14 ms | **OOM**   | 0.56 ms | **OOM**   | 192 MB   | OOM        |
-| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.57 ms | **OOM**   | 321 MB   | OOM        |
-| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.19 ms | **OOM**   | 1.56 ms | **OOM**   |  2.1 GB  | OOM        |
-| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 1.05 ms | **OOM**   | 576 MB   | OOM        |
+| `Nq=8, Nd=16, Lq=32, Ld=2048` train-2k    | 0.08 ms | 0.15 ms   | 0.65 ms | 0.64 ms   |  96 MB   | 152 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=4096` train-4k    | 0.09 ms | 0.21 ms   | 0.61 ms | 0.64 ms   | 128 MB   | 240 MB     |
+| `Nq=16,Nd=32, Lq=32, Ld=4096` bigbatch-4k | **0.12**| 0.65      |**0.54** | 1.82      |**193 MB**|**672 MB**  |
+| `Nq=1, Nd=64, Lq=32, Ld=4096` rerank-4k   | 0.09 ms | 0.24 ms   | 0.53 ms | 0.78 ms   | 320 MB   | 416 MB     |
+| `Nq=8, Nd=16, Lq=32, Ld=8192` train-8k    | 0.12 ms | **OOM**   | 0.43 ms | **OOM**   | 192 MB   | OOM        |
+| `Nq=16,Nd=32, Lq=32, Ld=8192` bigbatch-8k | 0.18 ms | **OOM**   | 0.44 ms | **OOM**   | 321 MB   | OOM        |
+| `Nq=1, Nd=256,Lq=32, Ld=8192` rerank-8k   | 0.18 ms | **OOM**   | 1.36 ms | **OOM**   |  2.1 GB  | OOM        |
+| `Nq=1, Nd=32, Lq=32, Ld=16384` huge-doc   | 0.13 ms | **OOM**   | 0.55 ms | **OOM**   | 576 MB   | OOM        |
 
 
 At `Ld ≥ 8k` naive OOMs on the `[Nq, Nd, Lq, Ld]` similarity scratch
@@ -429,18 +430,18 @@ trips on the pending-backward state pylate's loss leaves behind:
 
 | shape                          | tiles | vanilla fwd+bwd | `torch.compile` fwd+bwd | LIK fwd+bwd | LIK vs vanilla | LIK vs compile |
 | ------------------------------ | ----- | --------------- | ----------------------- | ----------- | -------------- | -------------- |
-| `bs=64, Ld=2048`               |   4   |   7.63 ms       |  25.85 ms               |   1.51 ms   | **5.04×**      | **17.07×**     |
-| `bs=64, Ld=4096`               |   4   |  14.68 ms       |  51.54 ms               |   2.66 ms   | **5.52×**      | **19.40×**     |
-| `bs=64, Ld=8192`               |   4   |  31.67 ms       | 101.93 ms               |   4.80 ms   | **6.60×**      | **21.25×**     |
-| `bs=128, Ld=2048`              |  16   |  31.37 ms       | 104.65 ms               |   5.96 ms   | **5.26×**      | **17.56×**     |
-| `bs=128, Ld=4096`              |  16   |  60.18 ms       | 207.61 ms               |  11.76 ms   | **5.12×**      | **17.65×**     |
-| `bs=128, Ld=8192`              |  16   | 130.01 ms       | 408.54 ms               |  21.84 ms   | **5.95×**      | **18.71×**     |
-| `bs=256, Ld=2048`              |  64   | 131.01 ms       | 424.31 ms               |  27.80 ms   | **4.71×**      | **15.26×**     |
-| `bs=256, Ld=4096`              |  64   | 252.46 ms       | 837.62 ms               |  49.87 ms   | **5.06×**      | **16.80×**     |
-| **`bs=256, Ld=8192`** (real recipe) | 64 | **545.10 ms** | **1676.17 ms**       | **93.41 ms**| **5.84×**      | **17.95×**     |
+| `bs=64, Ld=2048`               |   4   |   7.64 ms       |  25.98 ms               |   1.66 ms   | **4.62×**      | **15.70×**     |
+| `bs=64, Ld=4096`               |   4   |  14.67 ms       |  51.53 ms               |   2.65 ms   | **5.53×**      | **19.42×**     |
+| `bs=64, Ld=8192`               |   4   |  31.64 ms       | 101.87 ms               |   4.83 ms   | **6.55×**      | **21.07×**     |
+| `bs=128, Ld=2048`              |  16   |  31.33 ms       | 104.62 ms               |   5.83 ms   | **5.37×**      | **17.94×**     |
+| `bs=128, Ld=4096`              |  16   |  60.16 ms       | 207.56 ms               |  11.35 ms   | **5.30×**      | **18.29×**     |
+| `bs=128, Ld=8192`              |  16   | 129.87 ms       | 410.43 ms               |  21.19 ms   | **6.13×**      | **19.37×**     |
+| `bs=256, Ld=2048`              |  64   | 130.93 ms       | 424.63 ms               |  28.36 ms   | **4.62×**      | **14.98×**     |
+| `bs=256, Ld=4096`              |  64   | 252.13 ms       | 841.56 ms               |  50.43 ms   | **5.00×**      | **16.69×**     |
+| **`bs=256, Ld=8192`** (real recipe) | 64 | **542.00 ms** | **1664.39 ms**       | **93.85 ms**| **5.78×**      | **17.73×**     |
 
 
-LIK is a steady **5-6.5×** over vanilla and **15-21×** over the
+LIK is a steady **4.6-6.6×** over vanilla and **15-21×** over the
 compiled tile across the whole range, with the win growing with `Ld`.
 The vs-`torch.compile` gap widened in 0.3.0: compile now recompiles
 every fresh tile shape *and* trips the cuda-graph fast path on the
@@ -521,12 +522,12 @@ fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
 
 | shape                                       | fused    | naive (fp32) | speedup   | fused mem | naive mem |
 | ------------------------------------------- | -------- | ------------ | --------- | --------- | --------- |
-| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.116 ms | 0.397 ms     | **3.4×**  | 0.0 MB    | 314 MB    |
-| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.491 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
-| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.050 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
-| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.253 ms | 3.039 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=1 024, d=48` | 0.106 ms | 0.397 ms     | **3.8×**  | 0.0 MB    | 314 MB    |
+| LateOn-Code-edge `Nd=1 000, Ld=4 096, d=48` | 0.135 ms | 1.490 ms     | **11.0×** | 0.0 MB    | 1.2 GB    |
+| LateOn-Code-edge `Nd=1 000, Ld=8 192, d=48` | 0.262 ms | 3.039 ms     | **11.6×** | 0.0 MB    | 2.5 GB    |
+| LateOn-Code-edge `Nd=16 000, Ld=512, d=48`  | 0.254 ms | 3.036 ms     | **12.0×** | 0.1 MB    | 2.5 GB    |
 | mxbai-edge `Nd=1 000, Ld=4 096, d=64`       | 0.172 ms | 1.754 ms     | **10.2×** | 0.0 MB    | 1.5 GB    |
-| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.332 ms | 3.577 ms     | **10.8×** | 0.1 MB    | 3.0 GB    |
+| mxbai-edge `Nd=16 000, Ld=512, d=64`        | 0.331 ms | 3.565 ms     | **10.8×** | 0.1 MB    | 3.0 GB    |
 
 
 ## Where this kernel actually moves the e2e needle

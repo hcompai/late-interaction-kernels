@@ -103,6 +103,79 @@ def test_fused_head_backward_matches_unfused(need_grads):
         assert rel < 2e-2, f"{name} rel_rms={rel:.3e}"
 
 
+def test_fused_head_fully_masked_doc_leaks_no_grad_reference():
+    """Spec lock (CPU): a fully d-masked doc must leak no gradient.
+
+    Such a doc scores a constant 0 for every query (max over an empty set,
+    clamped to 0), so its contribution to any loss is a constant — gradients
+    w.r.t. ``Q`` / ``H_d`` / ``W`` / ``b`` must be unchanged whether or not it
+    is summed into the loss. This pins the contract the fused kernel enforces
+    on GPU via the ``-1`` argmax sentinel; without it the kernel gathers a
+    stale index-0 winner and leaks a spurious gradient.
+    """
+    torch.manual_seed(0)
+    Nq, Nd, Lq, Ld, d_model, d_out = 2, 3, 6, 8, 32, 16
+    Q = torch.nn.functional.normalize(torch.randn(Nq, Lq, d_out), dim=-1).requires_grad_(True)
+    H_d = torch.randn(Nd, Ld, d_model, requires_grad=True)
+    W = (torch.randn(d_out, d_model) / d_model**0.5).requires_grad_(True)
+    b = (torch.randn(d_out) * 0.01).requires_grad_(True)
+    d_mask = torch.ones(Nd, Ld, dtype=torch.bool)
+    d_mask[1] = False  # doc 1 fully masked out of the max
+
+    scores = _unfused_reference(Q, H_d, W, b, normalize=True, d_mask=d_mask)
+    assert torch.allclose(scores[:, 1], torch.zeros(Nq))
+
+    inputs = [Q, H_d, W, b]
+    g_all = torch.autograd.grad(scores.sum(), inputs, retain_graph=True)
+    g_keep = torch.autograd.grad(scores[:, [0, 2]].sum(), inputs)
+    for full, keep in zip(g_all, g_keep, strict=True):
+        torch.testing.assert_close(full, keep, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.cuda
+def test_fused_head_backward_fully_masked_doc_matches_unfused():
+    """A fully d-masked doc must match the unfused path's (zero) gradient.
+
+    Regression guard for the ``-1`` argmax sentinel: before it, the kernel's
+    backward gathered ``H_d`` at a stale index-0 winner for the masked doc and
+    leaked a spurious gradient into ``Q`` / ``H_d`` / ``W`` / ``b``.
+    """
+    from late_interaction_kernels.fused_head import maxsim_from_hidden
+
+    Nq, Nd, Lq, Ld, d_model, d_out = 2, 4, 16, 32, 128, 64
+    dtype = torch.float32
+
+    def _make():
+        H_d = torch.randn(Nd, Ld, d_model, device="cuda", dtype=dtype, requires_grad=True)
+        W = (torch.randn(d_out, d_model, device="cuda", dtype=dtype) / d_model**0.5).requires_grad_(True)
+        b = (torch.randn(d_out, device="cuda", dtype=dtype) * 0.01).requires_grad_(True)
+        Q = (
+            torch.nn.functional.normalize(torch.randn(Nq, Lq, d_out, device="cuda", dtype=dtype), dim=-1)
+            .clone()
+            .requires_grad_(True)
+        )
+        return Q, H_d, W, b
+
+    d_mask = torch.ones(Nd, Ld, dtype=torch.bool, device="cuda")
+    d_mask[1] = False  # doc 1 fully masked
+
+    torch.manual_seed(0)
+    Q, H_d, W, b = _make()
+    maxsim_from_hidden(Q, H_d, W, b=b, d_mask=d_mask, normalize=True).sum().backward()
+    g_fused = {"Q": Q.grad, "H_d": H_d.grad, "W": W.grad, "b": b.grad}
+
+    torch.manual_seed(0)
+    Q2, H_d2, W2, b2 = _make()
+    _unfused_reference(Q2, H_d2, W2, b2, normalize=True, d_mask=d_mask).sum().backward()
+    g_ref = {"Q": Q2.grad, "H_d": H_d2.grad, "W": W2.grad, "b": b2.grad}
+
+    for name in ("Q", "H_d", "W", "b"):
+        a_f, r_f = g_fused[name].float(), g_ref[name].float()
+        rmse = (a_f - r_f).pow(2).mean().sqrt().item()
+        rms_ref = r_f.pow(2).mean().sqrt().clamp_min(1e-6).item()
+        assert rmse / rms_ref < 2e-2, f"{name} rel_rms={rmse / rms_ref:.3e}"
+
+
 @pytest.mark.cuda
 def test_fused_head_only_active_grads_filled():
     """If a tensor doesn't require grad we must not silently allocate for it."""

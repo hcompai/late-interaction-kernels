@@ -420,6 +420,19 @@ def _maxsim_residual_forward(
     codes = codes.contiguous().to(torch.int64)
     residuals = residuals.contiguous().to(torch.uint8)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
+    # A zero-length document has no MaxSim winner. Inference (save_argmax=False)
+    # handles that fine — it scores the doc 0 — but the training backward gathers
+    # the reconstructed embedding at the saved argmax, and an empty doc leaves a
+    # stale index-0 winner that would leak a spurious gradient into grad_Q. There
+    # is no correct gradient to return, so reject it up front rather than emit a
+    # silently-wrong one. (One D2H sync; only on the autograd path.)
+    if save_argmax and bool((doc_lengths < 1).any()):
+        raise ValueError(
+            "maxsim_residual backward does not support zero-length documents; "
+            "every doc must have >= 1 token. Filter empty docs out before "
+            "training, or score them with the inference path (no requires_grad), "
+            "which returns 0 for an empty doc."
+        )
     # Centroids can stay in fp16 / bf16: the kernel casts to fp32 in registers
     # after the load. Forcing fp32 would double the centroid bandwidth (and
     # fast-plaid stores centroids as fp16 on disk anyway).

@@ -23,7 +23,7 @@ import re
 
 import triton
 
-from late_interaction_kernels._utils import detect_gpu
+from late_interaction_kernels._utils import detect_gpu, next_pow2
 
 # Persistent on-disk best-config cache landed in Triton 3.4 (the ``cache_results``
 # kwarg on ``triton.autotune``). On older Triton the kwarg doesn't exist and
@@ -125,7 +125,10 @@ def forward_configs():
 def prune_forward(configs, named_args, **kwargs):
     """Drop configs that overflow shared memory or are oversized for the problem."""
     Lq = named_args.get("Lq", 32)
-    d = named_args.get("d", 128)
+    # The kernel tiles on the padded embedding dim (`d_pad = next_pow2(d)`), so
+    # the SMEM estimate must use d_pad too — keying on raw d underestimates by
+    # up to ~2x for non-power-of-2 d and admits configs that OOM at launch.
+    d_pad = named_args.get("d_pad") or next_pow2(named_args.get("d", 128))
     gpu = detect_gpu()
     # Reserve 8 KiB for Triton scratch; the rest is ours.
     sram_budget = (_SRAM_KIB_BY_FAMILY.get(gpu, 48) - 8) * 1024
@@ -135,7 +138,7 @@ def prune_forward(configs, named_args, **kwargs):
         bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
         # Triton allocates num_stages copies of Q/D in SMEM for the
         # async-copy pipeline; the fp32 S accumulator stays in one slot.
-        need = (bq * d + bd * d) * 2 * cfg.num_stages + bq * bd * 4
+        need = (bq * d_pad + bd * d_pad) * 2 * cfg.num_stages + bq * bd * 4
         if need > sram_budget:
             continue
         if bq > 2 * Lq:
