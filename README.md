@@ -134,10 +134,7 @@ is asserted at `atol=1e-2` before timing.
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.00-1.06× e2e     |
 
-`torch.compile` is within ±5% of eager on every forward shape because
-Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity
-tensor before the `max(-1)` reduction — that materialisation *is* what
-the fused kernel exists to skip. Full tables and reproduction commands
+Full tables and reproduction commands
 live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench
 scripts themselves are organised — CLI conventions (`--only`,
 `--variants`), per-script summaries, and how to run one bench, the
