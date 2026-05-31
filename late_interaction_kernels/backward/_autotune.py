@@ -13,6 +13,18 @@ ColPali ``Lq=1024``), ``d_pad``, and the layout flags. ``Nd`` / ``Ld`` stay
 out of the key so the cache holds one entry per regime instead of one per
 batch size — the chosen ``num_warps`` is stable across ``Nd`` within a
 regime.
+
+Caveat: this shared key is the weakest fit for the CSR ``grad_D`` kernel,
+whose per-program work is the bucket size ``≈ Nq·Lq/Ld`` (which ``Lq`` alone
+doesn't capture), so a single config spanning a range of ``Ld`` may leave a
+few percent on the table there. Correctness is unaffected — every config in
+``BWD_CONFIGS`` computes the same gradient — so a stale-but-suboptimal config
+is only ever a perf question, never a correctness one.
+
+``reset_to_zero`` (used by the atomic-accumulating kernels at their decoration
+sites) is needed so the autotuner's *benchmark trials* don't atomic-add onto
+each other; in steady state every launcher allocates a fresh ``torch.zeros``
+grad_D, so correctness on cache hits never depends on Triton's reset behaviour.
 """
 
 try:
