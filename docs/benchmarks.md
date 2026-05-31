@@ -23,6 +23,9 @@ python benchmarks/bench_forward.py
 python benchmarks/bench_backward_method.py
 python benchmarks/bench_backward_unified.py
 
+# full training step (forward + backward): speed + peak memory
+python benchmarks/bench_training.py
+
 # LateOn / LateOn-Code / ModernColBERT long-document regime
 python benchmarks/bench_lateon.py
 
@@ -356,6 +359,17 @@ hand-picked `atomic` path beats `auto`'s `unified` choice
 (`retrieval`, `huge-Nd`); the heuristic favours the more general
 `unified` path because it generalises across batch sizes and document
 lengths without an autotune step.
+
+**Autotuned launch params.** Each backward kernel is one program per
+output row streaming a single `d_pad` vector through a doc/bucket loop —
+no block tiling to sweep, so the only useful knob is `(num_warps,
+num_stages)`. The stock launch (`num_warps=4`) over-subscribes these
+narrow programs; tuning it (the optimum sits at 1–2 warps on H100) is
+worth **1.3–1.7×** on the unified path and up to **1.6×** on the CSR
+`grad_D` reduction. The autotune key mirrors the forward one (`Lq`,
+`d_pad`, layout flags), so the cache stays at one entry per regime
+rather than one per batch size. End-to-end training (forward +
+backward, `bench_training.py`) is measured against flash.
 
 ```python
 # Per-call (recommended):

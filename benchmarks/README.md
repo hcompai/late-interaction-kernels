@@ -36,6 +36,7 @@ choices accepted by `--only`.
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
 | `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `csr` vs `atomic` vs naive. |
 | `bench_backward_unified.py` | Backward-only timing of the unified kernel vs two-pass paths. |
+| `bench_training.py` | Full training step (forward + backward) speed and peak memory, with flash as an external reference. |
 | `bench_backward_0_5.py` | Fused `maxsim_residual` / `maxsim_varlen` backward vs "unpack + autograd". |
 | `bench_lateon.py` | LateOn / LateOn-Code shapes (Ld up to 16 384, d=128). |
 | `bench_compile_cache.py` | Cold-pass autotune cost across 18 distinct `Ld` values. |

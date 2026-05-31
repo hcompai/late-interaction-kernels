@@ -5,8 +5,9 @@ full ``maxsim`` forward + ``.backward()`` with a ones upstream gradient, then
 peak allocated memory for the same step. flash-maxsim is the external
 reference point.
 
-  sky exec lik-invest --gpus H100:1 \
-    "cd ~/sky_workdir && source .venv/bin/activate && python benchmarks/bench_training.py"
+Usage::
+
+    python benchmarks/bench_training.py
 """
 
 import statistics
