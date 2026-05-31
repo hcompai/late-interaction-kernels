@@ -141,6 +141,25 @@ scripts themselves are organised — CLI conventions (`--only`,
 whole sweep, or a `RUN_ONLY`-filtered subset on a SkyPilot cluster —
 see [`benchmarks/README.md`](benchmarks/README.md).
 
+## Memory
+
+The speedups are only half the story. The naive einsum allocates the full
+`[Nq · Nd · Lq · Ld]` similarity tensor as fp32 scratch before the
+`max(-1)` reduction. The fused kernel never writes it: document tiles
+stream through SRAM and only the `[Nq, Nd]` scores come back, plus a
+`[Nq · Nd, Lq]` int32 argmax buffer when training.
+
+| shape                                     | naive scratch | fused fwd | fused fwd + bwd |
+| ----------------------------------------- | ------------- | --------- | --------------- |
+| `Nq=1, Nd=1k, Lq=32, Ld=300`              | 183 MB        | 4 KB      | 128 KB          |
+| `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali) | 4.5 GB        | 4 KB      | 4 MB            |
+| `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 64 KB     | 64 KB           |
+
+Two things this buys you: long-context shapes (`Ld ≥ 8k`) that OOM the
+naive path at sane batch sizes run fine here, and at a fixed HBM budget
+you fit roughly 5–10× more in-batch negatives than vanilla PyLate. Full
+table in [`docs/benchmarks.md`](docs/benchmarks.md#memory).
+
 ## Choose a kernel
 
 <table>
