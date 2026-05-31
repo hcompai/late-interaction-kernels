@@ -55,7 +55,6 @@ def quantize_fp8_per_token(
     """
     amax = X.abs().amax(dim=-1, keepdim=False).clamp_min(1e-6).to(torch.float32)
     scale = amax / _FP8_E4M3_MAX
-    # Broadcast along the last axis
     X_fp8 = (X.to(torch.float32) / scale.unsqueeze(-1)).clamp(-_FP8_E4M3_MAX, _FP8_E4M3_MAX).to(dtype)
     return X_fp8.contiguous(), scale
 
@@ -119,8 +118,8 @@ if _HAS_TRITON:
         q_idx = pid // Nd
         d_idx = pid % Nd
 
-        k_off = tl.arange(0, d_pad)
-        k_mask = k_off < d
+        emb_off = tl.arange(0, d_pad)
+        emb_mask = emb_off < d
 
         score_acc = tl.zeros([], dtype=tl.float32)
 
@@ -129,20 +128,20 @@ if _HAS_TRITON:
             q_valid = q_off < Lq
 
             if has_q_mask:
-                qm = tl.load(
+                q_mask_val = tl.load(
                     q_mask_ptr + q_idx * stride_qm_n + q_off * stride_qm_l,
                     mask=q_valid,
                     other=0,
                 ).to(tl.int1)
-                q_active = q_valid & qm
+                q_active = q_valid & q_mask_val
             else:
                 q_active = q_valid
 
             # Load Q tile in fp8. Triton's tl.dot natively supports fp8
             # operands on Hopper+ with an fp32 accumulator.
             Q_block = tl.load(
-                Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
-                mask=q_valid[:, None] & k_mask[None, :],
+                Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + emb_off[None, :] * stride_q_d,
+                mask=q_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             )
 
@@ -163,18 +162,18 @@ if _HAS_TRITON:
                 d_valid = d_off < Ld
 
                 if has_d_mask:
-                    dm = tl.load(
+                    d_mask_val = tl.load(
                         d_mask_ptr + d_idx * stride_dm_n + d_off * stride_dm_l,
                         mask=d_valid,
                         other=0,
                     ).to(tl.int1)
-                    d_active = d_valid & dm
+                    d_active = d_valid & d_mask_val
                 else:
                     d_active = d_valid
 
                 D_block = tl.load(
-                    D_ptr + d_idx * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
-                    mask=d_valid[:, None] & k_mask[None, :],
+                    D_ptr + d_idx * stride_d_n + d_off[:, None] * stride_d_l + emb_off[None, :] * stride_d_d,
+                    mask=d_valid[:, None] & emb_mask[None, :],
                     other=0.0,
                 )
 

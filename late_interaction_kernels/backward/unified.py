@@ -50,10 +50,10 @@ def maxsim_backward_unified_reference(
     Qf = Q.to(torch.float32)
     Df = D.to(torch.float32)
 
-    am = argmax.view(Nq, Nd, Lq).long()  # [Nq, Nd, Lq]
-    # Gather winning D rows:  D_win[i, j, q] = D[j, argmax[i, j, q]]
+    m_idx = argmax.view(Nq, Nd, Lq).long()  # [Nq, Nd, Lq]
+    # D_win[i, j, q] = D[j, argmax[i, j, q]]
     j_idx = torch.arange(Nd, device=D.device).view(1, Nd, 1).expand(Nq, Nd, Lq)
-    D_win = Df[j_idx, am]  # [Nq, Nd, Lq, d]
+    D_win = Df[j_idx, m_idx]  # [Nq, Nd, Lq, d]
 
     if q_mask is not None:
         m = q_mask.to(torch.bool).view(Nq, 1, Lq, 1)  # broadcast mask
@@ -75,11 +75,10 @@ def maxsim_backward_unified_reference(
     grad_D = torch.zeros(Nd, Ld, d, device=D.device, dtype=torch.float32)
     # Flatten (i, j, q) → assemble indices and index_add_ per-j to avoid
     # a giant scatter. On GPU this reference is slow-but-correct.
-    for j in range(Nd):
-        am_j = am[:, j, :]  # [Nq, Lq]
-        cont = contrib_d[:, j, :, :]  # [Nq, Lq, d]
-        # grad_D[j].index_add_(0, am_j.flatten(), cont.reshape(-1, d))
-        grad_D[j].index_add_(0, am_j.reshape(-1), cont.reshape(-1, d))
+    for d_idx in range(Nd):
+        m_idx_j = m_idx[:, d_idx, :]  # [Nq, Lq]
+        contrib_slice = contrib_d[:, d_idx, :, :]  # [Nq, Lq, d]
+        grad_D[d_idx].index_add_(0, m_idx_j.reshape(-1), contrib_slice.reshape(-1, d))
 
     return grad_Q.to(Q.dtype), grad_D.to(D.dtype)
 
@@ -130,24 +129,24 @@ if _HAS_TRITON:
         kd_layout: tl.constexpr,
     ):
         pid = tl.program_id(0)
-        i = pid // Lq
+        q_idx = pid // Lq
         s = pid % Lq
 
-        k = tl.arange(0, d_pad)
-        km = k < d
+        emb_off = tl.arange(0, d_pad)
+        emb_mask = emb_off < d
 
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + i * stride_qm_n + s * stride_qm_l).to(tl.int1)
-            q_active = qm != 0
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
 
         # Always zero the grad_Q row (masked rows must produce zeros, not
         # leftover garbage from a previous launch).
         if not q_active:
             tl.store(
-                grad_Q_ptr + i * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+                grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
                 tl.zeros([d_pad], dtype=tl.float32),
-                mask=km,
+                mask=emb_mask,
             )
             return
 
@@ -155,45 +154,45 @@ if _HAS_TRITON:
         # atomic_add into grad_D. This is the single biggest HBM win
         # vs the two-pass backward.
         qv = tl.load(
-            Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
-            mask=km,
+            Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
+            mask=emb_mask,
             other=0.0,
         ).to(tl.float32)
 
         acc_Q = tl.zeros([d_pad], dtype=tl.float32)
 
-        for j in range(0, Nd):
-            gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
-            t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
+        for d_idx in range(0, Nd):
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+            t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq).to(tl.int32)
             # Cross-product: all queries share D[j, :]. KD/pairs: query i
             # owns its slab so the global doc index is i*Nd + j (= the
             # same value that produced this argmax row in the forward).
             if kd_layout:
-                d_global = i * Nd + j
+                d_global = q_idx * Nd + d_idx
             else:
-                d_global = j
+                d_global = d_idx
             # `t == -1` sentinel: forward saw no active doc for this (i, j, s)
             # row — skip the load + atomic-add so we don't poison
             # `grad_D[d_global, 0, :]`.
             if t >= 0:
                 dv = tl.load(
-                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                    mask=km,
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
 
                 acc_Q += gs * dv
 
                 tl.atomic_add(
-                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
         tl.store(
-            grad_Q_ptr + i * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+            grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
             acc_Q,
-            mask=km,
+            mask=emb_mask,
         )
 
 

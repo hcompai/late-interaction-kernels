@@ -58,37 +58,37 @@ def _bwd_dQ_kernel(
     q_idx = pid // Lq
     s = pid % Lq
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
     q_active = True
     if has_q_mask:
-        qm = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
-        q_active = qm != 0
+        q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+        q_active = q_mask_val != 0
 
     if q_active:
-        for j in range(0, Nd):
-            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
-            t = tl.load(argmax_ptr + (q_idx * Nd + j) * stride_a_pair + s * stride_a_lq)
+        for d_idx in range(0, Nd):
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+            t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq)
             t = t.to(tl.int32)
             if kd_layout:
-                d_global = q_idx * Nd + j
+                d_global = q_idx * Nd + d_idx
             else:
-                d_global = j
+                d_global = d_idx
             # `t == -1` sentinel: forward had no active doc for this (q, j, s).
             if t >= 0:
-                v = tl.load(
-                    D_ptr + d_global * stride_d_n + t * stride_d_l + k * stride_d_k,
-                    mask=km,
+                dv = tl.load(
+                    D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
-                acc += gs * v
+                acc += gs * dv
 
     tl.store(
-        grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + k * stride_gq_k,
+        grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
         acc,
-        mask=km,
+        mask=emb_mask,
     )
 
 
@@ -125,40 +125,39 @@ def _bwd_dD_kernel(
     kd_layout: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    i = pid // Nd
-    j = pid % Nd
+    q_idx = pid // Nd
+    d_idx = pid % Nd
 
-    gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+    gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     if kd_layout:
-        d_global = i * Nd + j
+        d_global = q_idx * Nd + d_idx
     else:
-        d_global = j
+        d_global = d_idx
 
-    # One query-token at a time (Lq is tiny). For each s, read Q[i, s, :],
-    # the winner index t = argmax[i, j, s], and atomic-add gs * Q[i, s, :]
-    # into grad_D[d_global, t, :].
+    # Scalar loop over query tokens: Lq is tiny, so vectorizing the scatter
+    # buys nothing and complicates the per-s argmax/atomic_add.
     for s in range(0, Lq):
         q_active = True
         if has_q_mask:
-            qm = tl.load(q_mask_ptr + i * stride_qm_n + s * stride_qm_l).to(tl.int1)
-            q_active = qm != 0
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
         if q_active:
-            t = tl.load(argmax_ptr + (i * Nd + j) * stride_a_pair + s * stride_a_lq).to(tl.int32)
+            t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq).to(tl.int32)
             # `t == -1` sentinel: forward had no active doc for this (i, j, s).
             if t >= 0:
                 qv = tl.load(
-                    Q_ptr + i * stride_q_n + s * stride_q_l + k * stride_q_k,
-                    mask=km,
+                    Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
                 tl.atomic_add(
-                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + k * stride_gd_k,
+                    grad_D_ptr + d_global * stride_gd_n + t * stride_gd_l + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
 

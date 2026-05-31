@@ -351,7 +351,7 @@ def maxsim_inference_metal(
 
     Q, D, q_mask, d_mask, kd_layout, q_was_2d, d_was_2d = _prepare_inputs(Q, D, q_mask, d_mask)
     Nq, Lq, d = Q.shape
-    n_axis, Ld, _ = D.shape
+    n_axis, Ld, _ = D.shape  # n_axis = Nd in cross-product, Nq*K in KD layout
     Nd = n_axis // Nq if kd_layout else n_axis
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
@@ -361,7 +361,7 @@ def maxsim_inference_metal(
 
     flags, q_mask_i8, d_mask_i8 = _prepare_flags_and_masks(q_mask, d_mask, normalize, kd_layout)
 
-    out = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
+    scores = torch.empty(Nq, Nd, device="mps", dtype=torch.float32)
     params = _pack_params(Nq, Nd, Lq, Ld, d, flags)
 
     j_blocks = (Nd + j_per_tg - 1) // j_per_tg
@@ -372,21 +372,21 @@ def maxsim_inference_metal(
         D,
         q_mask_i8,
         d_mask_i8,
-        out,
+        scores,
         params,
         threads=(Nq, j_blocks, _THREADS_PER_GROUP),
         group_size=(1, 1, _THREADS_PER_GROUP),
     )
 
     if kd_layout:
-        return out
+        return scores
     if q_was_2d and d_was_2d:
-        return out.reshape(())
+        return scores.reshape(())
     if q_was_2d:
-        return out.squeeze(0)
+        return scores.squeeze(0)
     if d_was_2d:
-        return out.squeeze(-1)
-    return out
+        return scores.squeeze(-1)
+    return scores
 
 
 class MaxSimFwdCtx(NamedTuple):
@@ -428,7 +428,7 @@ def maxsim_train_metal(
     if q_was_2d or d_was_2d:
         raise ValueError("maxsim_train_metal needs batched (3-D Q, 3-D or 4-D D); reshape upstream.")
     Nq, Lq, d = Q.shape
-    n_axis, Ld, _ = D.shape
+    n_axis, Ld, _ = D.shape  # n_axis = Nd in cross-product, Nq*K in KD layout
     Nd = n_axis // Nq if kd_layout else n_axis
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal path supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
@@ -518,8 +518,8 @@ def maxsim_backward_metal(
         if kd_layout is False:
             raise ValueError("Got 4-D D but kd_layout=False; pass kd_layout=True or omit the flag.")
         kd_layout = True
-        Nq_d, K, Ld_4d, d_4d = D.shape
-        D = D.contiguous().view(Nq_d * K, Ld_4d, d_4d)
+        Nq_in, K, Ld_in, d_in = D.shape
+        D = D.contiguous().view(Nq_in * K, Ld_in, d_in)
     elif kd_layout is None:
         kd_layout = False
 
@@ -529,9 +529,9 @@ def maxsim_backward_metal(
     argmax = argmax.contiguous()
 
     Nq, Lq, d = Q.shape
-    n_axis, Ld, d_d = D.shape
-    if d_d != d:
-        raise ValueError(f"Q and D must share the embedding dim; got {d} vs {d_d}.")
+    n_axis, Ld, d_doc = D.shape
+    if d_doc != d:
+        raise ValueError(f"Q and D must share the embedding dim; got {d} vs {d_doc}.")
     if d > _D_MAX or d % _BLOCK_K != 0:
         raise RuntimeError(f"Metal backward supports d ≤ {_D_MAX} and d %% {_BLOCK_K} == 0; got d={d}.")
     Nd = n_axis // Nq if kd_layout else n_axis

@@ -117,11 +117,11 @@ def patched_score_multi_vector(qs, ps, batch_size: int = 128, device=None):
 
 
 def _patched_inbatch_scores(self, Q: torch.Tensor, D: torch.Tensor) -> torch.Tensor | None:
-    """Replacement for the ``einsum + amax + sum + normalize`` triplet shared
+    """Replacement for the ``einsum + amax + sum + normalize`` sequence shared
     by every ``ColbertModule`` in-batch forward.
 
     Returns ``None`` when we can't accelerate (``use_smooth_max``,
-    ``LIK_DISABLE``, mixed devices, …) and the caller must fall through to
+    ``LIK_DISABLE``, mixed devices, …); the caller must then fall through to
     the original ``forward``.
     """
     if self.use_smooth_max:

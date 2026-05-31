@@ -64,13 +64,11 @@ def _plaid_approx_score_kernel(
         # Clamp to valid centroid range so the gather never reads out of bounds.
         codes = tl.where(codes < n_centroids, codes, 0)
 
-        # Gather [BLOCK_D, Lq] scores from query_centroid_scores.
         tile = tl.load(
             qcs_ptr + codes[:, None] * stride_qcs_c + q_off[None, :] * stride_qcs_l,
             mask=d_valid[:, None] & q_valid[None, :],
             other=float("-inf"),
         )
-        # Mask out invalid doc positions.
         tile = tl.where(d_valid[:, None], tile, float("-inf"))
         m = tl.maximum(m, tl.max(tile, axis=0))
 
@@ -204,18 +202,15 @@ def _maxsim_residual_kernel(
     d_idx = pid % Nd
     doc_len = tl.load(doc_len_ptr + d_idx)
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
-    # --- Load one query row tile at a time, but reuse doc emb per d-tile.
     score_acc = tl.zeros([], dtype=tl.float32)
 
-    # Pre-compute which bytes each feature dim comes from. nbits is a constexpr.
-    # feature f -> byte index = f // codes_per_byte, slot = f % codes_per_byte.
-    byte_idx = (k_off // codes_per_byte).to(tl.int32)
-    slot_idx = (k_off % codes_per_byte).to(tl.int32)
-    # Mask to extract one code per feature from the byte.
-    # shift = slot_idx * nbits ; code = (byte >> shift) & ((1 << nbits) - 1)
+    # Map each feature to its packed location: byte byte_idx[f], bit slot slot_idx[f].
+    # Extraction is then code = (byte >> shift[f]) & ((1 << nbits) - 1).
+    byte_idx = (emb_off // codes_per_byte).to(tl.int32)
+    slot_idx = (emb_off % codes_per_byte).to(tl.int32)
     shift = (slot_idx * nbits).to(tl.int32)
     code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
 
@@ -223,62 +218,59 @@ def _maxsim_residual_kernel(
         q_off = q_start + tl.arange(0, BLOCK_Q)
         q_valid = q_off < Lq
         Qf = tl.load(
-            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + emb_off[None, :] * stride_q_d,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(tl.float32)
         if normalize:
-            qn = tl.sum(Qf * Qf, axis=1)
-            qinv = 1.0 / tl.sqrt(tl.maximum(qn, 1e-12))
-            Qf = Qf * qinv[:, None]
+            q_norm_sq = tl.sum(Qf * Qf, axis=1)
+            q_inv_norm = 1.0 / tl.sqrt(tl.maximum(q_norm_sq, 1e-12))
+            Qf = Qf * q_inv_norm[:, None]
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
         if SAVE_ARGMAX:
-            am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+            m_idx = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
             d_valid = d_off < doc_len
 
-            # Load and gather centroid rows.
             cent_codes = tl.load(
                 codes_ptr + d_idx * stride_codes_n + d_off * stride_codes_l,
                 mask=d_valid,
                 other=0,
             ).to(tl.int32)
             cent = tl.load(
-                centroids_ptr + cent_codes[:, None] * stride_cent_c + k_off[None, :] * stride_cent_d,
-                mask=d_valid[:, None] & k_mask[None, :],
+                centroids_ptr + cent_codes[:, None] * stride_cent_c + emb_off[None, :] * stride_cent_d,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
 
-            # Load packed residual bytes for this tile, expand to per-feature codes.
-            # For each (d-token, feature), we index into bytes at position byte_idx[f].
-            # BLOCK_D × d_pad uint8 load.
+            # Each feature reads its source byte at byte_idx[f], then extracts
+            # its bucket code from the bit slot; see the shift/code_mask setup above.
             byte_vals = tl.load(
                 residuals_ptr
                 + d_idx * stride_res_n
                 + d_off[:, None] * stride_res_l
                 + byte_idx[None, :] * stride_res_p,
-                mask=d_valid[:, None] & k_mask[None, :],
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0,
             ).to(tl.int32)
             bucket_codes = (byte_vals >> shift[None, :]) & code_mask[None, :]
 
-            # Gather bucket weights.
             bucket_vals = tl.load(
                 bucket_weights_ptr + bucket_codes,
-                mask=d_valid[:, None] & k_mask[None, :],
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
 
             emb = cent + bucket_vals
 
             if normalize:
-                en = tl.sum(emb * emb, axis=1)
-                einv = tl.rsqrt(tl.maximum(en, 1e-12))
-                emb = emb * einv[:, None]
+                emb_norm_sq = tl.sum(emb * emb, axis=1)
+                emb_inv_norm = tl.rsqrt(tl.maximum(emb_norm_sq, 1e-12))
+                emb = emb * emb_inv_norm[:, None]
 
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
@@ -287,7 +279,7 @@ def _maxsim_residual_kernel(
             if SAVE_ARGMAX:
                 tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
                 update = tile_max > m
-                am = tl.where(update, tile_arg, am)
+                m_idx = tl.where(update, tile_arg, m_idx)
             m = tl.maximum(m, tile_max)
 
         m_finite = m != float("-inf")
@@ -297,10 +289,10 @@ def _maxsim_residual_kernel(
         if SAVE_ARGMAX:
             # Clamp argmax for invalid query tokens to 0 so the backward's load
             # is always in-bounds (the q_mask/length guard will zero the grad anyway).
-            am_safe = tl.where(q_valid, am, 0)
+            m_idx_safe = tl.where(q_valid, m_idx, 0)
             tl.store(
                 argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
-                am_safe,
+                m_idx_safe,
                 mask=q_valid,
             )
 
@@ -358,50 +350,50 @@ def _maxsim_residual_bwd_dQ_kernel(
     q_idx = pid // Lq
     s = pid % Lq
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
-    byte_idx = (k_off // codes_per_byte).to(tl.int32)
-    slot_idx = (k_off % codes_per_byte).to(tl.int32)
+    byte_idx = (emb_off // codes_per_byte).to(tl.int32)
+    slot_idx = (emb_off % codes_per_byte).to(tl.int32)
     shift = (slot_idx * nbits).to(tl.int32)
     code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
 
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
-    for j in range(0, Nd):
-        gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
-        t = tl.load(argmax_ptr + q_idx * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+    for d_idx in range(0, Nd):
+        gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+        t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
 
-        cent_code = tl.load(codes_ptr + j * stride_codes_n + t * stride_codes_l).to(tl.int32)
+        cent_code = tl.load(codes_ptr + d_idx * stride_codes_n + t * stride_codes_l).to(tl.int32)
         cent = tl.load(
-            centroids_ptr + cent_code * stride_cent_c + k_off * stride_cent_d,
-            mask=k_mask,
+            centroids_ptr + cent_code * stride_cent_c + emb_off * stride_cent_d,
+            mask=emb_mask,
             other=0.0,
         ).to(tl.float32)
         byte_vals = tl.load(
-            residuals_ptr + j * stride_res_n + t * stride_res_l + byte_idx * stride_res_p,
-            mask=k_mask,
+            residuals_ptr + d_idx * stride_res_n + t * stride_res_l + byte_idx * stride_res_p,
+            mask=emb_mask,
             other=0,
         ).to(tl.int32)
         bucket_codes = (byte_vals >> shift) & code_mask
         bucket_vals = tl.load(
             bucket_weights_ptr + bucket_codes,
-            mask=k_mask,
+            mask=emb_mask,
             other=0.0,
         ).to(tl.float32)
         emb = cent + bucket_vals
 
         if normalize:
-            en = tl.sum(emb * emb)
-            einv = 1.0 / tl.sqrt(tl.maximum(en, 1e-12))
-            emb = emb * einv
+            emb_norm_sq = tl.sum(emb * emb)
+            emb_inv_norm = 1.0 / tl.sqrt(tl.maximum(emb_norm_sq, 1e-12))
+            emb = emb * emb_inv_norm
 
         acc += gs * emb
 
     tl.store(
-        grad_Qhat_ptr + q_idx * stride_gq_n + s * stride_gq_l + k_off * stride_gq_k,
+        grad_Qhat_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
         acc,
-        mask=k_mask,
+        mask=emb_mask,
     )
 
 
@@ -718,13 +710,13 @@ def _maxsim_residual_varlen_kernel(
     d_hi = tl.load(cu_seqlens_d_ptr + d_idx + 1).to(tl.int32)
     doc_len = d_hi - d_lo
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     score_acc = tl.zeros([], dtype=tl.float32)
 
-    byte_idx = (k_off // codes_per_byte).to(tl.int32)
-    slot_idx = (k_off % codes_per_byte).to(tl.int32)
+    byte_idx = (emb_off // codes_per_byte).to(tl.int32)
+    slot_idx = (emb_off % codes_per_byte).to(tl.int32)
     shift = (slot_idx * nbits).to(tl.int32)
     code_mask = tl.full([d_pad], (1 << nbits) - 1, dtype=tl.int32)
 
@@ -736,19 +728,19 @@ def _maxsim_residual_varlen_kernel(
         q_off = q_start + tl.arange(0, BLOCK_Q)
         q_valid = q_off < Lq
         Qf = tl.load(
-            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + emb_off[None, :] * stride_q_d,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(tl.float32)
         if normalize:
-            qn = tl.sum(Qf * Qf, axis=1)
-            qinv = tl.rsqrt(tl.maximum(qn, 1e-12))
-            Qf = Qf * qinv[:, None]
+            q_norm_sq = tl.sum(Qf * Qf, axis=1)
+            q_inv_norm = tl.rsqrt(tl.maximum(q_norm_sq, 1e-12))
+            Qf = Qf * q_inv_norm[:, None]
         Q_block = Qf.to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
         if SAVE_ARGMAX:
-            am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+            m_idx = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_Ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
@@ -761,29 +753,29 @@ def _maxsim_residual_varlen_kernel(
                 other=0,
             ).to(tl.int32)
             cent = tl.load(
-                centroids_ptr + cent_codes[:, None] * stride_cent_c + k_off[None, :] * stride_cent_d,
-                mask=d_valid[:, None] & k_mask[None, :],
+                centroids_ptr + cent_codes[:, None] * stride_cent_c + emb_off[None, :] * stride_cent_d,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
 
             byte_vals = tl.load(
                 residuals_flat_ptr + t_idx[:, None] * stride_res_t + byte_idx[None, :] * stride_res_p,
-                mask=d_valid[:, None] & k_mask[None, :],
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0,
             ).to(tl.int32)
             bucket_codes = (byte_vals >> shift[None, :]) & code_mask[None, :]
 
             bucket_vals = tl.load(
                 bucket_weights_ptr + bucket_codes,
-                mask=d_valid[:, None] & k_mask[None, :],
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
 
             emb = cent + bucket_vals
             if normalize:
-                en = tl.sum(emb * emb, axis=1)
-                einv = tl.rsqrt(tl.maximum(en, 1e-12))
-                emb = emb * einv[:, None]
+                emb_norm_sq = tl.sum(emb * emb, axis=1)
+                emb_inv_norm = tl.rsqrt(tl.maximum(emb_norm_sq, 1e-12))
+                emb = emb * emb_inv_norm[:, None]
 
             D_block = emb.to(COMPUTE_DTYPE)
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
@@ -792,7 +784,7 @@ def _maxsim_residual_varlen_kernel(
             if SAVE_ARGMAX:
                 tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
                 update = tile_max > m
-                am = tl.where(update, tile_arg, am)
+                m_idx = tl.where(update, tile_arg, m_idx)
             m = tl.maximum(m, tile_max)
 
         m_finite = m != float("-inf")
@@ -800,10 +792,10 @@ def _maxsim_residual_varlen_kernel(
         score_acc += tl.sum(m)
 
         if SAVE_ARGMAX:
-            am_safe = tl.where(q_valid, am, 0)
+            m_idx_safe = tl.where(q_valid, m_idx, 0)
             tl.store(
                 argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
-                am_safe,
+                m_idx_safe,
                 mask=q_valid,
             )
 

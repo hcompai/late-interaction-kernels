@@ -83,29 +83,29 @@ def _scatter_fwd_kernel(
                 )
         return
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     for q_start in range(0, max_lq, BLOCK_Q):
         q_off = q_start + tl.arange(0, BLOCK_Q)
         q_valid = q_off < lq
 
         Q_block = tl.load(
-            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + k_off[None, :] * stride_q_k,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + emb_off[None, :] * stride_q_k,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
-        am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+        m_idx = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
             d_valid = d_off < ld
 
             D_block = tl.load(
-                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + k_off[None, :] * stride_d_k,
-                mask=d_valid[:, None] & k_mask[None, :],
+                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + emb_off[None, :] * stride_d_k,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(COMPUTE_DTYPE)
 
@@ -115,16 +115,16 @@ def _scatter_fwd_kernel(
             tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
             update = tile_max > m
             m = tl.where(update, tile_max, m)
-            am = tl.where(update, tile_arg, am)
+            m_idx = tl.where(update, tile_arg, m_idx)
 
         m = tl.where(q_valid & (m != float("-inf")), m, 0.0)
         score_acc += tl.sum(m)
 
         if SAVE_ARGMAX:
-            am_out = tl.where(q_valid, am, -1)
+            m_idx_out = tl.where(q_valid, m_idx, -1)
             tl.store(
                 argmax_ptr + pid * stride_am_pair + q_off * stride_am_lq,
-                am_out,
+                m_idx_out,
                 mask=q_off < max_lq,
             )
 
@@ -184,18 +184,18 @@ def _scatter_bwd_dQ_kernel(
 
     gs = tl.load(grad_s_ptr + pair).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
-    v = tl.load(
-        D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
-        mask=km,
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
+    dv = tl.load(
+        D_ptr + (d_lo + t) * stride_d_t + emb_off * stride_d_k,
+        mask=emb_mask,
         other=0.0,
     ).to(tl.float32)
 
     tl.atomic_add(
-        grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,
-        gs * v,
-        mask=km,
+        grad_Q_ptr + (q_lo + s) * stride_gq_t + emb_off * stride_gq_k,
+        gs * dv,
+        mask=emb_mask,
     )
 
 
@@ -251,18 +251,18 @@ def _scatter_bwd_dD_kernel(
 
     gs = tl.load(grad_s_ptr + pair).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     qv = tl.load(
-        Q_ptr + (q_lo + s) * stride_q_t + k * stride_q_k,
-        mask=km,
+        Q_ptr + (q_lo + s) * stride_q_t + emb_off * stride_q_k,
+        mask=emb_mask,
         other=0.0,
     ).to(tl.float32)
 
     tl.atomic_add(
-        grad_D_ptr + (d_lo + t) * stride_gd_t + k * stride_gd_k,
+        grad_D_ptr + (d_lo + t) * stride_gd_t + emb_off * stride_gd_k,
         gs * qv,
-        mask=km,
+        mask=emb_mask,
     )
 
 

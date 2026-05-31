@@ -63,8 +63,8 @@ def _varlen_fwd_kernel(
     lq = q_hi - q_lo
     ld = d_hi - d_lo
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     score_acc = tl.zeros([], dtype=tl.float32)
 
     # Empty sequences contribute zero.
@@ -86,21 +86,21 @@ def _varlen_fwd_kernel(
         q_valid = q_off < lq
 
         Q_block = tl.load(
-            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + k_off[None, :] * stride_q_k,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + (q_lo + q_off)[:, None] * stride_q_t + emb_off[None, :] * stride_q_k,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(COMPUTE_DTYPE)
 
         m = tl.full([BLOCK_Q], float("-inf"), dtype=tl.float32)
-        am = tl.zeros([BLOCK_Q], dtype=tl.int32)
+        m_idx = tl.zeros([BLOCK_Q], dtype=tl.int32)
 
         for d_start in range(0, max_ld, BLOCK_D):
             d_off = d_start + tl.arange(0, BLOCK_D)
             d_valid = d_off < ld
 
             D_block = tl.load(
-                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + k_off[None, :] * stride_d_k,
-                mask=d_valid[:, None] & k_mask[None, :],
+                D_ptr + (d_lo + d_off)[:, None] * stride_d_t + emb_off[None, :] * stride_d_k,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(COMPUTE_DTYPE)
 
@@ -110,17 +110,17 @@ def _varlen_fwd_kernel(
             tile_arg = tl.argmax(S, axis=1).to(tl.int32) + d_start
             update = tile_max > m
             m = tl.where(update, tile_max, m)
-            am = tl.where(update, tile_arg, am)
+            m_idx = tl.where(update, tile_arg, m_idx)
 
         m = tl.where(q_valid & (m != float("-inf")), m, 0.0)
         score_acc += tl.sum(m)
 
         if SAVE_ARGMAX:
             # Store -1 for padding query positions; the bwd uses it as "skip".
-            am_out = tl.where(q_valid, am, -1)
+            m_idx_out = tl.where(q_valid, m_idx, -1)
             tl.store(
                 argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + q_off * stride_am_l,
-                am_out,
+                m_idx_out,
                 mask=q_off < max_lq,
             )
 
@@ -166,31 +166,31 @@ def _varlen_bwd_dQ_kernel(
     if s >= lq:
         return
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
-    for j in range(0, Nd):
-        d_lo = tl.load(cu_d_ptr + j).to(tl.int32)
-        d_hi = tl.load(cu_d_ptr + j + 1).to(tl.int32)
+    for d_idx in range(0, Nd):
+        d_lo = tl.load(cu_d_ptr + d_idx).to(tl.int32)
+        d_hi = tl.load(cu_d_ptr + d_idx + 1).to(tl.int32)
         ld = d_hi - d_lo
 
-        t = tl.load(argmax_ptr + q_idx * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+        t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
         # t == -1 on empty docs or invalid positions; skip those safely.
         valid = (t >= 0) & (ld > 0)
         if valid:
-            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + j * stride_gs_d).to(tl.float32)
-            v = tl.load(
-                D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
-                mask=km,
+            gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+            dv = tl.load(
+                D_ptr + (d_lo + t) * stride_d_t + emb_off * stride_d_k,
+                mask=emb_mask,
                 other=0.0,
             ).to(tl.float32)
-            acc += gs * v
+            acc += gs * dv
 
     tl.store(
-        grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,
+        grad_Q_ptr + (q_lo + s) * stride_gq_t + emb_off * stride_gq_k,
         acc,
-        mask=km,
+        mask=emb_mask,
     )
 
 
@@ -222,35 +222,35 @@ def _varlen_bwd_dD_kernel(
     stride_gd_k,
 ):
     pid = tl.program_id(0)
-    i = pid // Nd
-    j = pid % Nd
+    q_idx = pid // Nd
+    d_idx = pid % Nd
 
-    q_lo = tl.load(cu_q_ptr + i).to(tl.int32)
-    q_hi = tl.load(cu_q_ptr + i + 1).to(tl.int32)
+    q_lo = tl.load(cu_q_ptr + q_idx).to(tl.int32)
+    q_hi = tl.load(cu_q_ptr + q_idx + 1).to(tl.int32)
     lq = q_hi - q_lo
-    d_lo = tl.load(cu_d_ptr + j).to(tl.int32)
+    d_lo = tl.load(cu_d_ptr + d_idx).to(tl.int32)
 
     if lq == 0:
         return
 
-    gs = tl.load(grad_s_ptr + i * stride_gs_n + j * stride_gs_d).to(tl.float32)
+    gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     for s in range(0, max_lq):
         if s < lq:
-            t = tl.load(argmax_ptr + i * stride_am_n + j * stride_am_d + s * stride_am_l).to(tl.int32)
+            t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
             if t >= 0:
                 qv = tl.load(
-                    Q_ptr + (q_lo + s) * stride_q_t + k * stride_q_k,
-                    mask=km,
+                    Q_ptr + (q_lo + s) * stride_q_t + emb_off * stride_q_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
                 tl.atomic_add(
-                    grad_D_ptr + (d_lo + t) * stride_gd_t + k * stride_gd_k,
+                    grad_D_ptr + (d_lo + t) * stride_gd_t + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
 

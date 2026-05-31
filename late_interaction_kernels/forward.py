@@ -70,18 +70,18 @@ def _maxsim_fwd_kernel(
 ):
     pid = tl.program_id(0)
     q_idx = pid // Nd
-    k_idx = pid - q_idx * Nd
-    # Cross-product: every query scores the same Nd docs → d_global = k_idx
+    d_idx = pid - q_idx * Nd
+    # Cross-product: every query scores the same Nd docs → d_global = d_idx
     # KD / pairs:    each query owns its slab of Nd docs in a flattened
-    #                D[Nq * Nd, Ld, d] view → d_global = pid (= q_idx*Nd + k_idx).
+    #                D[Nq * Nd, Ld, d] view → d_global = pid (= q_idx*Nd + d_idx).
     # ``d_mask`` follows the same indexing as ``D``.
     if kd_layout:
         d_global = pid
     else:
-        d_global = k_idx
+        d_global = d_idx
 
-    k_off = tl.arange(0, d_pad)
-    k_mask = k_off < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     score_acc = tl.zeros([], dtype=tl.float32)
 
@@ -93,18 +93,18 @@ def _maxsim_fwd_kernel(
         q_valid = q_off < Lq
 
         if has_q_mask:
-            qm = tl.load(
+            q_mask_val = tl.load(
                 q_mask_ptr + q_idx * stride_qm_n + q_off * stride_qm_l,
                 mask=q_valid,
                 other=0,
             ).to(tl.int1)
-            q_active = q_valid & qm
+            q_active = q_valid & q_mask_val
         else:
             q_active = q_valid
 
         Q_block_f32 = tl.load(
-            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + k_off[None, :] * stride_q_d,
-            mask=q_valid[:, None] & k_mask[None, :],
+            Q_ptr + q_idx * stride_q_n + q_off[:, None] * stride_q_l + emb_off[None, :] * stride_q_d,
+            mask=q_valid[:, None] & emb_mask[None, :],
             other=0.0,
         ).to(tl.float32)
         if normalize:
@@ -127,18 +127,18 @@ def _maxsim_fwd_kernel(
             d_valid = d_off < Ld
 
             if has_d_mask:
-                dm = tl.load(
+                d_mask_val = tl.load(
                     d_mask_ptr + d_global * stride_dm_n + d_off * stride_dm_l,
                     mask=d_valid,
                     other=0,
                 ).to(tl.int1)
-                d_active = d_valid & dm
+                d_active = d_valid & d_mask_val
             else:
                 d_active = d_valid
 
             D_block_f32 = tl.load(
-                D_ptr + d_global * stride_d_n + d_off[:, None] * stride_d_l + k_off[None, :] * stride_d_d,
-                mask=d_valid[:, None] & k_mask[None, :],
+                D_ptr + d_global * stride_d_n + d_off[:, None] * stride_d_l + emb_off[None, :] * stride_d_d,
+                mask=d_valid[:, None] & emb_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
             if normalize:
@@ -147,8 +147,8 @@ def _maxsim_fwd_kernel(
                 D_block_f32 = D_block_f32 * d_inv[:, None]
             D_block = D_block_f32.to(COMPUTE_DTYPE)
 
-            # tl.dot needs inputs with the same dtype; Q_block and D_block are
-            # both COMPUTE_DTYPE. Accumulator is fp32.
+            # Q_block and D_block share COMPUTE_DTYPE (tl.dot requires matching
+            # operand dtypes); accumulate in fp32.
             S = tl.dot(Q_block, tl.trans(D_block), out_dtype=tl.float32)
             S = tl.where(d_active[None, :], S, float("-inf"))
 
@@ -173,7 +173,7 @@ def _maxsim_fwd_kernel(
             )
 
     # Output is always [Nq, Nd] (Nd = K_per_query in KD/pairs mode).
-    tl.store(scores_ptr + q_idx * stride_s_n + k_idx * stride_s_d, score_acc)
+    tl.store(scores_ptr + q_idx * stride_s_n + d_idx * stride_s_d, score_acc)
 
 
 # Small-input bypass: for tiny shapes (inference / REPL / tests) the autotune
@@ -253,21 +253,20 @@ def _run_forward(
             )
         K = Nd_total // Nq
         Ld = D.shape[1]
-        Nd_kernel = K
+        Nd_eff = K  # candidates per query
     else:
-        K = D.shape[0]  # actually Nd, kept named for the constexpr arg
-        Nd_kernel = K
+        Nd_eff = D.shape[0]  # total doc count in the cross-product batch
         Ld = D.shape[1]
     d_pad = next_pow2(d)
     compute_dtype = pick_compute_dtype(Q, D)
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
-    scores = torch.empty(Nq, Nd_kernel, device=Q.device, dtype=torch.float32)
-    argmax = torch.empty(Nq * Nd_kernel, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
+    scores = torch.empty(Nq, Nd_eff, device=Q.device, dtype=torch.float32)
+    argmax = torch.empty(Nq * Nd_eff, Lq, device=Q.device, dtype=torch.int32) if save_argmax else None
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
-    # Triton doesn't like None pointers; substitute something.
+    # Triton rejects None pointers; pass a live tensor the kernel won't read.
     q_mask_ptr = q_mask if has_q_mask else Q
     d_mask_ptr = d_mask if has_d_mask else D
     argmax_ptr = argmax if save_argmax else scores
@@ -276,7 +275,7 @@ def _run_forward(
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)
     a_strides = (argmax.stride(0), argmax.stride(1)) if save_argmax else (0, 0)
 
-    grid = (Nq * Nd_kernel,)
+    grid = (Nq * Nd_eff,)
     args = (
         Q,
         D,
@@ -285,7 +284,7 @@ def _run_forward(
         scores,
         argmax_ptr,
         Nq,
-        Nd_kernel,
+        Nd_eff,
         Lq,
         Ld,
         d,
@@ -310,11 +309,11 @@ def _run_forward(
         normalize,
         kd_layout,
     )
-    # Bypass eligibility uses ``Nd_kernel`` (= Nd for in-batch, K for KD/pairs)
+    # Bypass eligibility uses ``Nd_eff`` (= Nd for in-batch, K for KD/pairs)
     # so the per-program work estimate matches what the kernel will actually
     # do. KD/pairs of size (Nq=4, K=16) lands in the bypass band just like
     # in-batch (Nq=4, Nd=16) — the launch budget is the same.
-    if _should_bypass_autotune(Nq, Nd_kernel, Lq, Ld, d, save_argmax):
+    if _should_bypass_autotune(Nq, Nd_eff, Lq, Ld, d, save_argmax):
         # Bypass: launch the underlying JIT directly with fixed constexpr
         # block sizes and fixed launch attrs. ``_maxsim_fwd_kernel.fn`` is the
         # ``JITFunction`` wrapped by ``@triton.autotune`` — calling it via
