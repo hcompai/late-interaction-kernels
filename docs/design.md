@@ -128,19 +128,8 @@ the `grad_D` reduction order differs.
 
 ### Backward launch-param autotuning
 
-Each backward kernel is one program per output row streaming a single `d_pad`
-vector through a doc/bucket loop. There is no block tiling to sweep, so the
-only useful knobs are `num_warps` and `num_stages`. All four kernels are
-`@triton.autotune`d over a small grid via a shared `backward/_autotune.py`
-config module.
-
-The autotune key mirrors the forward key — `(Lq, d_pad, has_q_mask,
-kd_layout)` for layout-aware kernels, `(Lq, d_pad, has_q_mask)` for CSR — so
-the cache holds one entry per training regime, not one per batch size.
-Atomic-accumulating kernels use `reset_to_zero` so benchmark trials inside the
-autotuner do not accumulate onto each other; in steady state each caller
-allocates a fresh `torch.zeros` buffer, so correctness never depends on
-Triton's reset behaviour.
+Backward kernels have no block tiling to sweep, so they are autotuned over
+`num_warps × num_stages` only (see `## Autotune → Backward`).
 
 ## Varlen / packed path
 
@@ -221,13 +210,10 @@ autotune cache onto a small constant regardless of the original query length.
 ### Backward
 
 Tuned over `num_warps × num_stages` (no block-tiling dimension) keyed on
-`(Lq, d_pad, has_q_mask, kd_layout)` for the three layout-aware kernels
-(`unified`, two-pass `grad_Q`, `atomic grad_D`) and `(Lq, d_pad, has_q_mask)`
-for the CSR `grad_D`. `Nd` and `Ld` are excluded from the key so a single
-entry covers all batch sizes in a training regime.
+`(Lq, d_pad, mask flags, kd_layout)`, so one entry covers all batch sizes in a
+training regime.
 
-Autotune runs once per key per process and caches the winner (shared with the
-forward cache when `cache_results=True` on Triton ≥ 3.4).
+Autotune runs once per key per process and caches the winner.
 
 ## Numerical accuracy
 
