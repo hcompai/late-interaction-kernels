@@ -58,7 +58,9 @@ def cuda_time(fn, warmup=20, iters=60):
 def main():
     dtype = torch.bfloat16
     print(f"GPU {torch.cuda.get_device_name()}  dtype=bf16  flash={HAS_FM}\n")
-    print(f"{'shape':40s} {'unchunked':>10s} {'chunked':>10s} {'speedup':>8s} {'flash':>9s} {'chk/flash':>9s}")
+    print(
+        f"{'shape':40s} {'unchunked':>10s} {'chunked':>10s} {'speedup':>8s} {'flash':>9s} {'chk/flash':>9s}"
+    )
     worst = 1e9
     for name, Nq, Nd, Lq, Ld, d in SHAPES:
         Q = torch.randn(Nq, Lq, d, device="cuda", dtype=dtype)
