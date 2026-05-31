@@ -184,18 +184,18 @@ def _scatter_bwd_dQ_kernel(
 
     gs = tl.load(grad_s_ptr + pair).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     dv = tl.load(
-        D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
-        mask=km,
+        D_ptr + (d_lo + t) * stride_d_t + emb_off * stride_d_k,
+        mask=emb_mask,
         other=0.0,
     ).to(tl.float32)
 
     tl.atomic_add(
-        grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,
+        grad_Q_ptr + (q_lo + s) * stride_gq_t + emb_off * stride_gq_k,
         gs * dv,
-        mask=km,
+        mask=emb_mask,
     )
 
 
@@ -251,18 +251,18 @@ def _scatter_bwd_dD_kernel(
 
     gs = tl.load(grad_s_ptr + pair).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     qv = tl.load(
-        Q_ptr + (q_lo + s) * stride_q_t + k * stride_q_k,
-        mask=km,
+        Q_ptr + (q_lo + s) * stride_q_t + emb_off * stride_q_k,
+        mask=emb_mask,
         other=0.0,
     ).to(tl.float32)
 
     tl.atomic_add(
-        grad_D_ptr + (d_lo + t) * stride_gd_t + k * stride_gd_k,
+        grad_D_ptr + (d_lo + t) * stride_gd_t + emb_off * stride_gd_k,
         gs * qv,
-        mask=km,
+        mask=emb_mask,
     )
 
 

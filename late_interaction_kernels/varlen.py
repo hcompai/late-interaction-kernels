@@ -166,8 +166,8 @@ def _varlen_bwd_dQ_kernel(
     if s >= lq:
         return
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
     acc = tl.zeros([d_pad], dtype=tl.float32)
 
     for d_idx in range(0, Nd):
@@ -181,16 +181,16 @@ def _varlen_bwd_dQ_kernel(
         if valid:
             gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
             dv = tl.load(
-                D_ptr + (d_lo + t) * stride_d_t + k * stride_d_k,
-                mask=km,
+                D_ptr + (d_lo + t) * stride_d_t + emb_off * stride_d_k,
+                mask=emb_mask,
                 other=0.0,
             ).to(tl.float32)
             acc += gs * dv
 
     tl.store(
-        grad_Q_ptr + (q_lo + s) * stride_gq_t + k * stride_gq_k,
+        grad_Q_ptr + (q_lo + s) * stride_gq_t + emb_off * stride_gq_k,
         acc,
-        mask=km,
+        mask=emb_mask,
     )
 
 
@@ -235,22 +235,22 @@ def _varlen_bwd_dD_kernel(
 
     gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
 
-    k = tl.arange(0, d_pad)
-    km = k < d
+    emb_off = tl.arange(0, d_pad)
+    emb_mask = emb_off < d
 
     for s in range(0, max_lq):
         if s < lq:
             t = tl.load(argmax_ptr + q_idx * stride_am_n + d_idx * stride_am_d + s * stride_am_l).to(tl.int32)
             if t >= 0:
                 qv = tl.load(
-                    Q_ptr + (q_lo + s) * stride_q_t + k * stride_q_k,
-                    mask=km,
+                    Q_ptr + (q_lo + s) * stride_q_t + emb_off * stride_q_k,
+                    mask=emb_mask,
                     other=0.0,
                 ).to(tl.float32)
                 tl.atomic_add(
-                    grad_D_ptr + (d_lo + t) * stride_gd_t + k * stride_gd_k,
+                    grad_D_ptr + (d_lo + t) * stride_gd_t + emb_off * stride_gd_k,
                     gs * qv,
-                    mask=km,
+                    mask=emb_mask,
                 )
 
 
