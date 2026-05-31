@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 from late_interaction_kernels._utils import next_pow2
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS, BWD_KEY_CSR
 
 # ---------------------------------------------------------------------------
 # PyTorch-side CSR construction
@@ -69,6 +70,9 @@ def _build_csr(
 # ---------------------------------------------------------------------------
 
 
+# grad_D is written once per (j, t) with a full-coverage store (no atomics),
+# so autotune trials are idempotent — no reset_to_zero needed.
+@triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY_CSR)
 @triton.jit
 def _bwd_dD_csr_kernel(
     Q_ptr,

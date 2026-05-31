@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 from late_interaction_kernels._utils import next_pow2
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS, BWD_KEY
 
 
 def maxsim_backward_unified_reference(
@@ -93,6 +94,9 @@ if _HAS_TRITON:
     # The key optimisation vs the two-pass backward: Q[i, s, :] is hoisted
     # out of the j loop. The two-pass dD reloads it Nd times.
 
+    # grad_D accumulates with atomic_add, so it must be re-zeroed before each
+    # autotune trial — otherwise trials pile onto each other's results.
+    @triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY, reset_to_zero=["grad_D_ptr"])
     @triton.jit
     def _bwd_unified_kernel(
         Q_ptr,

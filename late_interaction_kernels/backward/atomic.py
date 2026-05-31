@@ -20,12 +20,16 @@ except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
 from late_interaction_kernels._utils import next_pow2
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS, BWD_KEY
 
 # ---------------------------------------------------------------------------
 # grad_Q kernel — one program per (q_batch, q_token)
 # ---------------------------------------------------------------------------
 
 
+# grad_Q is written with a full-coverage store (no atomics), so autotune
+# trials are idempotent and need no reset_to_zero.
+@triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY)
 @triton.jit
 def _bwd_dQ_kernel(
     D_ptr,
@@ -97,6 +101,8 @@ def _bwd_dQ_kernel(
 # ---------------------------------------------------------------------------
 
 
+# grad_D accumulates with atomic_add → reset between autotune trials.
+@triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY, reset_to_zero=["grad_D_ptr"])
 @triton.jit
 def _bwd_dD_kernel(
     Q_ptr,

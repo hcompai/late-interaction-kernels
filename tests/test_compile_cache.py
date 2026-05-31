@@ -232,3 +232,28 @@ def test_scatter_kernel_compiles_once_for_varying_max_lq():
     assert len(cache) == 1, (
         f"scatter autotune cache exploded across max_lq: {len(cache)} entries (expected 1)"
     )
+
+
+def test_backward_unified_autotune_cache_bounded():
+    """The unified backward autotunes once per Lq regime, not per batch shape.
+
+    grad_Q/grad_D launch params are autotuned, but the key deliberately
+    excludes Nd and Ld (like the forward excludes Ld) so distinct batch sizes
+    and doc lengths reuse one cached config. Without that, every new training
+    shape would re-trigger the launch-param sweep.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.backward.unified import _bwd_unified_kernel
+
+    _bwd_unified_kernel.cache.clear()
+    # Nq small so the "auto" selector stays on the unified path (high-contention
+    # CSR needs Nq >= 256). Lq fixed → single autotune key across Nd, Ld.
+    for nd in (16, 32, 64):
+        for ld in (180, 256, 512):
+            Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+            D = torch.randn(nd, ld, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+            maxsim(Q, D).sum().backward()
+
+    assert len(_bwd_unified_kernel.cache) == 1, (
+        f"backward autotune cache must stay at 1 across Nd/Ld; got {len(_bwd_unified_kernel.cache)}"
+    )
