@@ -2,7 +2,9 @@
 
 Single H100 80 GB SXM, bf16 inputs (fp16 for LateOn / ModernColBERT
 shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
-`torch 2.8.0+cu128`, `triton 3.4`, CUDA 12.8.
+`torch 2.8.0+cu128`, `triton 3.4`, CUDA 12.8. Forward and `flash-maxsim`
+head-to-head numbers were last refreshed for the 0.4.0 release
+(query-token chunking for long queries).
 
 **Fair-comparison protocol.** Every speedup on this page is measured at
 **matched numerics**: each baseline runs the inner einsum / matmul with
@@ -128,7 +130,7 @@ CUDA events):
 | text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.094 ms | 0.263 ms         | 0.273 ms                   | 2.8×         | 2.9×           | 183 MB → 0    |
 | text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.096 ms | 0.793 ms         | 0.880 ms                   | **8.3×**     | **9.2×**       | 626 MB → 0    |
 | text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.097 ms | 1.538 ms         | 1.603 ms                   | **15.9×**    | **16.5×**      | 1.0 GB → 0    |
-| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.731 ms | 9.330 ms         | 9.173 ms                   | **12.8×**    | **12.6×**      | 4.5 GB → 0    |
+| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.675 ms | 9.365 ms         | 9.173 ms                   | **13.9×**    | **13.6×**      | 4.5 GB → 0    |
 | corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.129 ms | 1.195 ms         | 1.196 ms                   | 9.3×         | 9.3×           | 916 MB → 0    |
 | corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.354 ms         | 2.352 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
 | train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.097 ms | 0.127 ms         | 0.169 ms                   | 1.3×         | 1.7×           | 43 MB → 0     |
@@ -155,40 +157,39 @@ working set is bounded by the output and ranges from a few KB to
 
 `flash-maxsim` (Roi Pony / IBM) was the first public Triton MaxSim
 kernel and the direct inspiration for this library. The numbers below
-come from `benchmarks/bench_flash_maxsim.py` on H100 80 GB SXM, bf16,
-50-iter median over CUDA events. `flash-maxsim` 0.2.0 has no
+come from `benchmarks/bench_flash_maxsim.py` on H100 80 GB HBM3, bf16,
+50-iter median over CUDA events. `flash-maxsim` 0.2.1 has no
 `normalize=True` knob and no autograd-aware backward, so we report
 plain forward only.
 
 
 | shape                                             | ours  | flash-maxsim | speedup |
 | ------------------------------------------------- | ----- | ------------ | ------- |
-| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.130 | 0.130        | 1.00×   |
-| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.183 | 0.187        | 1.02×   |
-| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.244 | 0.288        | 1.18×   |
-| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.475 | 0.565        | 1.19×   |
-| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.340 | 0.351        | 1.03×   |
-| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.118 | 0.124        | 1.04×   |
-| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.290 | 0.318        | 1.10×   |
-| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.112 | 0.105        | 0.94×   |
-| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.354 | 0.365        | 1.03×   |
-| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.221 | 0.229        | 1.03×   |
+| `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.106 | 0.111        | 1.05×   |
+| `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.167 | 0.173        | 1.04×   |
+| `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.227 | 0.255        | 1.12×   |
+| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.434 | 0.510        | 1.17×   |
+| `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.322 | 0.329        | 1.02×   |
+| `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.098 | 0.102        | 1.05×   |
+| `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.263 | 0.298        | 1.14×   |
+| `train-long-doc` (Nq=Nd=16, Lq=32, Ld=2048)       | 0.089 | 0.092        | 1.04×   |
+| `edge-d48` (Nq=1, Nd=4k, Lq=32, Ld=2048, d=48)    | 0.340 | 0.351        | 1.03×   |
+| `edge-d64` (Nq=1, Nd=10k, Lq=32, Ld=300, d=64)    | 0.220 | 0.220        | 1.00×   |
 
 
-The two kernels are within ±3% on tight rerank / short-context shapes
-and LIK pulls ahead by 1.10–1.19× on the wide ones (`rerank-very-long`,
-`rerank-colpali`, `train-in-batch-128`); `rerank-short` is a dead heat
-and on `train-long-doc` both are saturated by HBM traffic with LIK
-trailing ~6%. Both kernels are fused (neither
-materialises the score tile), so peak working set is sub-100 KB on
-every shape and there's no memory column to compare. The real differentiators are
-elsewhere: a fused `normalize=True` (no extra HBM round-trip), a real
-autograd-aware backward (`unified` / `csr` / `atomic`), packed/varlen,
-PLAID residual decompression, and a fused D-side projection head —
-none of which `flash-maxsim` ships. `bench_flash_maxsim.py` also
-covers KD-layout (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +1 to
-+13%) and pairwise (`Q[B, Lq, d] × D[B, Ld, d] → [B]`, within ±8%)
-forwards.
+LIK meets or beats `flash-maxsim` on every cross-product forward shape:
+a dead heat on the tightest ones (`edge-d64`, `rerank-10k`) and 1.12–1.17×
+ahead on the wide regimes (`rerank-very-long`, `rerank-colpali`,
+`train-in-batch-128`). Both kernels are fused (neither materialises the
+score tile), so peak working set is sub-100 KB on every shape and there's
+no memory column to compare. The real differentiators are elsewhere: a
+fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
+backward (`unified` / `csr` / `atomic`), packed/varlen, PLAID residual
+decompression, and a fused D-side projection head — none of which
+`flash-maxsim` ships. `bench_flash_maxsim.py` also covers KD-layout
+(`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +4 to +17%) and pairwise
+(`Q[B, Lq, d] × D[B, Ld, d] → [B]`, LIK within a few percent except the
+smallest pair shape, where flash's lighter launch wins).
 
 ### Long-query chunking (`Lq > 512`)
 
@@ -376,12 +377,12 @@ batches (e.g. `Nd ≥ 256` with `Ld = 128`).
 
 | shape                            | atomic | csr  | unified | auto | auto picks |
 | -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.48   | 0.80 | 0.61    | 0.61 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.65   | 0.76 | 0.57    | 0.58 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 2.45   | 1.69 | 2.12    | 1.71 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.77   | 0.74 | 0.93    | 0.93 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 1.02   | 0.76 | 0.51    | 0.52 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 1.18   | 1.00 | 1.46    | 1.46 | unified    |
+| `train-32` (32 × 32, Ld=128)     | 0.61   | 0.82 | 0.56    | 0.49 | unified    |
+| `train-128` (128 × 128, Ld=128)  | 0.56   | 0.75 | 0.47    | 0.48 | unified    |
+| `train-256` (256 × 256, Ld=128)  | 2.11   | 1.18 | 1.76    | 1.18 | **csr**    |
+| `retrieval` (16 × 512, Ld=300)   | 0.68   | 0.83 | 0.84    | 0.84 | unified    |
+| `long-Lq` (Lq=1024, Ld=64)       | 0.62   | 0.77 | 0.52    | 0.54 | unified    |
+| `huge-Nd` (16 × 1024, Ld=128)    | 1.09   | 0.88 | 1.38    | 1.37 | unified    |
 
 
 CSR is bitwise-reproducible across runs (no atomics); `atomic` /
@@ -396,12 +397,12 @@ lengths without an autotune step.
 output row streaming a single `d_pad` vector through a doc/bucket loop —
 no block tiling to sweep, so the only useful knob is `(num_warps,
 num_stages)`. The stock launch (`num_warps=4`) over-subscribes these
-narrow programs; tuning it (the optimum sits at 1–2 warps on H100) is
-worth **1.3–1.7×** on the unified path and up to **1.6×** on the CSR
-`grad_D` reduction. The autotune key mirrors the forward one (`Lq`,
+narrow programs; tuning it (the optimum sits at 1–2 warps on H100) lifts
+`auto` by **~1.2–1.45×** across the training shapes above — the biggest
+gain landing on the high-contention `train-256` csr reduction
+(1.71 → 1.18 ms). The autotune key mirrors the forward one (`Lq`,
 `d_pad`, layout flags), so the cache stays at one entry per regime
-rather than one per batch size. End-to-end training (forward +
-backward, `bench_training.py`) is measured against flash.
+rather than one per batch size.
 
 ```python
 # Per-call (recommended):
@@ -467,7 +468,7 @@ on the same chunked tiling (`Lq=128, d=128, mini=32`, fwd + bwd):
   same numerics as vanilla.
 * **LIK** — `late_interaction_kernels.maxsim` over the same chunking.
 
-H100 80 GB SXM, NGC 25.06, parity checked on an 8-row probe before
+H100 80 GB HBM3, parity checked on an 8-row probe before
 timing. `torch.compile` lands *below* vanilla here because Dynamo
 recompiles on every fresh tile shape and the cuda-graph fast path
 trips on the pending-backward state pylate's loss leaves behind:
@@ -475,18 +476,18 @@ trips on the pending-backward state pylate's loss leaves behind:
 
 | shape                          | tiles | vanilla fwd+bwd | `torch.compile` fwd+bwd | LIK fwd+bwd | LIK vs vanilla | LIK vs compile |
 | ------------------------------ | ----- | --------------- | ----------------------- | ----------- | -------------- | -------------- |
-| `bs=64, Ld=2048`               |   4   |   7.64 ms       |  25.98 ms               |   1.66 ms   | **4.62×**      | **15.70×**     |
-| `bs=64, Ld=4096`               |   4   |  14.67 ms       |  51.53 ms               |   2.65 ms   | **5.53×**      | **19.42×**     |
-| `bs=64, Ld=8192`               |   4   |  31.64 ms       | 101.87 ms               |   4.83 ms   | **6.55×**      | **21.07×**     |
-| `bs=128, Ld=2048`              |  16   |  31.33 ms       | 104.62 ms               |   5.83 ms   | **5.37×**      | **17.94×**     |
-| `bs=128, Ld=4096`              |  16   |  60.16 ms       | 207.56 ms               |  11.35 ms   | **5.30×**      | **18.29×**     |
-| `bs=128, Ld=8192`              |  16   | 129.87 ms       | 410.43 ms               |  21.19 ms   | **6.13×**      | **19.37×**     |
-| `bs=256, Ld=2048`              |  64   | 130.93 ms       | 424.63 ms               |  28.36 ms   | **4.62×**      | **14.98×**     |
-| `bs=256, Ld=4096`              |  64   | 252.13 ms       | 841.56 ms               |  50.43 ms   | **5.00×**      | **16.69×**     |
-| **`bs=256, Ld=8192`** (real recipe) | 64 | **542.00 ms** | **1664.39 ms**       | **93.85 ms**| **5.78×**      | **17.73×**     |
+| `bs=64, Ld=2048`               |   4   |   7.64 ms       |  25.99 ms               |   1.27 ms   | **6.02×**      | **20.46×**     |
+| `bs=64, Ld=4096`               |   4   |  14.67 ms       |  51.55 ms               |   2.43 ms   | **6.04×**      | **21.21×**     |
+| `bs=64, Ld=8192`               |   4   |  31.72 ms       | 101.89 ms               |   4.59 ms   | **6.91×**      | **22.20×**     |
+| `bs=128, Ld=2048`              |  16   |  31.32 ms       | 104.63 ms               |   5.17 ms   | **6.06×**      | **20.24×**     |
+| `bs=128, Ld=4096`              |  16   |  60.15 ms       | 207.57 ms               |  11.04 ms   | **5.45×**      | **18.80×**     |
+| `bs=128, Ld=8192`              |  16   | 129.85 ms       | 410.47 ms               |  21.18 ms   | **6.13×**      | **19.38×**     |
+| `bs=256, Ld=2048`              |  64   | 130.86 ms       | 424.27 ms               |  25.87 ms   | **5.06×**      | **16.40×**     |
+| `bs=256, Ld=4096`              |  64   | 252.76 ms       | 841.58 ms               |  47.92 ms   | **5.27×**      | **17.56×**     |
+| **`bs=256, Ld=8192`** (real recipe) | 64 | **544.52 ms** | **1668.55 ms**       | **91.51 ms**| **5.95×**      | **18.23×**     |
 
 
-LIK is a steady **4.6-6.6×** over vanilla and **15-21×** over the
+LIK is a steady **5.0-6.9×** over vanilla and **16-22×** over the
 compiled tile across the whole range, with the win growing with `Ld`.
 The vs-`torch.compile` gap widened in 0.3.0: compile now recompiles
 every fresh tile shape *and* trips the cuda-graph fast path on the
