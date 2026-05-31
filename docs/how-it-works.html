@@ -1235,8 +1235,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $\Qm_c \in \mathbb{R}^{N_q n_c \times 128 \times d}$ (128 tokens per
     chunk, $n_c = \lceil L_q / 128 \rceil$), running the kernel over the
     larger batch, and summing the chunk scores back per original query.
-    The reshape and sum are plain tensor ops — autograd flows through them
-    unchanged so no custom backward is needed.
+    The reshape and sum are plain tensor ops, so autograd flows through them
+    unchanged and no custom backward is needed.
   </p>
 
   <p>
@@ -1249,7 +1249,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     Splitting only pays off once the per-program serial loop dominates the
     cost of launching the extra programs. Below that crossover the inner loop
     is already short and the grid already full, so chunking would only add
-    launch overhead — slower than not chunking at all. The split therefore
+    launch overhead, which is slower than not chunking at all. The split therefore
     fires only when $L_q &gt; 512$; short queries (ColBERT $L_q \leq 32$,
     long-document $L_q \leq 512$) take the un-chunked path, which is already
     the faster one for them.
@@ -1484,8 +1484,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h3>Backward launch-param autotuning</h3>
 
   <p>
-    The backward kernels have no block-tiling dimensions to sweep — each is one
-    Triton program per output row streaming a single embedding vector — so they
+    The backward kernels have no block-tiling dimensions to sweep. Each is one
+    Triton program per output row streaming a single embedding vector, so they
     are autotuned over <code>num_warps</code> and <code>num_stages</code> only,
     keyed like the forward so the cache holds one entry per training regime.
   </p>
