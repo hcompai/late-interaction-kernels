@@ -24,7 +24,7 @@ envs:
   SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
   # Space-separated subset of config tags to run; empty means "run all".
   # Tags below: synth-colbert-bs4, synth-colbert-bs8-ckpt, synth-pairwise-bs4,
-  #             synth-colbert-neg-bs4, synth-pairwise-neg-bs4,
+  #             synth-colbert-neg-bs4, synth-pairwise-neg-bs4, loss-isolation,
   #             real-colbert-bs4, real-colbert-bs8-ckpt
   # Override with: sky launch --env RUN_ONLY="synth-colbert-bs4 real-colbert-bs4" ...
   RUN_ONLY: ""
@@ -183,6 +183,14 @@ run: |
         --iters 10 --warmup 2 \
         --outdir "${ART}" \
         2>&1 | tee "${ART}/synth_pairwise_neg_bs4.log"
+  )
+
+  should_run loss-isolation && (
+    echo "=============================================================="
+    echo "  MaxSim isolation — explicit-negative loss heads (no encoder)"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_loss.py --sweep \
+        2>&1 | tee "${ART}/loss_isolation.log"
   )
 
   should_run real-colbert-bs4 && (

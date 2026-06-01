@@ -567,11 +567,48 @@ The two explicit-negative heads sit *below* 1× (0.91–0.93×): they
 encode 4 hard negatives per query (20 images/step), so the vision
 tower dominates even more, while the fused pos/neg path trades three
 tiny einsums for three Triton launches whose overhead doesn't amortise
-on `[4, 4, 24, 1030]`-scale pos/neg slabs — and the materialized
-`[B, n_neg, Lq, Ld]` tensor it avoids is small enough here that no
-memory win offsets it (peak is unchanged). The fusion's payoff is
-memory at larger `batch × num_neg × Ld`, a regime this synthetic
-bs=4 config doesn't reach.
+on `[4, 4, 24, 1030]`-scale slabs. The fusion's win is wall-clock on
+the scoring itself and only shows once `batch × num_neg` is large —
+which the encoder hides at the e2e level. The isolation table below
+measures where it actually lands.
+
+### Explicit-negative MaxSim isolation (no encoder)
+
+Like the cached-contrastive isolation above, this strips the encoder
+and times just the explicit-negative loss head's forward+backward on
+synthetic embeddings (`bench_colpali_loss.py`, H100, bf16,
+`Lq=32, Ld=1030` ≈ ColPali visual tokens, `in_batch_term_weight=0`
+to isolate the pos/neg path this fuses). Vanilla runs the
+`einsum → amax → sum`; LIK runs `maxsim_pairs` (positives) + 4-D
+`maxsim` (negatives).
+
+
+| shape (Lq=32, Ld=1030, d=128) | vanilla  | LIK      | speedup   | vanilla peak | LIK peak |
+| ----------------------------- | -------- | -------- | --------- | ------------ | -------- |
+| `colbert-neg` B64 × n4        | 1.20 ms  | 1.48 ms  | 0.81×     |   278 MB     |  340 MB  |
+| `colbert-neg` B128 × n4       | 1.67 ms  | 1.37 ms  | 1.22×     |   493 MB     |  616 MB  |
+| `colbert-neg` B128 × n8       | 2.47 ms  | 1.48 ms  | **1.67×** |   880 MB     | 1132 MB  |
+| `colbert-neg` B256 × n8       | 4.38 ms  | 1.84 ms  | **2.38×** |  1697 MB     | 2199 MB  |
+| `colbert-neg` B256 × n16      | 7.74 ms  | 2.90 ms  | **2.67×** |  3239 MB     | 4257 MB  |
+| `pairwise-neg` B128 × n8      | 2.46 ms  | 1.38 ms  | **1.79×** |   880 MB     | 1132 MB  |
+| `pairwise-neg` B256 × n8      | 4.37 ms  | 1.80 ms  | **2.43×** |  1697 MB     | 2199 MB  |
+
+
+Reading — speed: the win scales with `B × n_neg`. It's launch-bound and
+slightly behind at B=64 (0.81×), then climbs 1.2× → 2.67× as the pos/neg
+slabs grow enough to amortise the Triton launches. This is the throughput
+the encoder hides in the e2e table above.
+
+Memory: peak is *higher* for LIK (~25%), not lower. The fused backward
+accumulates `grad_D` in fp32 — the atomic scatter into the
+`[B, n_neg, Ld, d]` doc grads needs fp32 for a correct reduction — then
+downcasts to bf16, so it briefly holds a full-size fp32 grad buffer that
+vanilla's cuBLAS einsum-backward (bf16 output, fp32 internal accumulate)
+never materializes. So the explicit-negative heads are a **throughput**
+optimization, not a memory one, in training. (This is shared
+`maxsim_backward_unified` behavior, not specific to these heads; the
+forward-only inference path, with no `grad_D`, is where the avoided
+materialization shows up as lower memory.)
 
 ## Edge models (`d ∈ {48, 64}`)
 
