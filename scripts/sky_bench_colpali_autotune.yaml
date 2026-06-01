@@ -1,6 +1,6 @@
 # Targeted A/B for the `rerank-colpali` shape (Nq=1, Nd=500, Lq=Ld=1024,
 # d=128). Goal: confirm the new `BLOCK_Q=128, BLOCK_D=128, num_warps=8,
-# num_stages=3` autotune candidate closes the gap vs flash-maxsim 0.2.0.
+# num_stages=3` autotune candidate closes the gap vs flash-maxsim 0.2.1.
 #
 #   sky launch -c lik-colpali-tune scripts/sky_bench_colpali_autotune.yaml -y
 #   sky logs lik-colpali-tune
@@ -27,7 +27,7 @@ setup: |
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
   uv sync --frozen --extra dev --extra torch-cuda
-  uv pip install "flash-maxsim==0.2.0"
+  uv pip install "flash-maxsim==0.2.1"
   uv run python -c "import torch, triton, flash_maxsim; print('torch', torch.__version__, '| triton', triton.__version__, '| flash_maxsim', flash_maxsim.__version__)"
 
 run: |

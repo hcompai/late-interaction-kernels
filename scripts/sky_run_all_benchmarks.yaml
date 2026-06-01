@@ -43,7 +43,7 @@ setup: |
   uv pip install "pylate==1.3.3"
   # Optional baselines; failure to install is non-fatal — each bench probes
   # via `import` and skips itself if the dep is missing.
-  uv pip install "flash-maxsim==0.2.0" || true
+  uv pip install "flash-maxsim==0.2.1" || true
   uv pip install "fast-plaid==1.4.6.280" || true
 
 run: |

@@ -23,7 +23,7 @@ stack above by the SkyPilot jobs in `scripts/` (see
 
 | package          | version       | role on this page                              |
 | ---------------- | ------------- | ---------------------------------------------- |
-| `flash-maxsim`   | `0.2.0`       | forward head-to-head and the chunking "vs flash" column |
+| `flash-maxsim`   | `0.2.1`       | forward head-to-head and the chunking "vs flash" column |
 | `pylate`         | `1.3.3`       | vanilla-PyLate end-to-end baselines (1.5+ broke `patch_pylate`'s `(queries_mask, documents_mask)` signature, so the sweep pins 1.3.3) |
 | `fast-plaid`     | `1.4.6.280`   | PLAID rerank vs `engine.search()` (the `.280` suffix is the torch-2.8 wheel) |
 | `colpali-engine` | `>=0.3.10`    | ColQwen2 / ColPali end-to-end (`ColbertLoss`, `ColbertPairwiseCE`) |
@@ -104,7 +104,7 @@ working set is bounded by the output and ranges from a few KB to
 
 `flash-maxsim` (Roi Pony / IBM) was the first public Triton MaxSim
 kernel and the direct inspiration for this library. The numbers below
-come from `bench_flash_maxsim.py`. `flash-maxsim` 0.2.0 has no
+come from `bench_flash_maxsim.py`. `flash-maxsim` 0.2.1 has no
 `normalize=True` knob and no autograd-aware backward, so we report
 plain forward only.
 
