@@ -504,7 +504,16 @@ def test_patched_negative_losses_match_original_cuda(fake_colpali, cls_name, in_
 
 @pytest.mark.cuda
 @pytest.mark.parametrize("cls_name", ["ColbertNegativeCELoss", "ColbertPairwiseNegativeCELoss"])
-def test_patched_negative_losses_backward_matches_original_cuda(fake_colpali, cls_name):
+# `(dtype, weight)`: the explicit pos/neg fusion is what this PR adds, so we
+# check it in the kernel's native fp16 with the in-batch term off
+# (`weight=0`). The full mix (`weight=0.5`) is checked in fp32 because the
+# in-batch *softmax*-CE term (`ColbertLoss`) flips argmax on near-tied fp16
+# dot-products and the softmax amplifies that into ~20% grad drift — pure
+# fp16 tie noise, not a graph error: a GPU sweep showed fp32 collapses every
+# case to <2e-3 (and the pairwise in-batch term, which has no softmax, stays
+# <1e-2 even in fp16). fp32 isolates graph correctness from tie noise.
+@pytest.mark.parametrize("dtype,weight", [(torch.float16, 0.0), (torch.float32, 0.5)])
+def test_patched_negative_losses_backward_matches_original_cuda(fake_colpali, cls_name, dtype, weight):
     """Patched negative-loss backward reproduces the original autograd grads on Q / pos / neg."""
     from late_interaction_kernels.colpali_compat import (
         patch_colpali_engine,
@@ -515,11 +524,11 @@ def test_patched_negative_losses_backward_matches_original_cuda(fake_colpali, cl
     cls = getattr(losses, cls_name)
 
     torch.manual_seed(0)
-    Q0 = _l2(torch.randn(6, 24, 128, device="cuda", dtype=torch.float16))
-    P0 = _l2(torch.randn(6, 80, 128, device="cuda", dtype=torch.float16))
-    N0 = _l2(torch.randn(6, 4, 64, 128, device="cuda", dtype=torch.float16))
+    Q0 = _l2(torch.randn(6, 24, 128, device="cuda", dtype=dtype))
+    P0 = _l2(torch.randn(6, 80, 128, device="cuda", dtype=dtype))
+    N0 = _l2(torch.randn(6, 4, 64, 128, device="cuda", dtype=dtype))
 
-    head = cls(normalize_scores=False, in_batch_term_weight=0.5).to("cuda")
+    head = cls(normalize_scores=False, in_batch_term_weight=weight).to("cuda")
 
     def _grads(patched: bool):
         Q = Q0.clone().requires_grad_(True)
@@ -540,8 +549,9 @@ def test_patched_negative_losses_backward_matches_original_cuda(fake_colpali, cl
     def _rel(a, b):
         return (a.float() - b.float()).abs().max() / max(1e-6, b.float().abs().max().item())
 
+    tol = 3e-2 if dtype == torch.float16 else 5e-3
     for g_got, g_ref in zip(got, ref, strict=True):
-        assert _rel(g_got, g_ref) < 3e-2
+        assert _rel(g_got, g_ref) < tol
 
 
 @pytest.mark.cuda
