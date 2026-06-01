@@ -1503,8 +1503,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </div>
 
   <p>
-    The library offers several reduction strategies to handle this
-    contention:
+    The library offers two reduction strategies to handle this
+    contention; <code>auto</code> (the default) chooses between them:
   </p>
 
   <table class="tbl">
@@ -1518,34 +1518,22 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>lowmem</code></td>
         <td>yes</td>
-        <td>Picked for gradient-heavy shapes — KD / hard-negative layouts and high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$). Destination-owned: accumulates in fp32 registers and writes $\nabla_{\Qm} / \nabla_{\Dm}$ directly in the input dtype, so no full-size fp32 buffer, no fp32→bf16 transient, no atomics. Roughly halves backward peak memory.</td>
-      </tr>
-      <tr>
-        <td><code>csr</code></td>
-        <td>yes</td>
-        <td>Sorted-argmax reduction; retained for back-compat / determinism.</td>
-      </tr>
-      <tr>
-        <td><code>atomic</code></td>
-        <td>no</td>
-        <td>Legacy two-pass; retained as a fallback on hardware with degraded fp32 atomics.</td>
+        <td>Picked for gradient-heavy shapes — KD / hard-negative layouts and high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$). Destination-owned: accumulates in fp32 registers and writes $\nabla_{\Qm} / \nabla_{\Dm}$ directly in the input dtype, so no full-size fp32 buffer, no fp32→bf16 transient, no atomics. Roughly halves backward peak memory and is the deterministic path.</td>
       </tr>
     </tbody>
   </table>
 
   <div class="note">
-    <strong>What CSR is doing here.</strong>
-    <em>CSR</em> is the classic Compressed Sparse Row layout — a
-    <code>row_ptr</code> index plus a flat array sorted by row. The
-    other two paths live with the scatter pattern at runtime and use
-    atomic adds; the CSR path <em>inverts</em> it. A one-shot batched
-    radix-sort of $(i, s)$ by argmax (plus a <code>searchsorted</code>)
-    builds per-$j$ buckets, then one Triton program per $(j, t)$ output
-    row reduces its private bucket in registers and writes once — no
-    atomics, bitwise-stable across launches. <code>lowmem</code> reaches the
-    same destination-owned, atomic-free reduction without the sort (it walks
-    the saved argmax directly), which is why <code>auto</code> now routes the
-    high-contention $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime there.
+    <strong>How <code>lowmem</code> avoids atomics.</strong>
+    The <code>unified</code> path lives with the scatter pattern at runtime
+    and uses fp32 atomic adds into a full-size buffer. <code>lowmem</code>
+    <em>inverts</em> it: each Triton program owns one $(j, t)$ output row
+    and reduces the contributing $(i, s)$ pairs from the saved argmax in
+    fp32 registers via a one-hot matmul, then writes once in the input
+    dtype — no atomics, bitwise-stable across launches, and no fp32→bf16
+    transient. That is why <code>auto</code> routes the high-contention
+    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime (and every KD /
+    hard-negative layout) there.
   </div>
 
   <p>
@@ -1843,9 +1831,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     That set $\{(i, s) : t^{\star}(i, j, s) = t\}$ is exactly the bucket
-    the <code>csr</code> kernel sorts pairs into, and the same contention
-    pattern the <code>unified</code> and <code>atomic</code> paths
-    resolve with <code>atomic_add</code>.
+    the <code>lowmem</code> kernel reduces per output row, and the same
+    contention pattern the <code>unified</code> path resolves with
+    <code>atomic_add</code>.
   </p>
 
   <h3>The mask falls out for free</h3>

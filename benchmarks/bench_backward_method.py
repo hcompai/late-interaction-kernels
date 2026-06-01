@@ -1,16 +1,14 @@
-"""Compare grad_D paths: ``auto`` (default) vs ``unified`` vs ``csr`` vs ``atomic`` vs naive.
+"""Compare grad_D paths: ``auto`` (default) vs ``unified`` vs ``lowmem`` vs naive.
 
-Measures end-to-end step time (forward + backward). The forward is
-identical for all flash paths, so the delta isolates the ``grad_D``
-path. ``"auto"`` picks between ``"unified"`` (default for almost
-every shape) and ``"csr"`` (high-contention shapes); ``"atomic"`` is
-still benched as a legacy reference but is never selected by
-``"auto"``.
+Measures end-to-end step time (forward + backward) plus peak memory. The
+forward is identical for both flash paths, so the delta isolates the
+``grad_D`` path. ``"auto"`` picks ``"lowmem"`` (bf16 grads, ~½ peak memory,
+deterministic) for the gradient-heavy shapes and ``"unified"`` (fastest,
+fp32 atomics) for the rest.
 
 Shapes match ``bench_backward.py`` plus a stressful retrieval shape
 and a "hot bucket" synthetic where every query's argmax collapses to
-a single doc-token — the worst case for atomics, a stress case for
-CSR.
+a single doc-token — the worst case for the atomic scatter.
 """
 
 import argparse
@@ -92,7 +90,9 @@ def main():
     p.add_argument("--outdir", default="benchmarks/results")
     p.add_argument("--iters", type=int, default=30)
     p.add_argument(
-        "--include-hot", action="store_true", help="add a synthetic hot-bucket shape (worst case for atomics)"
+        "--include-hot",
+        action="store_true",
+        help="add a synthetic hot-bucket shape (worst case for the atomic scatter)",
     )
     p.add_argument(
         "--only",
@@ -116,7 +116,7 @@ def main():
 
     print(
         f"{'shape':<12} {'Nq':>4} {'Nd':>4} {'Lq':>4} {'Ld':>5} {'d':>4}   "
-        f"{'auto ms':>8} {'unified':>8} {'csr ms':>8} {'atomic ms':>9} {'naive ms':>9}  "
+        f"{'auto ms':>8} {'unified':>8} {'lowmem':>8} {'naive ms':>9}  "
         f"{'auto MB':>8}  {'auto×':>5} {'pick':>8}"
     )
     for name, Nq, Nd, Lq, Ld, d in shapes:
@@ -131,16 +131,14 @@ def main():
         naive = _make_naive_step(Q, D)
 
         # The real selector lives in `_MaxSimFn.backward` (autograd.py):
-        # `auto` picks between `unified` (default) and `csr` for very
-        # high-contention batches. `atomic` is never picked by `auto`;
-        # this bench still reports it for comparison.
+        # `auto` picks `lowmem` for high-contention squares (and all KD
+        # layouts) and `unified` otherwise.
         high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
-        pick = "csr" if high_contention else "unified"
+        pick = "lowmem" if high_contention else "unified"
 
         t_auto = _bench(_make_step(Q, D, backward="auto"), iters=args.iters)
         t_unified = _bench(_make_step(Q, D, backward="unified"), iters=args.iters)
-        t_csr = _bench(_make_step(Q, D, backward="csr"), iters=args.iters)
-        t_atomic = _bench(_make_step(Q, D, backward="atomic"), iters=args.iters)
+        t_lowmem = _bench(_make_step(Q, D, backward="lowmem"), iters=args.iters)
         peak_auto_mb = _peak_mb(_make_step(Q, D, backward="auto"))
 
         try:
@@ -151,7 +149,7 @@ def main():
         auto_sp = t_naive / t_auto if t_naive == t_naive else float("nan")
         print(
             f"{name:<12} {Nq:>4} {Nd:>4} {Lq:>4} {Ld:>5} {d:>4}   "
-            f"{t_auto:>8.2f} {t_unified:>8.2f} {t_csr:>8.2f} {t_atomic:>9.2f} {t_naive:>9.2f}  "
+            f"{t_auto:>8.2f} {t_unified:>8.2f} {t_lowmem:>8.2f} {t_naive:>9.2f}  "
             f"{peak_auto_mb:>8.1f}  {auto_sp:>5.2f} {pick:>8}"
         )
         rows.append(
@@ -164,12 +162,10 @@ def main():
                 "d": d,
                 "auto_ms": t_auto,
                 "unified_ms": t_unified,
-                "csr_ms": t_csr,
-                "atomic_ms": t_atomic,
+                "lowmem_ms": t_lowmem,
                 "naive_ms": t_naive,
                 "auto_peak_mb": peak_auto_mb,
-                "csr_vs_atomic": t_atomic / t_csr if t_csr else None,
-                "unified_vs_csr": t_csr / t_unified if t_unified else None,
+                "lowmem_vs_unified": t_unified / t_lowmem if t_lowmem else None,
                 "auto_pick": pick,
             }
         )

@@ -207,33 +207,25 @@ def maxsim_backward_unified(
     argmax: torch.Tensor,
     q_mask: torch.Tensor | None = None,
     *,
-    method: str = "atomic",
     kd_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Single-pass ``grad_Q`` + ``grad_D`` backward.
+    """Single-pass ``grad_Q`` + ``grad_D`` backward (fp32 atomic scatter).
 
-    Produces the same numerical result as the two-pass
-    :func:`late_interaction_kernels.backward.maxsim_backward`, to fp32
-    tolerance, in roughly half the HBM traffic.
+    Hoists ``Q[i, s, :]`` out of the doc-batch loop, roughly halving HBM read
+    traffic. ``grad_D`` accumulates in a full-size fp32 buffer via
+    ``tl.atomic_add`` and is cast to the input dtype at the end. For the
+    memory-optimal, deterministic variant see :func:`maxsim_backward_lowmem`.
 
     Args:
         grad_scores: ``[Nq, Nd]`` fp32 upstream gradient.
         Q: ``[Nq, Lq, d]``.
-        D: ``[Nd, Ld, d]``.
-        argmax: ``[Nq*Nd, Lq]`` int32 — the winner buffer written by the
-            forward kernel.
+        D: ``[Nd, Ld, d]`` cross-product, or ``[Nq*K, Ld, d]`` KD/pairs.
+        argmax: ``[Nq*Nd, Lq]`` int32 — the winner buffer from the forward.
         q_mask: optional ``[Nq, Lq]`` bool mask.
-        method: for now, only ``"atomic"`` is exposed. A CSR-deterministic
-            path is on the roadmap once bench numbers settle.
 
     Returns:
         ``(grad_Q, grad_D)`` cast back to the dtypes of ``Q`` and ``D``.
     """
-    if method != "atomic":
-        raise ValueError(
-            f"Only method='atomic' is supported right now; got {method!r}. "
-            "A deterministic CSR variant is planned once benchmarks justify it."
-        )
     if not _HAS_TRITON:  # pragma: no cover
         raise RuntimeError(
             "maxsim_backward_unified requires Triton; install a CUDA-enabled "

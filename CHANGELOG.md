@@ -21,6 +21,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ~1.7× faster); `pylate-text B256` from 96 MB to 52 MB. Gradients match the
   other backends to bf16 rounding. Select per-call with `backward="lowmem"`.
 
+### Removed
+
+- **Backward methods `atomic` and `csr`.** The dense `grad_D` strategies
+  collapse to two: `unified` (fastest, fp32 atomics) and `lowmem`
+  (memory-optimal, deterministic). The legacy two-pass `atomic` path was
+  strictly dominated by `unified`, and `csr`'s determinism niche is now
+  covered by `lowmem`, so both were deleted along with the CSR build/sort
+  machinery. `backward=` now accepts `"auto" | "unified" | "lowmem"`;
+  `"auto"` is unchanged in behaviour. No effect on the `auto` default.
+
 ## [0.4.0] - 2026-05-31
 
 ### Changed

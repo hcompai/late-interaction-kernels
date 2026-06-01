@@ -21,6 +21,7 @@ try:
     import triton.language as tl
 
     from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
+    from late_interaction_kernels.backward._autotune import BWD_CONFIGS, BWD_KEY
 
     _HAS_TRITON = True
 except ImportError:  # pragma: no cover
@@ -29,6 +30,71 @@ except ImportError:  # pragma: no cover
 from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 if _HAS_TRITON:
+
+    # grad_Q: one program per (q_batch, q_token), gathers the winning D row per
+    # contributing doc. Row-owned full-coverage store — no atomics.
+    @triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY)
+    @triton.jit
+    def _bwd_dQ_kernel(
+        D_ptr,
+        argmax_ptr,
+        grad_s_ptr,
+        q_mask_ptr,
+        grad_Q_ptr,
+        Nq: tl.constexpr,
+        Nd: tl.constexpr,  # K_per_query in KD/pairs mode
+        Lq: tl.constexpr,
+        Ld,
+        d: tl.constexpr,
+        d_pad: tl.constexpr,
+        stride_d_n,
+        stride_d_l,
+        stride_d_k,
+        stride_gs_n,
+        stride_gs_d,
+        stride_qm_n,
+        stride_qm_l,
+        stride_gq_n,
+        stride_gq_l,
+        stride_gq_k,
+        stride_a_pair,
+        stride_a_lq,
+        has_q_mask: tl.constexpr,
+        kd_layout: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        q_idx = pid // Lq
+        s = pid % Lq
+
+        emb_off = tl.arange(0, d_pad)
+        emb_mask = emb_off < d
+        acc = tl.zeros([d_pad], dtype=tl.float32)
+
+        q_active = True
+        if has_q_mask:
+            q_mask_val = tl.load(q_mask_ptr + q_idx * stride_qm_n + s * stride_qm_l).to(tl.int1)
+            q_active = q_mask_val != 0
+
+        if q_active:
+            for d_idx in range(0, Nd):
+                gs = tl.load(grad_s_ptr + q_idx * stride_gs_n + d_idx * stride_gs_d).to(tl.float32)
+                t = tl.load(argmax_ptr + (q_idx * Nd + d_idx) * stride_a_pair + s * stride_a_lq)
+                t = t.to(tl.int32)
+                d_global = q_idx * Nd + d_idx if kd_layout else d_idx
+                # `t == -1` sentinel: forward had no active doc for this (q, j, s).
+                if t >= 0:
+                    dv = tl.load(
+                        D_ptr + d_global * stride_d_n + t * stride_d_l + emb_off * stride_d_k,
+                        mask=emb_mask,
+                        other=0.0,
+                    ).to(tl.float32)
+                    acc += gs * dv
+
+        tl.store(
+            grad_Q_ptr + q_idx * stride_gq_n + s * stride_gq_l + emb_off * stride_gq_k,
+            acc,
+            mask=emb_mask,
+        )
 
     @triton.autotune(
         configs=forward_configs(),
@@ -158,8 +224,6 @@ def maxsim_backward_lowmem(
 
     Returns ``(grad_Q, grad_D)`` already in ``Q`` / ``D`` dtypes.
     """
-    from late_interaction_kernels.backward.atomic import _bwd_dQ_kernel
-
     Nq, Lq, d = Q.shape
     Nd_total, Ld, _ = D.shape
     Nd = Nd_total // Nq if kd_layout else Nd_total

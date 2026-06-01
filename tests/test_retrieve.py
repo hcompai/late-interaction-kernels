@@ -176,7 +176,7 @@ def test_scorer_forward_with_ids():
     scores.sum().backward()
 
 
-@pytest.mark.parametrize("backward", ["auto", "unified", "csr", "atomic"])
+@pytest.mark.parametrize("backward", ["auto", "unified", "lowmem"])
 def test_maxsim_per_call_backward_kwarg(backward):
     from late_interaction_kernels import maxsim
 

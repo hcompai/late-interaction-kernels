@@ -107,7 +107,7 @@ If those disagree, the bug is in the collator, not in the kernel.
 * **`torch.compile(fullgraph=True)`** around the full step is not
   validated; the kernel itself is compiled in Triton.
 * **Distributed training**: varlen `grad_D` is `atomic_add` and is not
-  bitwise-deterministic across ranks. There is no CSR backward for
-  varlen today.
+  bitwise-deterministic across ranks. The deterministic `lowmem` backward
+  covers the dense path only, not varlen, today.
 * **Empty sequences** (`L_i = 0`) are handled — score contribution is
   zero — but usually indicate an upstream bug; guard in the collator.

@@ -130,7 +130,7 @@ ahead on the wide regimes (`rerank-very-long`, `rerank-colpali`,
 score tile), so peak working set is sub-100 KB on every shape and there's
 no memory column to compare. The real differentiators are elsewhere: a
 fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
-backward (`unified` / `csr` / `atomic`), packed/varlen, PLAID residual
+backward (`unified` / `lowmem`), packed/varlen, PLAID residual
 decompression, and a fused D-side projection head — none of which
 `flash-maxsim` ships. `bench_flash_maxsim.py` also covers KD-layout
 (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +4 to +17%) and pairwise
@@ -313,13 +313,12 @@ runs inside the encoder forward.
 
 ## Backward paths
 
-Two paths matter. `unified` is the fastest single-pass backward: it scatters
+There are two paths. `unified` is the fastest single-pass backward: it scatters
 `grad_D` with fp32 atomics, accumulating in a full-size fp32 buffer that is
 cast to the input dtype at the end. `lowmem` is the memory-optimal one: each
 output row is destination-owned, so it accumulates in fp32 *registers* and
 writes `grad_Q` / `grad_D` straight in the input dtype — no full-size fp32
-buffer, no fp32→bf16 transient, no atomics (hence deterministic). `atomic`
-(two-pass) and `csr` (sorted reduction) remain available for back-compat.
+buffer, no fp32→bf16 transient, no atomics (hence deterministic).
 
 `auto` sends the gradient-heavy shapes — knowledge-distillation / hard-negative
 layouts (where `grad_D` is `n_neg`-inflated) and large high-contention in-batch
@@ -340,12 +339,12 @@ Realistic shapes (H100, bf16, fwd+bwd peak memory / step time):
 
 So on the hard-negative path `lowmem` roughly halves peak memory *and* runs
 ~1.7× faster; on long-query cross-products `unified` keeps the speed edge.
-`lowmem` and `csr` are deterministic across runs; `atomic` / `unified` drift
-within fp32 ULP (reduction order depends on scheduling).
+`lowmem` is deterministic across runs; `unified` drifts within fp32 ULP
+(reduction order depends on scheduling).
 
 ```python
 # Per-call override (auto is recommended):
-maxsim(Q, D, normalize=True, backward="lowmem")  # | "unified" | "auto" | "atomic" | "csr"
+maxsim(Q, D, normalize=True, backward="lowmem")  # | "unified" | "auto"
 ```
 
 ## End-to-end PyLate `Contrastive` training

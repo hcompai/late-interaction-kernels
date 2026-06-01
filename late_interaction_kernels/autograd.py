@@ -8,7 +8,6 @@ import torch.nn.functional as F
 
 from late_interaction_kernels._utils import next_pow2
 from late_interaction_kernels.backward import (
-    maxsim_backward,
     maxsim_backward_lowmem,
     maxsim_backward_unified,
 )
@@ -111,7 +110,7 @@ def _should_chunk_lq(Lq: int) -> bool:
     return Lq > _LQ_CHUNK_MIN
 
 
-_VALID_METHODS = ("auto", "unified", "lowmem", "atomic", "csr")
+_VALID_METHODS = ("auto", "unified", "lowmem")
 
 # One-shot flag so we don't spam the user's logs if they happen to pass
 # unnormalized inputs inside a tight training loop.
@@ -192,19 +191,8 @@ class _MaxSimFn(torch.autograd.Function):
                 return maxsim_backward_lowmem(
                     grad_scores, Qt, Dt, argmax, q_mask, kd_layout=kd_layout
                 )
-            if method == "unified":
-                return maxsim_backward_unified(
-                    grad_scores, Qt, Dt, argmax, q_mask=q_mask, method="atomic", kd_layout=kd_layout
-                )
-            return maxsim_backward(
-                grad_scores,
-                Qt,
-                Dt,
-                argmax,
-                q_mask,
-                d_mask,
-                method=method,
-                kd_layout=kd_layout,
+            return maxsim_backward_unified(
+                grad_scores, Qt, Dt, argmax, q_mask=q_mask, kd_layout=kd_layout
             )
 
         if ctx.normalize:
@@ -241,8 +229,9 @@ def _maxsim_kd(
     same fast forward kernel as in-batch, with ``kd_layout=True`` so each
     program reads its own ``K``-slab (no cross-product, no packing). One
     fused launch, full ``tl.static_range`` unroll over ``Lq``, identical
-    backward kernels as the cross-product path (KD just skips the CSR
-    branch because there's no cross-query contention on ``grad_D``).
+    backward kernels as the cross-product path (KD routes to ``lowmem`` by
+    default since each query owns its slab — no cross-query contention on
+    ``grad_D``).
     """
     if Q.dim() != 3:
         raise ValueError(f"KD layout (D.dim()==4) needs Q to be [Nq, Lq, d]; got Q.shape={tuple(Q.shape)}")
@@ -380,10 +369,11 @@ def maxsim(
             (masked positions get ``-inf`` scores before the row max).
         normalize: L2-normalize Q and D per-token inside the kernel. Set to
             ``True`` for ColBERT / ColPali / LateOn-style scoring.
-        backward: ``grad_D`` strategy
-            (``"auto" | "unified" | "csr" | "atomic"``). ``None`` (default)
-            is treated as ``"auto"``. KD/pairs always use ``unified`` (no
-            cross-query contention on ``grad_D``).
+        backward: gradient strategy (``"auto" | "unified" | "lowmem"``).
+            ``None`` (default) is treated as ``"auto"``, which routes the
+            gradient-heavy shapes (KD / hard-negatives, high-contention
+            squares) to ``"lowmem"`` (bf16 grads, ~½ peak memory,
+            deterministic) and the rest to ``"unified"`` (fastest).
 
     Returns:
         scores: fp32, shape as above.

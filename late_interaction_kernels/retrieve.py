@@ -15,9 +15,9 @@ from typing import Literal
 
 import torch
 
-BackwardMethod = Literal["auto", "unified", "csr", "atomic"]
+BackwardMethod = Literal["auto", "unified", "lowmem"]
 
-_VALID_METHODS: tuple[str, ...] = ("auto", "unified", "csr", "atomic")
+_VALID_METHODS: tuple[str, ...] = ("auto", "unified", "lowmem")
 
 try:
     import triton  # noqa: F401
@@ -91,8 +91,8 @@ class MaxSimScorer(torch.nn.Module):
 
     Args:
         normalize: L2-normalize Q and D per-token inside the kernel.
-        backward: per-call ``grad_D`` strategy
-            (``"auto" | "unified" | "csr" | "atomic"``).
+        backward: per-call gradient strategy
+            (``"auto" | "unified" | "lowmem"``).
         mask_pad_token: optional pad-token id; enables
             :meth:`forward_with_ids` to derive masks from token-id tensors.
     """

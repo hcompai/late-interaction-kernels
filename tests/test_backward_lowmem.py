@@ -89,7 +89,7 @@ def test_lowmem_end_to_end_autograd(rel):
     Q_lm = Q_ref.detach().clone().requires_grad_(True)
     D_lm = D_ref.detach().clone().requires_grad_(True)
 
-    maxsim(Q_ref, D_ref, backward="atomic").sum().backward()
+    maxsim(Q_ref, D_ref, backward="unified").sum().backward()
     maxsim(Q_lm, D_lm, backward="lowmem").sum().backward()
 
     assert rel(Q_lm.grad.float(), Q_ref.grad.float()) < 4e-3

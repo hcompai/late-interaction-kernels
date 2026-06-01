@@ -105,9 +105,9 @@ for `Nq = Nd = 64, Lq = 256`).
 
 1. **`unified`** (default for cross-products) — single-pass fused
    `grad_Q + grad_D` in one kernel. Hoists `Q[i, s]` out of the doc-batch
-   loop, halving HBM read traffic versus the two-pass variants. `grad_D`
-   uses fp32 `tl.atomic_add`, accumulated in a full-size fp32 buffer that is
-   cast to the input dtype at the end.
+   loop, halving HBM read traffic. `grad_D` uses fp32 `tl.atomic_add`,
+   accumulated in a full-size fp32 buffer that is cast to the input dtype at
+   the end.
 
 2. **`lowmem`** (auto-picked where gradient buffers dominate: KD /
    hard-negative layouts, and high contention `Nq ≥ 256 ∧ Nd ≥ 256 ∧
@@ -117,17 +117,15 @@ for `Nq = Nd = 64, Lq = 256`).
    buffer. No full-size fp32 buffer, no fp32→bf16 transient, no atomics —
    so it roughly halves backward peak memory and is **deterministic**.
 
-3. **`csr`** / **`atomic`** — sorted-argmax reduction and legacy two-pass;
-   kept for back-compat and as fallbacks.
+These are the only two `grad_D` strategies. `auto` (the default) picks
+`lowmem` for the gradient-heavy shapes above and `unified` otherwise.
 
 | method     | bitwise-reproducible | when to pick                          |
 | ---------- | :------------------: | ------------------------------------- |
 | `unified`  | no (atomic, ≤1e-6 r) | default cross-product (fastest)       |
-| `lowmem`   | yes                  | KD / hard-negatives, high contention (½ memory) |
-| `csr`      | yes                  | back-compat / determinism             |
-| `atomic`   | no (atomic, ≤1e-6 r) | fallback only                         |
+| `lowmem`   | yes                  | KD / hard-negatives, high contention (½ memory, deterministic) |
 
-`tl.argmax` is stable (lowest-index tie-break) on all paths — only the
+`tl.argmax` is stable (lowest-index tie-break) on both paths — only the
 `grad_D` reduction order differs.
 
 ### Backward launch-param autotuning

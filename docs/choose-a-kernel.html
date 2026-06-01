@@ -673,7 +673,7 @@
       { key: 'maxsim', name: 'maxsim', category: 'core',
         color: C.slate,
         stack: 'any', phase: 'any', layout: 'dense', workload: 'maxsim',
-        blurb: 'Core fused MaxSim on dense [N, L, d] tensors. Dispatches on D.dim(): 3-D runs the Nq × Nd cross-product, 4-D [Nq, K, Ld, d] runs the KD layout in one launch. Autograd-aware; auto-skips the argmax save when neither input has requires_grad. backward="auto"|"unified"|"lowmem"|"atomic"|"csr" (auto picks lowmem for gradient-heavy shapes, unified otherwise).',
+        blurb: 'Core fused MaxSim on dense [N, L, d] tensors. Dispatches on D.dim(): 3-D runs the Nq × Nd cross-product, 4-D [Nq, K, Ld, d] runs the KD layout in one launch. Autograd-aware; auto-skips the argmax save when neither input has requires_grad. backward="auto"|"unified"|"lowmem" (auto picks lowmem for gradient-heavy shapes, unified otherwise).',
         importLine: 'from late_interaction_kernels import maxsim' },
 
       { key: 'maxsim_varlen', name: 'maxsim_varlen', category: 'core',
