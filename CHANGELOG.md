@@ -19,8 +19,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `static_range` loop, and the kernel always sees `Lq == 128`, so the
   autotune cache collapses onto a small constant (one entry, plus one
   more for tail-padded `has_q_mask=True`) instead of one per length
-  bucket. Measured on H100 (bf16): **+10–22% at `Lq=1024`, +51–72% at
-  `Lq=768`, +44% at `Lq=1030`** (tail-padded), vs the un-chunked path.
+  bucket. Measured on H100 (bf16) with `bench_chunking.py`, vs the
+  un-chunked path: **+49–77% at `Lq=768`, and at `Lq=1024` from +24%
+  in-batch to roughly break-even for rerank**.
   Shorter queries (ColBERT `Lq≤32`, long-doc `Lq≤512`) fall through to
   the existing core unchanged — no regression. Chunking is
   cross-product-only; the KD / pairs path (4-D `D`) is unaffected and
@@ -36,10 +37,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   forward autotuner (`Lq`, `d_pad`, layout flags; `Nd` / `Ld` stay out),
   so the cache holds one entry per regime rather than one per batch
   size, and atomic-accumulating kernels use `reset_to_zero` so autotune
-  trials don't pile onto each other. Measured on H100 (bf16), full
-  training step vs the prior fixed-launch backward: **colbert-B256
-  1.21×, colpali-B16 1.87×, colpali-B32 1.56×** (colbert-B512 held at
-  1.01×), all at lower peak memory.
+  trials don't pile onto each other. Measured on H100 (bf16), tuning
+  lifts `auto` by **~1.2–1.45× across the training shapes** (see the
+  backward table in `benchmarks.md`), the largest gain on the
+  high-contention `train-256` csr reduction, all at lower peak memory.
 
 ### Fixed
 
