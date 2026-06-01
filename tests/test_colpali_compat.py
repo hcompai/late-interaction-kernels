@@ -148,9 +148,65 @@ def _fake_colpali_engine():
             scores = scores.view(-1) / self.temperature
             return F.softplus(-scores * pos_mask).mean()
 
+    class ColbertNegativeCELoss(_BaseColbert):
+        """Explicit-negative InfoNCE: softplus(neg - pos) + optional in-batch CE term."""
+
+        def __init__(self, *, in_batch_term_weight: float = 0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.in_batch_term_weight = in_batch_term_weight
+            self.inner_loss = ColbertLoss(**kwargs)
+
+        def forward(self, query_embeddings, doc_embeddings, neg_doc_embeddings, offset: int = 0):
+            import torch.nn.functional as F
+
+            lengths = (query_embeddings[:, :, 0] != 0).sum(dim=1)
+            pos_raw = torch.einsum(
+                "bnd,bsd->bns", query_embeddings, doc_embeddings[offset : offset + neg_doc_embeddings.size(0)]
+            )
+            neg_raw = torch.einsum("bnd,blsd->blns", query_embeddings, neg_doc_embeddings)
+            pos_scores = pos_raw.amax(dim=2).sum(dim=1)
+            neg_scores = neg_raw.amax(dim=3).sum(dim=2)
+            if self.normalize_scores:
+                pos_scores = self._apply_normalization(pos_scores, lengths)
+                neg_scores = self._apply_normalization(neg_scores, lengths)
+            loss = F.softplus((neg_scores - pos_scores.unsqueeze(1)) / self.temperature).mean()
+            if self.in_batch_term_weight > 0:
+                loss_ib = self.inner_loss(query_embeddings, doc_embeddings, offset)
+                loss = loss * (1 - self.in_batch_term_weight) + loss_ib * self.in_batch_term_weight
+            return loss
+
+    class ColbertPairwiseNegativeCELoss(_BaseColbert):
+        """Explicit-negative pairwise softplus + optional in-batch pairwise term."""
+
+        def __init__(self, *, in_batch_term_weight: float = 0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.in_batch_term_weight = in_batch_term_weight
+            self.inner_pairwise = ColbertPairwiseCELoss(**kwargs)
+
+        def forward(self, query_embeddings, doc_embeddings, neg_doc_embeddings, offset: int = 0):
+            import torch.nn.functional as F
+
+            lengths = (query_embeddings[:, :, 0] != 0).sum(dim=1)
+            pos_raw = torch.einsum(
+                "bnd,bld->bnl", query_embeddings, doc_embeddings[offset : offset + query_embeddings.size(0)]
+            )
+            neg_raw = torch.einsum("bnd,bsld->bsnl", query_embeddings, neg_doc_embeddings)
+            pos_scores = pos_raw.amax(dim=2).sum(dim=1)
+            neg_scores = neg_raw.amax(dim=3).sum(dim=2)
+            if self.normalize_scores:
+                pos_scores = self._apply_normalization(pos_scores, lengths)
+                neg_scores = self._apply_normalization(neg_scores, lengths)
+            loss = F.softplus((neg_scores - pos_scores.unsqueeze(1)) / self.temperature).mean()
+            if self.in_batch_term_weight > 0:
+                loss_ib = self.inner_pairwise(query_embeddings, doc_embeddings, offset)
+                loss = loss * (1 - self.in_batch_term_weight) + loss_ib * self.in_batch_term_weight
+            return loss
+
     late_interaction_losses.ColbertLoss = ColbertLoss
     late_interaction_losses.ColbertPairwiseCELoss = ColbertPairwiseCELoss
     late_interaction_losses.ColbertSigmoidLoss = ColbertSigmoidLoss
+    late_interaction_losses.ColbertNegativeCELoss = ColbertNegativeCELoss
+    late_interaction_losses.ColbertPairwiseNegativeCELoss = ColbertPairwiseNegativeCELoss
 
     utils.processing_utils = processing_utils
     utils.torch_utils = torch_utils
@@ -208,7 +264,13 @@ def test_patch_and_unpatch_round_trip(fake_colpali):
     original_score = base.score_multi_vector
     original_forwards = {
         cls_name: getattr(losses, cls_name).forward
-        for cls_name in ("ColbertLoss", "ColbertPairwiseCELoss", "ColbertSigmoidLoss")
+        for cls_name in (
+            "ColbertLoss",
+            "ColbertPairwiseCELoss",
+            "ColbertSigmoidLoss",
+            "ColbertNegativeCELoss",
+            "ColbertPairwiseNegativeCELoss",
+        )
     }
 
     patch_colpali_engine()
@@ -369,6 +431,117 @@ def test_patched_loss_forwards_match_original_cuda(fake_colpali, cls_name):
     err = (out - ref).abs().max().item()
     denom = max(1e-6, ref.abs().max().item())
     assert err / denom < 5e-3, f"err={err}, denom={denom}"
+
+
+@pytest.mark.parametrize("cls_name", ["ColbertNegativeCELoss", "ColbertPairwiseNegativeCELoss"])
+def test_patched_negative_losses_fall_through_on_cpu(fake_colpali, cls_name):
+    """On CPU the pos/neg terms aren't fused, so the patched forward equals vanilla bit-for-bit."""
+    from late_interaction_kernels.colpali_compat import (
+        patch_colpali_engine,
+        unpatch_colpali_engine,
+    )
+
+    losses = fake_colpali["colpali_engine.loss.late_interaction_losses"]
+    cls = getattr(losses, cls_name)
+
+    torch.manual_seed(0)
+    Q = _l2(torch.randn(5, 16, 32))
+    pos_D = _l2(torch.randn(5, 40, 32))
+    neg_D = _l2(torch.randn(5, 3, 28, 32))
+
+    head = cls(normalize_scores=True)
+    ref = head(Q, pos_D, neg_D)
+
+    patch_colpali_engine()
+    try:
+        out = head(Q, pos_D, neg_D)
+    finally:
+        unpatch_colpali_engine()
+
+    assert torch.equal(out, ref)
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("cls_name", ["ColbertNegativeCELoss", "ColbertPairwiseNegativeCELoss"])
+@pytest.mark.parametrize("in_batch_term_weight", [0.0, 0.5])
+def test_patched_negative_losses_match_original_cuda(fake_colpali, cls_name, in_batch_term_weight):
+    """The fused pos (maxsim_pairs) + neg (4-D maxsim) heads match the einsum forward on CUDA.
+
+    ``in_batch_term_weight=0`` isolates the explicit pos/neg path; ``0.5`` also
+    exercises the mixed-in in-batch term (fused through the inner head).
+    """
+    from late_interaction_kernels.colpali_compat import (
+        patch_colpali_engine,
+        unpatch_colpali_engine,
+    )
+
+    losses = fake_colpali["colpali_engine.loss.late_interaction_losses"]
+    cls = getattr(losses, cls_name)
+
+    torch.manual_seed(0)
+    Q = _l2(torch.randn(6, 24, 128, device="cuda", dtype=torch.float16))
+    pos_D = _l2(torch.randn(6, 80, 128, device="cuda", dtype=torch.float16))
+    neg_D = _l2(torch.randn(6, 4, 64, 128, device="cuda", dtype=torch.float16))
+
+    head_args: dict[str, object] = {
+        "normalize_scores": False,
+        "in_batch_term_weight": in_batch_term_weight,
+    }
+    ref_head = cls(**head_args).to("cuda")
+    fused_head = cls(**head_args).to("cuda")
+    ref = ref_head(Q, pos_D, neg_D)
+
+    patch_colpali_engine()
+    try:
+        out = fused_head(Q, pos_D, neg_D)
+    finally:
+        unpatch_colpali_engine()
+
+    err = (out - ref).abs().max().item()
+    denom = max(1e-6, ref.abs().max().item())
+    assert err / denom < 5e-3, f"err={err}, denom={denom}"
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("cls_name", ["ColbertNegativeCELoss", "ColbertPairwiseNegativeCELoss"])
+def test_patched_negative_losses_backward_matches_original_cuda(fake_colpali, cls_name):
+    """Patched negative-loss backward reproduces the original autograd grads on Q / pos / neg."""
+    from late_interaction_kernels.colpali_compat import (
+        patch_colpali_engine,
+        unpatch_colpali_engine,
+    )
+
+    losses = fake_colpali["colpali_engine.loss.late_interaction_losses"]
+    cls = getattr(losses, cls_name)
+
+    torch.manual_seed(0)
+    Q0 = _l2(torch.randn(6, 24, 128, device="cuda", dtype=torch.float16))
+    P0 = _l2(torch.randn(6, 80, 128, device="cuda", dtype=torch.float16))
+    N0 = _l2(torch.randn(6, 4, 64, 128, device="cuda", dtype=torch.float16))
+
+    head = cls(normalize_scores=False, in_batch_term_weight=0.5).to("cuda")
+
+    def _grads(patched: bool):
+        Q = Q0.clone().requires_grad_(True)
+        P = P0.clone().requires_grad_(True)
+        N = N0.clone().requires_grad_(True)
+        if patched:
+            patch_colpali_engine()
+        try:
+            head(Q, P, N).backward()
+        finally:
+            if patched:
+                unpatch_colpali_engine()
+        return Q.grad, P.grad, N.grad
+
+    ref = _grads(patched=False)
+    got = _grads(patched=True)
+
+    def _rel(a, b):
+        return (a.float() - b.float()).abs().max() / max(1e-6, b.float().abs().max().item())
+
+    for g_got, g_ref in zip(got, ref, strict=True):
+        assert _rel(g_got, g_ref) < 3e-2
 
 
 @pytest.mark.cuda

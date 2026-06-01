@@ -16,10 +16,17 @@ Patches the four entry points where colpali_engine materializes the
 * :meth:`colpali_engine.loss.late_interaction_losses.ColbertLoss.forward`
 * :meth:`...ColbertPairwiseCELoss.forward`
 * :meth:`...ColbertSigmoidLoss.forward`
-  — the three in-batch loss heads. Their ``ColbertNegativeCELoss`` and
-  ``ColbertPairwiseNegativeCELoss`` siblings inherit the in-batch term
-  through ``self.inner_loss`` / ``self.inner_pairwise``, so the patch
-  reaches them transparently.
+  — the three in-batch loss heads.
+* :meth:`...ColbertNegativeCELoss.forward`
+* :meth:`...ColbertPairwiseNegativeCELoss.forward`
+  — the explicit-hard-negative heads. Their positive term routes through
+  :func:`maxsim_pairs` (the diagonal ``q[i]·d[i]`` score) and their per-query
+  negative lists through 4-D :func:`maxsim` (the KD layout), so both the
+  ``[B, Ld, d]`` positives and the ``[B, n_neg, Ld, d]`` negatives skip the
+  materialized similarity tensor. The in-batch CE term they mix in reuses the
+  already-patched ``self.inner_loss`` / ``self.inner_pairwise``. The pos/neg
+  acceleration is CUDA-only; on MPS/CPU those terms fall back to the original
+  einsum while the in-batch term still accelerates through the inner head.
 
 Dispatch rules match :func:`patch_pylate`: CUDA (Ampere+) → fused Triton
 kernel; MPS → ``torch.compile``-fused reference; CPU / sub-Ampere /
@@ -184,6 +191,92 @@ def patched_colbert_sigmoid_forward(self, query_embeddings, doc_embeddings, offs
     return F.softplus(-scores * pos_mask).mean()
 
 
+def _patched_negative_scores(self, Q, pos_D, neg_D, offset: int):
+    """Pos / neg MaxSim for the explicit-hard-negative heads.
+
+    The positive term is the diagonal ``q[i]·d[i]`` score, computed by
+    :func:`maxsim_pairs`; the per-query negative lists are 4-D ``[B, n_neg,
+    Ld, d]``, computed by 4-D :func:`maxsim` (KD layout). Both replace the
+    ``einsum -> amax -> sum`` the original forward materializes.
+
+    Returns ``(pos_scores[B], neg_scores[B, n_neg])`` or ``None`` to signal
+    the caller it must fall through to the original forward (``use_smooth_max``,
+    non-CUDA device, mixed devices, narrow ``d``). MPS/CPU fall back here on
+    purpose — ``maxsim_pairs`` / 4-D ``maxsim`` are the Triton path.
+    """
+    if self.use_smooth_max:
+        return None
+    # maxsim_pairs / 4-D maxsim are CUDA Triton kernels; the in-batch term the
+    # caller mixes in still accelerates on MPS through the inner head.
+    if _device_path(Q, pos_D) != "cuda":
+        return None
+    if neg_D.device != Q.device or neg_D.shape[-1] < 8:
+        return None
+
+    from late_interaction_kernels.autograd import maxsim, maxsim_pairs
+
+    lengths = (Q[:, :, 0] != 0).sum(dim=1)
+    pos_D = pos_D[offset : offset + Q.size(0)]
+    pos_scores = maxsim_pairs(Q, pos_D)  # [B]
+    neg_scores = maxsim(Q, neg_D)  # [B, n_neg] via the 4-D KD dispatch
+    if self.normalize_scores:
+        pos_scores = self._apply_normalization(pos_scores, lengths)
+        neg_scores = self._apply_normalization(neg_scores, lengths)
+    return pos_scores, neg_scores
+
+
+def _negative_ce_loss(self, Q, pos_D, neg_D, offset, original_key, inner_attr):
+    """Shared body for the two explicit-negative heads.
+
+    Identical softplus(neg - pos) objective; they differ only in which inner
+    head supplies the in-batch term (``inner_loss`` vs ``inner_pairwise``) and
+    which original to restore on fall-through.
+    """
+    import torch.nn.functional as F
+
+    scored = _patched_negative_scores(self, Q, pos_D, neg_D, offset)
+    if scored is None:
+        return _ORIGINAL[original_key](self, Q, pos_D, neg_D, offset)
+    pos_scores, neg_scores = scored
+    loss = F.softplus((neg_scores - pos_scores.unsqueeze(1)) / self.temperature).mean()
+    if self.in_batch_term_weight > 0:
+        # The inner head's forward is patched at class level, so its in-batch
+        # term is already fused — no double work, no extra dispatch here.
+        loss_ib = getattr(self, inner_attr)(Q, pos_D, offset)
+        loss = loss * (1 - self.in_batch_term_weight) + loss_ib * self.in_batch_term_weight
+    return loss
+
+
+def patched_colbert_negative_ce_forward(
+    self, query_embeddings, doc_embeddings, neg_doc_embeddings, offset: int = 0
+):
+    """Drop-in for :meth:`ColbertNegativeCELoss.forward`."""
+    return _negative_ce_loss(
+        self,
+        query_embeddings,
+        doc_embeddings,
+        neg_doc_embeddings,
+        offset,
+        "ColbertNegativeCELoss.forward",
+        "inner_loss",
+    )
+
+
+def patched_colbert_pairwise_negative_ce_forward(
+    self, query_embeddings, doc_embeddings, neg_doc_embeddings, offset: int = 0
+):
+    """Drop-in for :meth:`ColbertPairwiseNegativeCELoss.forward`."""
+    return _negative_ce_loss(
+        self,
+        query_embeddings,
+        doc_embeddings,
+        neg_doc_embeddings,
+        offset,
+        "ColbertPairwiseNegativeCELoss.forward",
+        "inner_pairwise",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
@@ -226,6 +319,8 @@ def patch_colpali_engine():
             ("ColbertLoss", patched_colbert_loss_forward),
             ("ColbertPairwiseCELoss", patched_colbert_pairwise_ce_forward),
             ("ColbertSigmoidLoss", patched_colbert_sigmoid_forward),
+            ("ColbertNegativeCELoss", patched_colbert_negative_ce_forward),
+            ("ColbertPairwiseNegativeCELoss", patched_colbert_pairwise_negative_ce_forward),
         ):
             cls = getattr(losses, cls_name, None)
             if cls is None:
@@ -271,7 +366,13 @@ def unpatch_colpali_engine():
 
     import importlib
 
-    for cls_name in ("ColbertLoss", "ColbertPairwiseCELoss", "ColbertSigmoidLoss"):
+    for cls_name in (
+        "ColbertLoss",
+        "ColbertPairwiseCELoss",
+        "ColbertSigmoidLoss",
+        "ColbertNegativeCELoss",
+        "ColbertPairwiseNegativeCELoss",
+    ):
         attr = f"{cls_name}.forward"
         if attr not in _ORIGINAL:
             continue
