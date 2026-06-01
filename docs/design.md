@@ -53,6 +53,32 @@ SRAM use per program: `BLOCK_Q · d + BLOCK_D · d + BLOCK_Q · BLOCK_D` fp16
 values + a `[BLOCK_Q]` fp32 accumulator. ~40 KiB at typical block sizes,
 fits 4× per H100 SM.
 
+### Long-query chunking
+
+For long queries (`Lq > 512`, ColPali-scale visual patches), `maxsim()` splits
+`Q` into fixed 128-token chunks and scores each as an independent batch through
+the same kernel, then sums the per-chunk scores back per original query:
+
+    nc = ceil(Lq / 128)
+    Qc = Q.reshape(Nq * nc, 128, d)          # [Nq*nc, 128, d]
+    scores_c = kernel(Qc, D, ...)             # [Nq*nc, Nd]
+    scores = scores_c.view(Nq, nc, Nd).sum(1) # [Nq, Nd]
+
+Because MaxSim is a sum over query tokens of a per-token max, this is
+numerically exact. Autograd flows through the reshape and sum unchanged.
+
+Two benefits:
+* **GPU utilisation.** Without chunking, a long query serialises a long
+  `static_range(Lq / BLOCK_Q)` loop inside each program. Chunking launches
+  more, shorter programs that fill the SM array concurrently.
+* **Autotune cache collapse.** The kernel always sees `Lq == 128`, so
+  all ColPali-scale queries share one autotune entry (two with tail-padding)
+  instead of one per `Lq` bucket.
+
+The split fires only when `Lq > 512`; shorter queries fall through to the
+direct kernel call unchanged. Chunking is cross-product-only — the KD /
+pairs path (`maxsim` with 4-D `D`) is unaffected.
+
 ### Mask handling
 
 Masked positions are written as `−inf` *before* every `tl.max` reduction, so
@@ -99,6 +125,11 @@ for `Nq = Nd = 64, Lq = 256`).
 
 `tl.argmax` is stable (lowest-index tie-break) on all three paths — only
 the `grad_D` reduction order differs.
+
+### Backward launch-param autotuning
+
+Backward kernels have no block tiling to sweep, so they are autotuned over
+`num_warps × num_stages` only (see `## Autotune → Backward`).
 
 ## Varlen / packed path
 
@@ -161,6 +192,8 @@ and as `d_model` shrinks below ~128.
 
 ## Autotune
 
+### Forward
+
 Tuned over `BLOCK_Q × BLOCK_D × num_warps × num_stages` keyed on
 `(Lq, Ld, d_pad, mask flags, normalize)`. Configs are pruned by:
 
@@ -169,6 +202,17 @@ Tuned over `BLOCK_Q × BLOCK_D × num_warps × num_stages` keyed on
 
 Hopper shortlist enables `num_consumer_groups` warp specialization
 (Triton ≥ 3.2, FA-3 style); fallback is transparent on older Triton.
+
+With long-query chunking (see `## Forward → Long-query chunking`) ColPali-scale
+queries always present `Lq = 128` to the kernel, collapsing the forward
+autotune cache onto a small constant regardless of the original query length.
+
+### Backward
+
+Tuned over `num_warps × num_stages` (no block-tiling dimension) keyed on
+`(Lq, d_pad, mask flags, kd_layout)`, so one entry covers all batch sizes in a
+training regime.
+
 Autotune runs once per key per process and caches the winner.
 
 ## Numerical accuracy
