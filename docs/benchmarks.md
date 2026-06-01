@@ -543,19 +543,15 @@ Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
 `benchmarks/bench_colpali_realdata.py` on `vidore/docvqa_test_subsampled`).
 
 
-Peak VRAM is identical between vanilla and LIK to the precision shown (the
-fused kernel only skips a small `[B, n_neg, Lq, Ld]` / `[B, B, Lq, Ld]` tensor
-at these batch sizes), so the table lists the one shared figure.
-
-| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v = LIK) |
-| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------------- |
-| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 GB |
-| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 GB |
-| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 GB |
-| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 GB |
-| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 GB |
-| `ColbertNegativeCE` | synth bs=4, num_neg=4, 448px       |  638.9 ms              |  700.1 ms | 0.91×     | 24.08 GB |
-| `ColbertPairwiseNeg`| synth bs=4, num_neg=4, 448px       |  625.6 ms              |  672.0 ms | 0.93×     | 24.08 GB |
+| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v → f)     |
+| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | ---------------- |
+| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 → 9.10 GB  |
+| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 → 5.74 GB  |
+| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 → 9.10 GB  |
+| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 → 16.20 GB |
+| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 → 8.05 GB  |
+| `ColbertNegativeCE` | synth bs=4, num_neg=4, 448px       |  638.9 ms              |  700.1 ms | 0.91×     | 24.08 → 24.08 GB |
+| `ColbertPairwiseNeg`| synth bs=4, num_neg=4, 448px       |  625.6 ms              |  672.0 ms | 0.93×     | 24.08 → 24.08 GB |
 
 
 Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
