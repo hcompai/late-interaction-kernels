@@ -55,40 +55,19 @@ import os
 import random
 import string
 import time
-from dataclasses import dataclass
 
 import torch
+from _bench_common import (
+    Measurement,
+    _init_ddp,
+    _is_dist,
+    _log,
+    _rank,
+    _timed_step,
+    _world_size,
+)
 
 MODEL_NAME_DEFAULT = "lightonai/LateOn"
-
-
-# --------------------------------------------------------------------------- #
-# DDP helpers                                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def _is_dist() -> bool:
-    return torch.distributed.is_available() and torch.distributed.is_initialized()
-
-
-def _rank() -> int:
-    return torch.distributed.get_rank() if _is_dist() else 0
-
-
-def _world_size() -> int:
-    return torch.distributed.get_world_size() if _is_dist() else 1
-
-
-def _log(msg: str) -> None:
-    if _rank() == 0:
-        print(msg, flush=True)
-
-
-def _init_ddp() -> torch.device:
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(backend="nccl")
-    return torch.device(f"cuda:{local_rank}")
 
 
 # --------------------------------------------------------------------------- #
@@ -132,29 +111,6 @@ def _build_batch(model, tokenizer, batch_size: int, Lq: int, Ld: int, device: to
 # --------------------------------------------------------------------------- #
 # Benchmark core                                                              #
 # --------------------------------------------------------------------------- #
-
-
-@dataclass
-class Measurement:
-    step_ms: float
-    peak_mb: float
-    err: str | None = None
-
-
-def _timed_step(closure, iters: int, warmup: int) -> float:
-    for _ in range(warmup):
-        closure()
-    torch.cuda.synchronize()
-    if _is_dist():
-        torch.distributed.barrier()
-    s = torch.cuda.Event(enable_timing=True)
-    e = torch.cuda.Event(enable_timing=True)
-    s.record()
-    for _ in range(iters):
-        closure()
-    e.record()
-    torch.cuda.synchronize()
-    return s.elapsed_time(e) / iters
 
 
 def run_one(

@@ -22,26 +22,14 @@ Requires: ``pip install pylate datasets`` (see ``.[dev,pylate]`` extra).
 
 import argparse
 import gc
-import importlib.util
 import json
 import os
 import random
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import torch
-
-# ``benchmarks/`` is not a package; load the sibling bench module by path.
-_LATEON = Path(__file__).resolve().parent / "bench_pylate_lateon.py"
-_spec = importlib.util.spec_from_file_location("_bench_pylate_lateon", _LATEON)
-_mod = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(_mod)
-Measurement = _mod.Measurement
-_log = _mod._log
-_timed_step = _mod._timed_step
-
+from _bench_common import Measurement, _log, _timed_step
 
 DATASET_DEFAULT = "sentence-transformers/msmarco-bm25"
 DATASET_CONFIG = "triplet"

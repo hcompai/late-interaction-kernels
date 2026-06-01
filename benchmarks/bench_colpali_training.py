@@ -33,27 +33,14 @@ Usage
 
 import argparse
 import gc
-import importlib.util
 import json
 import os
 import random
 import string
 import time
-from pathlib import Path
 
 import torch
-
-# ``benchmarks/`` is not a package; reuse Measurement + _timed_step + _log
-# from bench_pylate_lateon by loading it directly.
-_LATEON = Path(__file__).resolve().parent / "bench_pylate_lateon.py"
-_spec = importlib.util.spec_from_file_location("_bench_pylate_lateon", _LATEON)
-_mod = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(_mod)
-Measurement = _mod.Measurement
-_log = _mod._log
-_timed_step = _mod._timed_step
-
+from _bench_common import Measurement, _log, _timed_step
 
 MODEL_NAME_DEFAULT = "vidore/colqwen2-v1.0"
 LOSS_CHOICES = ("colbert", "pairwise_ce", "sigmoid", "colbert_neg", "pairwise_neg")
