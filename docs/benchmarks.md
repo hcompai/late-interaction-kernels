@@ -543,8 +543,12 @@ Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
 `benchmarks/bench_colpali_realdata.py` on `vidore/docvqa_test_subsampled`).
 
 
-| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak     |
-| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------- |
+Peak VRAM is identical between vanilla and LIK to the precision shown (the
+fused kernel only skips a small `[B, n_neg, Lq, Ld]` / `[B, B, Lq, Ld]` tensor
+at these batch sizes), so the table lists the one shared figure.
+
+| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v = LIK) |
+| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------------- |
 | `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 GB |
 | `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 GB |
 | `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 GB |
