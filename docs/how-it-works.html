@@ -1503,7 +1503,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </div>
 
   <p>
-    The library offers three reduction strategies to handle this
+    The library offers several reduction strategies to handle this
     contention:
   </p>
 
@@ -1513,12 +1513,17 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>unified</code></td>
         <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
+        <td>Default for cross-products. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
+      </tr>
+      <tr>
+        <td><code>lowmem</code></td>
+        <td>yes</td>
+        <td>Picked for gradient-heavy shapes — KD / hard-negative layouts and high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$). Destination-owned: accumulates in fp32 registers and writes $\nabla_{\Qm} / \nabla_{\Dm}$ directly in the input dtype, so no full-size fp32 buffer, no fp32→bf16 transient, no atomics. Roughly halves backward peak memory.</td>
       </tr>
       <tr>
         <td><code>csr</code></td>
         <td>yes</td>
-        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$), or any time bitwise determinism matters.</td>
+        <td>Sorted-argmax reduction; retained for back-compat / determinism.</td>
       </tr>
       <tr>
         <td><code>atomic</code></td>
@@ -1537,13 +1542,14 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     radix-sort of $(i, s)$ by argmax (plus a <code>searchsorted</code>)
     builds per-$j$ buckets, then one Triton program per $(j, t)$ output
     row reduces its private bucket in registers and writes once — no
-    atomics, bitwise-stable across launches. The sort only pays off
-    when atomics would actually serialise, which is exactly the
-    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime the dispatcher flags.
+    atomics, bitwise-stable across launches. <code>lowmem</code> reaches the
+    same destination-owned, atomic-free reduction without the sort (it walks
+    the saved argmax directly), which is why <code>auto</code> now routes the
+    high-contention $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime there.
   </div>
 
   <p>
-    All three paths use Triton's stable <code>argmax</code> (lowest-index
+    All paths use Triton's stable <code>argmax</code> (lowest-index
     tie-break) on the forward, so only the $\nabla_{\Dm}$ reduction order
     distinguishes them numerically.
   </p>

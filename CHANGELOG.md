@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`lowmem` backward — ~half the training peak memory, deterministic.**
+  A new destination-owned backward that accumulates `grad_Q` / `grad_D` in
+  fp32 registers and writes them straight in the input dtype (bf16/fp16) — no
+  full-size fp32 gradient buffer, no fp32→bf16 transient, and no atomics
+  (so it is bitwise-reproducible). `auto` now routes the gradient-heavy
+  shapes to it: knowledge-distillation / hard-negative layouts (where
+  `grad_D` is `n_neg`-inflated) and large high-contention in-batch squares;
+  `unified` still handles the common and long-query cross-products, where it
+  is fastest. Measured on H100 (bf16, fwd+bwd): a `B256 × 16-neg` ColPali
+  step drops from 4.3 GB / 2.36 ms to **2.2 GB / 1.37 ms** (≈½ memory,
+  ~1.7× faster); `pylate-text B256` from 96 MB to 52 MB. Gradients match the
+  other backends to bf16 rounding. Select per-call with `backward="lowmem"`.
+
 ## [0.4.0] - 2026-05-31
 
 ### Changed
