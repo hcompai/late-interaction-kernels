@@ -365,6 +365,30 @@ wheels = [
 ]
 
 [[package]]
+name = "colpali-engine"
+version = "0.3.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "peft" },
+    { name = "pillow" },
+    { name = "requests" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torchvision", version = "0.23.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b6/45/dc7a65931ca634a82b1636ec3291510219080779e11bbf9f842e1570b37b/colpali_engine-0.3.13.tar.gz", hash = "sha256:57ca2f359055551327267d0b0ff9af134d62dc33a658b2c8c776fc9967b0191f", size = 176246, upload-time = "2025-11-15T18:37:50.553Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/93/e9afe4ef301c762a619ef5d66e345bec253fe2e2c230ff8b7d572f6351ee/colpali_engine-0.3.13-py3-none-any.whl", hash = "sha256:4f6225a4368cd17716fa8c2e0f20024490c745a1d5f84afab7e4d71790f48002", size = 88557, upload-time = "2025-11-15T18:37:48.922Z" },
+]
+
+[[package]]
 name = "datasets"
 version = "4.8.5"
 source = { registry = "https://pypi.org/simple" }
@@ -811,6 +835,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+colpali = [
+    { name = "colpali-engine" },
+]
 dev = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
@@ -832,6 +859,7 @@ torch-cuda = [
 
 [package.metadata]
 requires-dist = [
+    { name = "colpali-engine", marker = "extra == 'colpali'", specifier = ">=0.3.10,<1" },
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.21,<3" },
     { name = "pylate", marker = "extra == 'pylate'", specifier = ">=1.3.3,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7,<10" },
@@ -844,7 +872,7 @@ requires-dist = [
     { name = "triton", marker = "sys_platform == 'linux'", specifier = ">=3.0,<4" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.20,<0.1" },
 ]
-provides-extras = ["dev", "pylate", "torch-cpu", "torch-cuda"]
+provides-extras = ["colpali", "dev", "pylate", "torch-cpu", "torch-cuda"]
 
 [[package]]
 name = "markupsafe"
@@ -2011,6 +2039,30 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e4/a5/2f6ed612056819de445a433ca1f2821ac3dab7f150d569a59e9cc105de1d/pandas-3.0.2-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:734be7551687c00fbd760dc0522ed974f82ad230d4a10f54bf51b80d44a08702", size = 11815274, upload-time = "2026-03-31T06:48:22.695Z" },
     { url = "https://files.pythonhosted.org/packages/00/2f/b622683e99ec3ce00b0854bac9e80868592c5b051733f2cf3a868e5fea26/pandas-3.0.2-cp314-cp314t-win_amd64.whl", hash = "sha256:57a07209bebcbcf768d2d13c9b78b852f9a15978dac41b9e6421a81ad4cdd276", size = 10888530, upload-time = "2026-03-31T06:48:25.806Z" },
     { url = "https://files.pythonhosted.org/packages/cb/2b/f8434233fab2bd66a02ec014febe4e5adced20e2693e0e90a07d118ed30e/pandas-3.0.2-cp314-cp314t-win_arm64.whl", hash = "sha256:5371b72c2d4d415d08765f32d689217a43227484e81b2305b52076e328f6f482", size = 9455341, upload-time = "2026-03-31T06:48:28.418Z" },
+]
+
+[[package]]
+name = "peft"
+version = "0.17.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/70/b8/2e79377efaa1e5f0d70a497db7914ffd355846e760ffa2f7883ab0f600fb/peft-0.17.1.tar.gz", hash = "sha256:e6002b42517976c290b3b8bbb9829a33dd5d470676b2dec7cb4df8501b77eb9f", size = 568192, upload-time = "2025-08-21T09:25:22.703Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/fe/a2da1627aa9cb6310b6034598363bd26ac301c4a99d21f415b1b2855891e/peft-0.17.1-py3-none-any.whl", hash = "sha256:3d129d64def3d74779c32a080d2567e5f7b674e77d546e3585138216d903f99e", size = 504896, upload-time = "2025-08-21T09:25:18.974Z" },
 ]
 
 [[package]]
@@ -3325,6 +3377,115 @@ wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:af81283ac671f434b1b25c95ba295f270e72db1fad48831eb5e4748ff9840041", upload-time = "2025-10-01T23:34:50Z" },
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:a9dbb6f64f63258bc811e2c0c99640a81e5af93c531ad96e95c5ec777ea46dab", upload-time = "2025-10-01T23:34:53Z" },
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp313-cp313t-win_amd64.whl", hash = "sha256:6d93a7165419bc4b2b907e859ccab0dea5deeab261448ae9a5ec5431f14c0e64", upload-time = "2025-10-01T23:34:58Z" },
+]
+
+[[package]]
+name = "torchvision"
+version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'linux'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'linux'",
+    "python_full_version == '3.11.*' and sys_platform == 'linux'",
+    "python_full_version < '3.11' and sys_platform == 'linux'",
+]
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (sys_platform != 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "pillow", marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/20/72eb0b5b08fa293f20fc41c374e37cf899f0033076f0144d2cdc48f9faee/torchvision-0.21.0-1-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:5568c5a1ff1b2ec33127b629403adb530fab81378d9018ca4ed6508293f76e2b", size = 2327643, upload-time = "2025-03-18T17:25:51.165Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/3d/b7241abfa3e6651c6e00796f5de2bd1ce4d500bf5159bcbfeea47e711b93/torchvision-0.21.0-1-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:ff96666b94a55e802ea6796cabe788541719e6f4905fc59c380fed3517b6a64d", size = 2329320, upload-time = "2025-03-18T17:25:52.272Z" },
+    { url = "https://files.pythonhosted.org/packages/52/5b/76ca113a853b19c7b1da761f8a72cb6429b3bd0bf932537d8df4657f47c3/torchvision-0.21.0-1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:ffa2a16499508fe6798323e455f312c7c55f2a88901c9a7c0fb1efa86cf7e327", size = 2329878, upload-time = "2025-03-18T17:25:50.039Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/fe/5e193353706dab96fe73ae100d5a633ff635ce310e0d92f3bc2958d075b1/torchvision-0.21.0-1-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:7e9e9afa150e40cd2a8f0701c43cb82a8d724f512896455c0918b987f94b84a4", size = 2280711, upload-time = "2025-03-18T17:25:46.012Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/0d/143bd264876fad17c82096b6c2d433f1ac9b29cdc69ee45023096976ee3d/torchvision-0.21.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:044ea420b8c6c3162a234cada8e2025b9076fa82504758cd11ec5d0f8cd9fa37", size = 1784140, upload-time = "2025-01-29T16:28:54.122Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/44/32e2d2d174391374d5ff3c4691b802e8efda9ae27ab9062eca2255b006af/torchvision-0.21.0-cp310-cp310-manylinux1_x86_64.whl", hash = "sha256:b0c0b264b89ab572888244f2e0bad5b7eaf5b696068fc0b93e96f7c3c198953f", size = 7237187, upload-time = "2025-01-29T16:28:47.156Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/6b/4fca9373eda42c1b04096758306b7bd55f7d8f78ba273446490855a0f25d/torchvision-0.21.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:54815e0a56dde95cc6ec952577f67e0dc151eadd928e8d9f6a7f821d69a4a734", size = 14699067, upload-time = "2025-01-29T16:28:36.086Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/f7/799ddd538b21017cbf80294c92e9efbf6db08dff6efee37c3be114a81845/torchvision-0.21.0-cp310-cp310-win_amd64.whl", hash = "sha256:abbf1d7b9d52c00d2af4afa8dac1fb3e2356f662a4566bd98dfaaa3634f4eb34", size = 1560542, upload-time = "2025-01-29T16:28:52.608Z" },
+    { url = "https://files.pythonhosted.org/packages/29/88/00c69db213ee2443ada8886ec60789b227e06bb869d85ee324578221a7f7/torchvision-0.21.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:110d115333524d60e9e474d53c7d20f096dbd8a080232f88dddb90566f90064c", size = 1784141, upload-time = "2025-01-29T16:28:51.207Z" },
+    { url = "https://files.pythonhosted.org/packages/be/a2/b0cedf0a411f1a5d75cfc0b87cde56dd1ddc1878be46a42c905cd8580220/torchvision-0.21.0-cp311-cp311-manylinux1_x86_64.whl", hash = "sha256:3891cd086c5071bda6b4ee9d266bb2ac39c998c045c2ebcd1e818b8316fb5d41", size = 7237719, upload-time = "2025-01-29T16:28:20.724Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/a1/ee962ef9d0b2bf7a6f8b14cb95acb70e05cd2101af521032a09e43f8582f/torchvision-0.21.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:54454923a50104c66a9ab6bd8b73a11c2fc218c964b1006d5d1fe5b442c3dcb6", size = 14700617, upload-time = "2025-01-29T16:28:30.247Z" },
+    { url = "https://files.pythonhosted.org/packages/88/53/4ad334b9b1d8dd99836869fec139cb74a27781298360b91b9506c53f1d10/torchvision-0.21.0-cp311-cp311-win_amd64.whl", hash = "sha256:49bcfad8cfe2c27dee116c45d4f866d7974bcf14a5a9fbef893635deae322f2f", size = 1560523, upload-time = "2025-01-29T16:28:48.751Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/1b/28f527b22d5e8800184d0bc847f801ae92c7573a8c15979d92b7091c0751/torchvision-0.21.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:97a5814a93c793aaf0179cfc7f916024f4b63218929aee977b645633d074a49f", size = 1784140, upload-time = "2025-01-29T16:28:44.694Z" },
+    { url = "https://files.pythonhosted.org/packages/36/63/0722e153fd27d64d5b0af45b5c8cb0e80b35a68cf0130303bc9a8bb095c7/torchvision-0.21.0-cp312-cp312-manylinux1_x86_64.whl", hash = "sha256:b578bcad8a4083b40d34f689b19ca9f7c63e511758d806510ea03c29ac568f7b", size = 7238673, upload-time = "2025-01-29T16:28:27.631Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/ea/03541ed901cdc30b934f897060d09bbf7a98466a08ad1680320f9ce0cbe0/torchvision-0.21.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:5083a5b1fec2351bf5ea9900a741d54086db75baec4b1d21e39451e00977f1b1", size = 14701186, upload-time = "2025-01-29T16:28:16.491Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/6a/c7752603060d076dfed95135b78b047dc71792630cbcb022e3693d6f32ef/torchvision-0.21.0-cp312-cp312-win_amd64.whl", hash = "sha256:6eb75d41e3bbfc2f7642d0abba9383cc9ae6c5a4ca8d6b00628c225e1eaa63b3", size = 1560520, upload-time = "2025-01-29T16:28:42.122Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/56/47d456b61c3bbce7bed4af3925c83d405bb87468e659fd3cf3d9840c3b51/torchvision-0.21.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:659b76c86757cb2ee4ca2db245e0740cfc3081fef46f0f1064d11adb4a8cee31", size = 1784141, upload-time = "2025-01-29T16:28:39.01Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/4c/99880813aa50e64447fb1c4c6c804a793d2d78f7f7c53e99ddee7fa175fa/torchvision-0.21.0-cp313-cp313-manylinux1_x86_64.whl", hash = "sha256:084ac3f5a1f50c70d630a488d19bf62f323018eae1b1c1232f2b7047d3a7b76d", size = 7238714, upload-time = "2025-01-29T16:28:25.658Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/2d/3c3ee10608310a395594aac7da8640372ed79c6585910ccae6919658dcdc/torchvision-0.21.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:5045a3a5f21ec3eea6962fa5f2fa2d4283f854caec25ada493fcf4aab2925467", size = 2281252, upload-time = "2025-01-29T16:28:40.687Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/b4/fc60e3bc003879d3de842baea258fffc3586f4b49cd435a5ba1e09c33315/torchvision-0.21.0-cp313-cp313-win_amd64.whl", hash = "sha256:9147f5e096a9270684e3befdee350f3cacafd48e0c54ab195f45790a9c146d67", size = 1560519, upload-time = "2025-01-29T16:28:22.527Z" },
+]
+
+[[package]]
+name = "torchvision"
+version = "0.23.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and sys_platform == 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+    "python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda'",
+]
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform != 'linux') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version < '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform != 'linux') or (python_full_version >= '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (python_full_version >= '3.11' and extra != 'extra-24-late-interaction-kernels-torch-cuda') or (python_full_version < '3.11' and extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "pillow", marker = "sys_platform != 'linux' or extra == 'extra-24-late-interaction-kernels-torch-cpu' or extra != 'extra-24-late-interaction-kernels-torch-cuda'" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or (sys_platform != 'linux' and extra != 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda') or (extra != 'extra-24-late-interaction-kernels-torch-cpu' and extra != 'extra-24-late-interaction-kernels-torch-cuda')" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-24-late-interaction-kernels-torch-cpu') or (extra == 'extra-24-late-interaction-kernels-torch-cpu' and extra == 'extra-24-late-interaction-kernels-torch-cuda')" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/49/5ad5c3ff4920be0adee9eb4339b4fb3b023a0fc55b9ed8dbc73df92946b8/torchvision-0.23.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:7266871daca00ad46d1c073e55d972179d12a58fa5c9adec9a3db9bbed71284a", size = 1856885, upload-time = "2025-08-06T14:57:55.024Z" },
+    { url = "https://files.pythonhosted.org/packages/25/44/ddd56d1637bac42a8c5da2c8c440d8a28c431f996dd9790f32dd9a96ca6e/torchvision-0.23.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:31c583ba27426a3a04eca8c05450524105c1564db41be6632f7536ef405a6de2", size = 2394251, upload-time = "2025-08-06T14:58:01.725Z" },
+    { url = "https://files.pythonhosted.org/packages/93/f3/3cdf55bbf0f737304d997561c34ab0176222e0496b6743b0feab5995182c/torchvision-0.23.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:3932bf67256f2d095ce90a9f826f6033694c818856f4bb26794cf2ce64253e53", size = 8627497, upload-time = "2025-08-06T14:58:09.317Z" },
+    { url = "https://files.pythonhosted.org/packages/97/90/02afe57c3ef4284c5cf89d3b7ae203829b3a981f72b93a7dd2a3fd2c83c1/torchvision-0.23.0-cp310-cp310-win_amd64.whl", hash = "sha256:83ee5bf827d61a8af14620c0a61d8608558638ac9c3bac8adb7b27138e2147d1", size = 1600760, upload-time = "2025-08-06T14:57:56.783Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/d7/15d3d7bd8d0239211b21673d1bac7bc345a4ad904a8e25bb3fd8a9cf1fbc/torchvision-0.23.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:49aa20e21f0c2bd458c71d7b449776cbd5f16693dd5807195a820612b8a229b7", size = 1856884, upload-time = "2025-08-06T14:58:00.237Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/14/7b44fe766b7d11e064c539d92a172fa9689a53b69029e24f2f1f51e7dc56/torchvision-0.23.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:01dc33ee24c79148aee7cdbcf34ae8a3c9da1674a591e781577b716d233b1fa6", size = 2395543, upload-time = "2025-08-06T14:58:04.373Z" },
+    { url = "https://files.pythonhosted.org/packages/79/9c/fcb09aff941c8147d9e6aa6c8f67412a05622b0c750bcf796be4c85a58d4/torchvision-0.23.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:35c27941831b653f5101edfe62c03d196c13f32139310519e8228f35eae0e96a", size = 8628388, upload-time = "2025-08-06T14:58:07.802Z" },
+    { url = "https://files.pythonhosted.org/packages/93/40/3415d890eb357b25a8e0a215d32365a88ecc75a283f75c4e919024b22d97/torchvision-0.23.0-cp311-cp311-win_amd64.whl", hash = "sha256:09bfde260e7963a15b80c9e442faa9f021c7e7f877ac0a36ca6561b367185013", size = 1600741, upload-time = "2025-08-06T14:57:59.158Z" },
+    { url = "https://files.pythonhosted.org/packages/df/1d/0ea0b34bde92a86d42620f29baa6dcbb5c2fc85990316df5cb8f7abb8ea2/torchvision-0.23.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e0e2c04a91403e8dd3af9756c6a024a1d9c0ed9c0d592a8314ded8f4fe30d440", size = 1856885, upload-time = "2025-08-06T14:58:06.503Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/00/2f6454decc0cd67158c7890364e446aad4b91797087a57a78e72e1a8f8bc/torchvision-0.23.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:6dd7c4d329a0e03157803031bc856220c6155ef08c26d4f5bbac938acecf0948", size = 2396614, upload-time = "2025-08-06T14:58:03.116Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/b5/3e580dcbc16f39a324f3dd71b90edbf02a42548ad44d2b4893cc92b1194b/torchvision-0.23.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4e7d31c43bc7cbecbb1a5652ac0106b436aa66e26437585fc2c4b2cf04d6014c", size = 8627108, upload-time = "2025-08-06T14:58:12.956Z" },
+    { url = "https://files.pythonhosted.org/packages/82/c1/c2fe6d61e110a8d0de2f94276899a2324a8f1e6aee559eb6b4629ab27466/torchvision-0.23.0-cp312-cp312-win_amd64.whl", hash = "sha256:a2e45272abe7b8bf0d06c405e78521b5757be1bd0ed7e5cd78120f7fdd4cbf35", size = 1600723, upload-time = "2025-08-06T14:57:57.986Z" },
+    { url = "https://files.pythonhosted.org/packages/91/37/45a5b9407a7900f71d61b2b2f62db4b7c632debca397f205fdcacb502780/torchvision-0.23.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:1c37e325e09a184b730c3ef51424f383ec5745378dc0eca244520aca29722600", size = 1856886, upload-time = "2025-08-06T14:58:05.491Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/da/a06c60fc84fc849377cf035d3b3e9a1c896d52dbad493b963c0f1cdd74d0/torchvision-0.23.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:2f7fd6c15f3697e80627b77934f77705f3bc0e98278b989b2655de01f6903e1d", size = 2353112, upload-time = "2025-08-06T14:58:26.265Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/27/5ce65ba5c9d3b7d2ccdd79892ab86a2f87ac2ca6638f04bb0280321f1a9c/torchvision-0.23.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:a76fafe113b2977be3a21bf78f115438c1f88631d7a87203acb3dd6ae55889e6", size = 8627658, upload-time = "2025-08-06T14:58:15.999Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/e4/028a27b60aa578a2fa99d9d7334ff1871bb17008693ea055a2fdee96da0d/torchvision-0.23.0-cp313-cp313-win_amd64.whl", hash = "sha256:07d069cb29691ff566e3b7f11f20d91044f079e1dbdc9d72e0655899a9b06938", size = 1600749, upload-time = "2025-08-06T14:58:10.719Z" },
+    { url = "https://files.pythonhosted.org/packages/05/35/72f91ad9ac7c19a849dedf083d347dc1123f0adeb401f53974f84f1d04c8/torchvision-0.23.0-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:2df618e1143805a7673aaf82cb5720dd9112d4e771983156aaf2ffff692eebf9", size = 2047192, upload-time = "2025-08-06T14:58:11.813Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/9d/406cea60a9eb9882145bcd62a184ee61e823e8e1d550cdc3c3ea866a9445/torchvision-0.23.0-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:2a3299d2b1d5a7aed2d3b6ffb69c672ca8830671967eb1cee1497bacd82fe47b", size = 2359295, upload-time = "2025-08-06T14:58:17.469Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/f4/34662f71a70fa1e59de99772142f22257ca750de05ccb400b8d2e3809c1d/torchvision-0.23.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:76bc4c0b63d5114aa81281390f8472a12a6a35ce9906e67ea6044e5af4cab60c", size = 8800474, upload-time = "2025-08-06T14:58:22.53Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/f5/b5a2d841a8d228b5dbda6d524704408e19e7ca6b7bb0f24490e081da1fa1/torchvision-0.23.0-cp313-cp313t-win_amd64.whl", hash = "sha256:b9e2dabf0da9c8aa9ea241afb63a8f3e98489e706b22ac3f30416a1be377153b", size = 1527667, upload-time = "2025-08-06T14:58:14.446Z" },
 ]
 
 [[package]]

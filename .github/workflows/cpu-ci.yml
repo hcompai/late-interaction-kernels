@@ -48,7 +48,12 @@ jobs:
           enable-cache: true
           prune-cache: false
       - name: Install dependencies
-        run: uv sync --frozen --extra dev --extra torch-cpu --python ${{ matrix.python-version }}
+        # `--extra colpali` installs the real colpali_engine so the compat
+        # tests run against it (signature guard + CPU mechanics/fall-through).
+        # CPU-only: colpali_engine's torchvision tree conflicts with the cu124
+        # torch wheel, so it's never co-installed with `torch-cuda`; GPU parity
+        # runs out-of-band via scripts/sky_colpali_compat_test.yaml.
+        run: uv sync --frozen --extra dev --extra torch-cpu --extra colpali --python ${{ matrix.python-version }}
       - name: Import check
         run: |
           uv run --python ${{ matrix.python-version }} python -c "import late_interaction_kernels as lik; print(lik.__version__)"
