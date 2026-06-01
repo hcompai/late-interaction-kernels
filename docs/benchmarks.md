@@ -550,6 +550,8 @@ Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
 | `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 GB |
 | `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 GB |
 | `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 GB |
+| `ColbertNegativeCE` | synth bs=4, num_neg=4, 448px       |  638.9 ms              |  700.1 ms | 0.91×     | 24.08 GB |
+| `ColbertPairwiseNeg`| synth bs=4, num_neg=4, 448px       |  625.6 ms              |  672.0 ms | 0.93×     | 24.08 GB |
 
 
 Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
@@ -557,12 +559,19 @@ forward+backward than a ModernBERT-149 M ColBERT, and the image
 modality blows up Ld (≈1 030 visual tokens at the default 448 px
 resolution). So even with LoRA-only training shrinking AdamW state
 by ~60×, the *encoder activation-grad backward* is what dominates
-the step — LIK lands in the 0.97–1.02× range here. The kernel is a
+the step — LIK lands in the 0.91–1.02× range here. The kernel is a
 drop-in — no other code changes between the two columns. Same
 takeaway as the PyLate `Contrastive` recipe on the 149 M encoder:
-when the transformer is the bottleneck, LIK doesn't move the needle,
-it just doesn't hurt. The 0.97× `ColbertPairwiseCE bs=4` cell is at
-the edge of run-to-run noise on a step this encoder-dominated.
+when the transformer is the bottleneck, LIK doesn't move the needle.
+The two explicit-negative heads sit *below* 1× (0.91–0.93×): they
+encode 4 hard negatives per query (20 images/step), so the vision
+tower dominates even more, while the fused pos/neg path trades three
+tiny einsums for three Triton launches whose overhead doesn't amortise
+on `[4, 4, 24, 1030]`-scale pos/neg slabs — and the materialized
+`[B, n_neg, Lq, Ld]` tensor it avoids is small enough here that no
+memory win offsets it (peak is unchanged). The fusion's payoff is
+memory at larger `batch × num_neg × Ld`, a regime this synthetic
+bs=4 config doesn't reach.
 
 ## Edge models (`d ∈ {48, 64}`)
 
