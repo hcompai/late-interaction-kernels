@@ -7,7 +7,7 @@
     # ... train / score ...
     unpatch_colpali_engine()      # restore the originals
 
-Patches the four entry points where colpali_engine materializes the
+Patches the entry points where colpali_engine materializes the
 ``[B, C, Lq, Ld]`` similarity tensor with an unfused ``torch.einsum``:
 
 * :meth:`colpali_engine.utils.processing_utils.BaseVisualRetrieverProcessor.score_multi_vector`
