@@ -19,14 +19,11 @@ Patches the entry points where colpali_engine materializes the
   — the three in-batch loss heads.
 * :meth:`...ColbertNegativeCELoss.forward`
 * :meth:`...ColbertPairwiseNegativeCELoss.forward`
-  — the explicit-hard-negative heads. Their positive term routes through
-  :func:`maxsim_pairs` (the diagonal ``q[i]·d[i]`` score) and their per-query
-  negative lists through 4-D :func:`maxsim` (the KD layout), so both the
-  ``[B, Ld, d]`` positives and the ``[B, n_neg, Ld, d]`` negatives skip the
-  materialized similarity tensor. The in-batch CE term they mix in reuses the
-  already-patched ``self.inner_loss`` / ``self.inner_pairwise``. The pos/neg
-  acceleration is CUDA-only; on MPS/CPU those terms fall back to the original
-  einsum while the in-batch term still accelerates through the inner head.
+  — the explicit-hard-negative heads: positives route through
+  :func:`maxsim_pairs`, per-query negatives through 4-D :func:`maxsim` (KD
+  layout), and the in-batch term reuses the already-patched ``inner_loss`` /
+  ``inner_pairwise``. Pos/neg fusion is CUDA-only; elsewhere those terms fall
+  back to the einsum while the in-batch term still accelerates.
 
 Dispatch rules match :func:`patch_pylate`: CUDA (Ampere+) → fused Triton
 kernel; MPS → ``torch.compile``-fused reference; CPU / sub-Ampere /
@@ -192,22 +189,16 @@ def patched_colbert_sigmoid_forward(self, query_embeddings, doc_embeddings, offs
 
 
 def _patched_negative_scores(self, Q, pos_D, neg_D, offset: int):
-    """Pos / neg MaxSim for the explicit-hard-negative heads.
+    """Pos (``maxsim_pairs``) / neg (4-D ``maxsim``, KD layout) MaxSim for the
+    explicit-hard-negative heads, replacing the original ``einsum -> amax ->
+    sum``.
 
-    The positive term is the diagonal ``q[i]·d[i]`` score, computed by
-    :func:`maxsim_pairs`; the per-query negative lists are 4-D ``[B, n_neg,
-    Ld, d]``, computed by 4-D :func:`maxsim` (KD layout). Both replace the
-    ``einsum -> amax -> sum`` the original forward materializes.
-
-    Returns ``(pos_scores[B], neg_scores[B, n_neg])`` or ``None`` to signal
-    the caller it must fall through to the original forward (``use_smooth_max``,
-    non-CUDA device, mixed devices, narrow ``d``). MPS/CPU fall back here on
-    purpose — ``maxsim_pairs`` / 4-D ``maxsim`` are the Triton path.
+    Returns ``(pos_scores[B], neg_scores[B, n_neg])``, or ``None`` to tell the
+    caller to fall through to the original forward (``use_smooth_max``, non-CUDA
+    device, mixed devices, narrow ``d`` — these kernels are the Triton path).
     """
     if self.use_smooth_max:
         return None
-    # maxsim_pairs / 4-D maxsim are CUDA Triton kernels; the in-batch term the
-    # caller mixes in still accelerates on MPS through the inner head.
     if _device_path(Q, pos_D) != "cuda":
         return None
     if neg_D.device != Q.device or neg_D.shape[-1] < 8:

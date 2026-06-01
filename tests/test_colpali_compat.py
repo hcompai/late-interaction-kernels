@@ -1,16 +1,13 @@
 """End-to-end colpali_engine monkey-patch test.
 
-Runs against the *real* colpali_engine (installed via the ``colpali`` extra),
-mirroring :mod:`tests.test_pylate_compat`: import-or-skip plus a signature
-guard, so upstream drift in the patched API surface fails loudly instead of
-silently passing a hand-written stub. The loss heads need only synthetic
-embedding tensors — no model, no processor, no images — so this stays a fast
-CPU import (~2s); only the GPU parity cases need a GPU.
+Runs against the *real* colpali_engine (``colpali`` extra), mirroring
+:mod:`tests.test_pylate_compat`: import-or-skip plus a signature guard, so
+upstream drift fails loudly instead of silently passing a stub. The loss heads
+take only synthetic embedding tensors — no model, processor, or images.
 
-colpali_engine's torchvision/transformers tree conflicts with the cu124 torch
-wheel, so the ``colpali`` extra is CPU-only and the CUDA parity tests run
-out-of-band on a GPU host (``scripts/sky_colpali_compat_test.yaml``). Where
-colpali_engine isn't installed, the whole module skips.
+The ``colpali`` extra is CPU-only (its torchvision tree conflicts with the
+cu124 torch wheel), so the CUDA parity cases run out-of-band on a GPU host via
+``scripts/sky_colpali_compat_test.yaml``.
 """
 
 import inspect
@@ -23,11 +20,9 @@ pytest.importorskip("colpali_engine")
 from colpali_engine.loss import late_interaction_losses as cel  # noqa: E402
 from colpali_engine.utils.processing_utils import BaseVisualRetrieverProcessor  # noqa: E402
 
-# patch_colpali_engine() swaps these forwards (and the static scorer) by name
-# and reads instance attributes off them. Pin the contract here: if upstream
-# renames a head or re-signatures a forward, skip with a clear message rather
-# than silently testing nothing. Mirrors the inspect.signature guard in
-# test_pylate_compat.py.
+# patch_colpali_engine() swaps these forwards by name; pin the contract so an
+# upstream rename / re-signature skips loudly instead of testing nothing.
+# Mirrors the inspect.signature guard in test_pylate_compat.py.
 _EXPECTED_FORWARD_PARAMS = {
     "ColbertLoss": ["query_embeddings", "doc_embeddings", "offset"],
     "ColbertPairwiseCELoss": ["query_embeddings", "doc_embeddings", "offset"],
@@ -282,12 +277,9 @@ def test_patched_loss_forwards_match_original_cuda(cls_name):
 def test_patched_negative_losses_match_original_cuda(cls_name, normalize_scores, in_batch_term_weight):
     """The fused pos (maxsim_pairs) + neg (4-D maxsim) heads match the einsum forward on CUDA.
 
-    ``in_batch_term_weight=0`` isolates the explicit pos/neg path; ``0.5`` also
-    exercises the mixed-in in-batch term (fused through the inner head).
-    ``normalize_scores=True`` exercises the fused branch's ``_apply_normalization``
-    on the 1-D positive vector and 2-D negatives — the configuration real
-    training uses; L2-normalized inputs keep scores within the head's
-    ``norm_tol`` bound.
+    ``in_batch_term_weight`` 0 isolates the pos/neg path; 0.5 adds the in-batch
+    term. ``normalize_scores=True`` covers the fused ``_apply_normalization`` on
+    the 1-D positives + 2-D negatives — the config real training uses.
     """
     from late_interaction_kernels.colpali_compat import (
         patch_colpali_engine,
@@ -316,14 +308,11 @@ def test_patched_negative_losses_match_original_cuda(cls_name, normalize_scores,
 
 @pytest.mark.cuda
 @pytest.mark.parametrize("cls_name", NEGATIVE_HEADS)
-# `(dtype, weight)`: the explicit pos/neg fusion is what this PR adds, so we
-# check it in the kernel's native fp16 with the in-batch term off
-# (`weight=0`). The full mix (`weight=0.5`) is checked in fp32 because the
-# in-batch *softmax*-CE term (`ColbertLoss`) flips argmax on near-tied fp16
-# dot-products and the softmax amplifies that into ~20% grad drift — pure
-# fp16 tie noise, not a graph error: a GPU sweep showed fp32 collapses every
-# case to <2e-3 (and the pairwise in-batch term, which has no softmax, stays
-# <1e-2 even in fp16). fp32 isolates graph correctness from tie noise.
+# fp16 checks the pos/neg fusion (this PR) in its native dtype with the
+# in-batch term off; fp32 checks the full mix (weight=0.5) because the in-batch
+# softmax-CE term amplifies fp16 argmax-tie noise into ~20% grad drift — fp32
+# isolates graph correctness from that noise (a sweep collapsed every case to
+# <2e-3).
 @pytest.mark.parametrize("dtype,weight", [(torch.float16, 0.0), (torch.float32, 0.5)])
 def test_patched_negative_losses_backward_matches_original_cuda(cls_name, dtype, weight):
     """Patched negative-loss backward reproduces the original autograd grads on Q / pos / neg."""
@@ -373,14 +362,10 @@ def test_patched_colbert_loss_backward_matches_original():
     )
 
     torch.manual_seed(0)
-    # fp16 matches the kernel's internal compute dtype (`pick_compute_dtype`
-    # picks fp16 unless either input is bf16). With fp32 inputs the autograd
-    # reference runs in fp32 while the kernel quantizes to fp16 — on
-    # L2-normalized tokens that's enough to flip the inner argmax on
-    # near-tied max candidates and blow up the gradient diff. fp16 (over
-    # bf16) gives tighter argmax agreement here because it has 10 mantissa
-    # bits vs bf16's 7, so fewer ties at the bottom of the dot-product
-    # distribution. Mirrors `test_patched_loss_forwards_match_original_cuda`.
+    # fp16 matches the kernel's compute dtype: fp32 inputs would run the
+    # reference in fp32 while the kernel quantizes to fp16, flipping the inner
+    # argmax on near-tied candidates and blowing up the grad diff. fp16 beats
+    # bf16 here (10 mantissa bits vs 7 → fewer ties).
     Q0 = _l2(torch.randn(8, 32, 128, device="cuda", dtype=torch.float16))
     D0 = _l2(torch.randn(8, 96, 128, device="cuda", dtype=torch.float16))
 
@@ -402,10 +387,8 @@ def test_patched_colbert_loss_backward_matches_original():
         diff = (a.float() - b.float()).abs().max()
         return diff / max(1e-6, b.float().abs().max().item())
 
-    # Tolerance is on max-abs relative diff so even a single argmax-tie
-    # disagreement (kernel keeps the running max in fp32 register; einsum
-    # quantizes to fp16 before reduce_max) blows the metric up. 3e-2
-    # comfortably covers the observed ~2.6% drift on this shape while
-    # still flagging real regressions in either path.
+    # 3e-2 on max-abs relative diff: covers the observed ~2.6% argmax-tie drift
+    # (kernel reduces in fp32, einsum quantizes to fp16 first) while still
+    # flagging real regressions.
     assert _rel(Q_fused.grad, Q_ref.grad) < 3e-2
     assert _rel(D_fused.grad, D_ref.grad) < 3e-2
