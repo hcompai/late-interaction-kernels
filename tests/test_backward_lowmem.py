@@ -124,4 +124,4 @@ def test_lowmem_saves_memory_negatives():
     p_lm = peak("lowmem")
     # grad_D fp32 buffer + bf16 transient is ~1.5 GB here; lowmem should cut
     # peak by a wide margin.
-    assert p_lm < 0.8 * p_uni, f"lowmem peak {p_lm/1e6:.0f}MB not < 0.8 * unified {p_uni/1e6:.0f}MB"
+    assert p_lm < 0.8 * p_uni, f"lowmem peak {p_lm / 1e6:.0f}MB not < 0.8 * unified {p_uni / 1e6:.0f}MB"

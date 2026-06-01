@@ -188,12 +188,8 @@ class _MaxSimFn(torch.autograd.Function):
 
         def _bwd(Qt, Dt):
             if method == "lowmem":
-                return maxsim_backward_lowmem(
-                    grad_scores, Qt, Dt, argmax, q_mask, kd_layout=kd_layout
-                )
-            return maxsim_backward_unified(
-                grad_scores, Qt, Dt, argmax, q_mask=q_mask, kd_layout=kd_layout
-            )
+                return maxsim_backward_lowmem(grad_scores, Qt, Dt, argmax, q_mask, kd_layout=kd_layout)
+            return maxsim_backward_unified(grad_scores, Qt, Dt, argmax, q_mask=q_mask, kd_layout=kd_layout)
 
         if ctx.normalize:
             # The forward computed scores against Q_hat = Q / ||Q|| and D_hat = D / ||D||.

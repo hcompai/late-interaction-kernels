@@ -30,7 +30,6 @@ except ImportError:  # pragma: no cover
 from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
 
 if _HAS_TRITON:
-
     # grad_Q: one program per (q_batch, q_token), gathers the winning D row per
     # contributing doc. Row-owned full-coverage store — no atomics.
     @triton.autotune(configs=BWD_CONFIGS, key=BWD_KEY)
