@@ -134,15 +134,38 @@ is asserted at `atol=1e-2` before timing.
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.00-1.06× e2e     |
 
-`torch.compile` is within ±5% of eager on every forward shape because
-Inductor still has to materialise the `[Nq · Nd · Lq · Ld]` similarity
-tensor before the `max(-1)` reduction — that materialisation *is* what
-the fused kernel exists to skip. Full tables and reproduction commands
+Full tables and reproduction commands
 live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench
 scripts themselves are organised — CLI conventions (`--only`,
 `--variants`), per-script summaries, and how to run one bench, the
 whole sweep, or a `RUN_ONLY`-filtered subset on a SkyPilot cluster —
 see [`benchmarks/README.md`](benchmarks/README.md).
+
+## Memory
+
+The speedups are only half the story. The naive einsum allocates the full
+`[Nq · Nd · Lq · Ld]` similarity tensor as fp32 scratch before the
+`max(-1)` reduction. The fused kernel never writes it: document tiles
+stream through SRAM and only the `[Nq, Nd]` scores come back, plus a
+`[Nq · Nd, Lq]` int32 argmax buffer when training.
+
+| shape                                     | naive scratch | fused fwd | fused fwd + bwd |
+| ----------------------------------------- | ------------- | --------- | --------------- |
+| `Nq=1, Nd=1k, Lq=32, Ld=300`              | 183 MB        | 4 KB      | 128 KB          |
+| `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali) | 4.5 GB        | 4 KB      | 4 MB            |
+| `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 64 KB     | 64 KB           |
+
+Two things this buys you: long-context shapes (`Ld ≥ 8k`) that OOM the
+naive path at sane batch sizes run fine here, and at a fixed HBM budget
+you fit roughly 5–10× more in-batch negatives than vanilla PyLate. Full
+table in [`docs/benchmarks.md`](docs/benchmarks.md#memory).
+
+The backward keeps the same discipline. `auto` routes the gradient-heavy
+shapes — knowledge-distillation / hard-negative layouts and large in-batch
+squares — to the `lowmem` path, which writes `grad_Q` / `grad_D` straight in
+the input dtype (fp32 accumulation in registers, no full-size fp32 buffer, no
+atomics). That roughly halves backward peak memory and is deterministic, e.g.
+a `B256 × 16-neg` ColPali step drops from 4.3 GB to 2.2 GB.
 
 ## Choose a kernel
 
@@ -185,7 +208,7 @@ Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`,
 
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.             |
+| `maxsim(..., backward="auto" \| "unified" \| "lowmem")`    | Per-call backward strategy. `"auto"` picks per shape: `"lowmem"` (bf16 grads, ~½ peak memory, deterministic) where gradient buffers dominate, `"unified"` (fastest) elsewhere. |
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate / colpali_engine. |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |

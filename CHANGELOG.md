@@ -6,6 +6,69 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`lowmem` backward — ~half the training peak memory, deterministic.**
+  A new destination-owned backward that accumulates `grad_Q` / `grad_D` in
+  fp32 registers and writes them straight in the input dtype (bf16/fp16) — no
+  full-size fp32 gradient buffer, no fp32→bf16 transient, and no atomics
+  (so it is bitwise-reproducible). `auto` now routes the gradient-heavy
+  shapes to it: knowledge-distillation / hard-negative layouts (where
+  `grad_D` is `n_neg`-inflated) and large high-contention in-batch squares;
+  `unified` still handles the common and long-query cross-products, where it
+  is fastest. Measured on H100 (bf16, fwd+bwd): a `B256 × 16-neg` ColPali
+  step drops from 4.3 GB / 2.36 ms to **2.2 GB / 1.37 ms** (≈½ memory,
+  ~1.7× faster); `pylate-text B256` from 96 MB to 52 MB. Gradients match the
+  other backends to bf16 rounding. Select per-call with `backward="lowmem"`.
+
+### Removed
+
+- **Backward methods `atomic` and `csr`.** The dense `grad_D` strategies
+  collapse to two: `unified` (fastest, fp32 atomics) and `lowmem`
+  (memory-optimal, deterministic). The legacy two-pass `atomic` path was
+  strictly dominated by `unified`, and `csr`'s determinism niche is now
+  covered by `lowmem`, so both were deleted along with the CSR build/sort
+  machinery. `backward=` now accepts `"auto" | "unified" | "lowmem"`;
+  `"auto"` is unchanged in behaviour. No effect on the `auto` default.
+
+## [0.4.0] - 2026-05-31
+
+### Changed
+
+- **Long-query forward chunking — broadly faster at ColPali scale.**
+  `maxsim()` now splits queries with `Lq > 512` into fixed 128-token
+  chunks, scores each chunk as an independent query through the shared
+  `_maxsim_cross` core, and sums the per-chunk MaxSim back per original
+  query. Summing a per-token max over query tokens is exact, so forward
+  and backward are numerically identical to the un-chunked path
+  (autograd flows through the reshape + sum). Long queries launch more,
+  shorter programs that fill the GPU instead of serialising one long
+  `static_range` loop, and the kernel always sees `Lq == 128`, so the
+  autotune cache collapses onto a small constant (one entry, plus one
+  more for tail-padded `has_q_mask=True`) instead of one per length
+  bucket. Measured on H100 (bf16) with `bench_chunking.py`, vs the
+  un-chunked path: **+49–77% at `Lq=768`, and at `Lq=1024` from +24%
+  in-batch to roughly break-even for rerank**.
+  Shorter queries (ColBERT `Lq≤32`, long-doc `Lq≤512`) fall through to
+  the existing core unchanged — no regression. Chunking is
+  cross-product-only; the KD / pairs path (4-D `D`) is unaffected and
+  long-`Lq` KD should use `maxsim_varlen`.
+- **Autotuned backward launch params — faster training step.** All four
+  backward kernels (unified fused grad, two-pass `grad_Q`, atomic
+  `grad_D`, CSR `grad_D`) previously launched with Triton's stock
+  `num_warps=4`. Each is one program per output row streaming a single
+  `d_pad` vector through a doc/bucket loop, so 4 warps over-subscribe
+  the narrow program — the H100 optimum is 1–2 warps. All four are now
+  `@triton.autotune`d over a small `(num_warps, num_stages)` grid via a
+  shared `backward/_autotune.py` config module. The key mirrors the
+  forward autotuner (`Lq`, `d_pad`, layout flags; `Nd` / `Ld` stay out),
+  so the cache holds one entry per regime rather than one per batch
+  size, and atomic-accumulating kernels use `reset_to_zero` so autotune
+  trials don't pile onto each other. Measured on H100 (bf16), tuning
+  lifts `auto` by **~1.2–1.45× across the training shapes** (see the
+  backward table in `benchmarks.md`), the largest gain on the
+  high-contention `train-256` csr reduction, all at lower peak memory.
+
 ### Fixed
 
 - **`maxsim_from_hidden` backward leaked a spurious gradient for fully

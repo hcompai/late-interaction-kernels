@@ -152,7 +152,7 @@
   .topbar-actions .topbar-link svg { width: 16px; height: 16px; }
 
   .layout {
-    max-width: 880px; margin: 0 auto;
+    max-width: 1000px; margin: 0 auto;
     padding: 40px 28px 112px;
   }
   main { min-width: 0; }
@@ -531,6 +531,17 @@
     body { font-size: 16.5px; }
     .pick-kernel__question { font-size: 19px; }
   }
+
+  /* Honor an explicit request for less motion: hover lifts and the chip
+     elimination fade snap instead of gliding. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -662,7 +673,7 @@
       { key: 'maxsim', name: 'maxsim', category: 'core',
         color: C.slate,
         stack: 'any', phase: 'any', layout: 'dense', workload: 'maxsim',
-        blurb: 'Core fused MaxSim on dense [N, L, d] tensors. Autograd-aware; auto-skips the argmax save when neither input has requires_grad. backward="auto"|"unified"|"atomic"|"csr".',
+        blurb: 'Core fused MaxSim on dense [N, L, d] tensors. Dispatches on D.dim(): 3-D runs the Nq × Nd cross-product, 4-D [Nq, K, Ld, d] runs the KD layout in one launch. Autograd-aware; auto-skips the argmax save when neither input has requires_grad. backward="auto"|"unified"|"lowmem" (auto picks lowmem for gradient-heavy shapes, unified otherwise).',
         importLine: 'from late_interaction_kernels import maxsim' },
 
       { key: 'maxsim_varlen', name: 'maxsim_varlen', category: 'core',
@@ -671,10 +682,16 @@
         blurb: 'Packed (cu_seqlens) layout. Consumes [total_tokens, d] tensors with FlashAttention-style offsets. Autograd-aware.',
         importLine: 'from late_interaction_kernels import maxsim_varlen' },
 
+      { key: 'maxsim_pairs', name: 'maxsim_pairs', category: 'core',
+        color: C.clay,
+        stack: 'any', phase: 'any', layout: 'dense', workload: 'pairwise',
+        blurb: 'Dense pairwise scoring: Q[B, Lq, d] × D[B, Ld, d] → [B], one score per (q[i], d[i]) — the diagonal of the grid, without computing the off-diagonal. Autograd-aware.',
+        importLine: 'from late_interaction_kernels import maxsim_pairs' },
+
       { key: 'score_pairs_packed', name: 'score_pairs_packed', category: 'score_pairs',
         color: C.clay,
         stack: 'any', phase: 'training', layout: 'varlen', workload: 'pairwise',
-        blurb: 'One score per (q[i], d[i]) pair instead of the full NQ × ND grid — exactly what cached-contrastive losses need.',
+        blurb: 'Packed (cu_seqlens) pairwise scoring: one score per (q[i], d[i]) pair instead of the full NQ × ND grid — exactly what cached-contrastive losses need on ragged corpora.',
         importLine: 'from late_interaction_kernels.score_pairs import score_pairs_packed' },
 
       { key: 'maxsim_from_hidden', name: 'maxsim_from_hidden', category: 'fused_head',

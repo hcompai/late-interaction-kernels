@@ -1,29 +1,27 @@
 # benchmarks/
 
-Scripts that measure `late-interaction-kernels` against the reference
-implementations it replaces. The headline numbers + analysis live in
-[`../docs/benchmarks.md`](../docs/benchmarks.md); this file is the
-operator's guide to *what's here and how to drive it*.
+Scripts that measure `late-interaction-kernels` against the implementations it
+replaces. The headline numbers and the analysis behind them live in
+[`../docs/benchmarks.md`](../docs/benchmarks.md), along with the hardware, the
+software stack, and the pinned baseline versions every table was produced on.
+This file is the operator's guide: what each script measures and how to run it.
 
 ## Common CLI conventions
 
-All bench scripts follow the same flag shape:
+All bench scripts share the same flag shape:
 
 | flag | purpose |
 | --- | --- |
-| `--only NAME [NAME ...]` | Run a subset of the script's hard-coded experiment / shape list (default: run all). |
-| `--variants {...}` | Run a subset of impl variants (e.g. `vanilla` / `lik` / `flash` / `compile` / `both` / `all`). Only present in benches that compare variants in lockstep. |
+| `--only NAME [NAME ...]` | Run a subset of the script's experiment / shape list (default: all). |
+| `--variants {...}` | Run a subset of impl variants (e.g. `vanilla` / `lik` / `flash` / `compile` / `both` / `all`). Only in benches that compare variants in lockstep. |
 | `--outdir DIR` | Where to write `*.json` and `*.md` artifacts (default `benchmarks/results`). |
-| `--dtype {bf16,fp16}` | Input dtype where applicable. Accumulator is always fp32. |
-| `--quick` | Pre-baked "small subset" filter on a few scripts; prefer `--only` for explicit control. |
+| `--dtype {bf16,fp16}` | Input dtype where applicable. The accumulator is always fp32. |
+| `--quick` | Pre-baked small-subset filter on a few scripts; prefer `--only` for explicit control. |
 
-Every script also records peak GPU memory per variant — `peak_mb` in
-JSON output (uniformly MB across the directory), and GB-formatted in
-stdout where the values warrant it (e.g. e2e training shapes at 25+
-GB). Handy for comparing memory footprints alongside wall-clock.
-
-Pass `--help` on any script for the full list of options and the
-choices accepted by `--only`.
+Every script records peak GPU memory per variant: `peak_mb` in the JSON output
+(uniformly MB across the directory), and GB-formatted in stdout where the
+values warrant it (e2e training shapes reach 25+ GB). Pass `--help` on any
+script for its full option list and the values `--only` accepts.
 
 ## What each script measures
 
@@ -35,8 +33,8 @@ choices accepted by `--only`.
 | `bench_chunking.py` | Long-query (`Lq > 512`) chunking: forward + training vs the un-chunked core, with flash as an external reference. |
 | `bench_inference_edge.py` | Small-d (`d ∈ {48, 64}`) edge ColBERT regimes, `inference_mode`. |
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
-| `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `csr` vs `atomic` vs naive. |
-| `bench_backward_unified.py` | Backward-only timing of the unified kernel vs two-pass paths. |
+| `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `lowmem` vs naive. |
+| `bench_backward_lowmem.py` | Backward time + peak memory: `lowmem` vs `unified` on PyLate/ColPali shapes, with flash-maxsim and a PyLate-naive einsum baseline. |
 | `bench_training.py` | Full training step (forward + backward) speed and peak memory, with flash as an external reference. |
 | `bench_backward_0_5.py` | Fused `maxsim_residual` / `maxsim_varlen` backward vs "unpack + autograd". |
 | `bench_lateon.py` | LateOn / LateOn-Code shapes (Ld up to 16 384, d=128). |
@@ -51,7 +49,7 @@ choices accepted by `--only`.
 | --- | --- |
 | `bench_fastplaid.py` | Isolated rerank step (`bmm + mask + max + sum`) vs `maxsim` on the same shapes. |
 | `bench_fastplaid_e2e.py` | `fast_plaid.engine.search()` vs our scoring kernel on the same on-disk compressed index. |
-| `bench_decompress_maxsim.py` | Fast-plaid's decompress + rerank pipeline vs `maxsim_residual` / `maxsim_residual_varlen`. |
+| `bench_decompress_maxsim.py` | Fast-plaid's decompress + rerank pipeline (PyTorch transliteration) vs `maxsim_residual` / `maxsim_residual_varlen`. |
 | `bench_cached_maxsim.py` | PyLate `CachedContrastive`'s chunked MaxSim vs vanilla vs `torch.compile` vs LIK. |
 
 ### End-to-end (real model + loss)
@@ -59,7 +57,7 @@ choices accepted by `--only`.
 | script | what it drives |
 | --- | --- |
 | `bench_pylate_training.py` | PyLate `Contrastive` step on synthesized embeddings (no encoder). |
-| `bench_pylate_lateon.py` | Real `pylate.models.ColBERT` (LateOn / LateOn-Code) — Contrastive or CachedContrastive. DDP-aware. |
+| `bench_pylate_lateon.py` | Real `pylate.models.ColBERT` (LateOn / LateOn-Code), Contrastive or CachedContrastive. DDP-aware. |
 | `bench_pylate_realdata.py` | Same as above but on real MS MARCO triplets. |
 | `bench_colpali_training.py` | `colpali_engine.ColQwen2` step on synthetic images + queries. |
 | `bench_colpali_realdata.py` | Same as above on real `vidore/docvqa_test_subsampled`. |
@@ -72,6 +70,17 @@ choices accepted by `--only`.
 
 ## Running
 
+Install the package from the repo root first (`pip install -e ".[dev,pylate]"`).
+The comparison benches each need their baseline installed too; the exact pinned
+versions are in [`../docs/benchmarks.md`](../docs/benchmarks.md#baseline-package-versions):
+
+| baseline | needed by |
+| --- | --- |
+| `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py`, `bench_training.py` |
+| `fast-plaid` | `bench_fastplaid.py`, `bench_fastplaid_e2e.py` |
+| `colpali-engine` | `bench_colpali_training.py`, `bench_colpali_realdata.py` |
+| `pylate` | `bench_pylate_*.py`, `bench_cached_maxsim.py` (installed by the `pylate` extra) |
+
 ### One script
 
 ```bash
@@ -80,57 +89,75 @@ python benchmarks/bench_forward.py --only text-short text-long      # subset of 
 python benchmarks/bench_cached_maxsim.py --variants flash           # skip vanilla pylate
 ```
 
+### Multi-GPU (DDP)
+
+`bench_pylate_lateon.py` is DDP-aware. Drive it with `torchrun`:
+
+```bash
+torchrun --standalone --nproc_per_node=8 \
+  benchmarks/bench_pylate_lateon.py --recipe reason \
+  --batch-size 32 --mini-batch-size 32 --Ld 2048 --grad-checkpoint --ddp
+```
+
 ### All scripts locally
 
 ```bash
 OUTDIR=benchmarks/results bash scripts/run_all_benchmarks.sh
 ```
 
-Failures in one script do not stop the rest — each is wrapped in a
-non-fatal `run()` helper.
+A failure in one script does not stop the rest; each runs inside a non-fatal
+`run()` helper.
 
 ### On a SkyPilot cluster
 
+The SkyPilot jobs in `scripts/` provision a 1×H100 box, install the pinned
+baselines, and run the benches.
+
 ```bash
-# every table in docs/benchmarks.md (1×H100, ~25 min)
+# every table in docs/benchmarks.md (~25 min)
 sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y
 
-# subset by bench tag (README headline numbers only, ~5 min)
+# a subset, by bench tag (~5 min)
 sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y \
     --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"
 ```
 
-`RUN_ONLY` accepts a space-separated list of bench tags; see the
-`envs:` block in `scripts/sky_run_all_benchmarks.yaml` for the full
-tag list.
+`RUN_ONLY` takes a space-separated list of bench tags; the `envs:` block in
+`scripts/sky_run_all_benchmarks.yaml` lists them all. The per-stack jobs target
+specific tables and pin their own baselines:
 
-The other `scripts/sky_*.yaml` files target specific tables (PLAID,
-ColPali training, LateOn-Code-edge, etc.) — see each file's header for
-the exact scope.
+| job | covers |
+| --- | --- |
+| `scripts/sky_pylate_benchmark.yaml` | end-to-end PyLate (synthetic + real MS MARCO) |
+| `scripts/sky_colpali_benchmark.yaml` | ColQwen2 / ColPali (synthetic + real DocVQA) |
+| `scripts/sky_benchmark_smoke_test.yaml` | two-bench smoke test (`bench_forward` + `bench_backward_method`) |
+| `scripts/sky_decompress_bench.yaml` | PLAID decompress + MaxSim |
+| `scripts/sky_fastplaid_e2e.yaml` | rerank vs `fast_plaid.engine.search()` |
+
+See each file's header for its exact scope.
 
 ## Output
 
-Each script writes to `benchmarks/results/` (overridable via
-`--outdir`). Per-script artifacts:
+Each script writes to `benchmarks/results/` (overridable via `--outdir`):
 
-* `*.json` — full result rows including per-variant timing, peak VRAM,
-  and shape metadata. The format that the headline tables in
-  `docs/benchmarks.md` are generated from.
-* `*.md` — pre-rendered Markdown table for the same data, ready to
-  paste into a report.
+* `*.json` — full result rows including per-variant timing, peak VRAM, and
+  shape metadata. This is the format the headline tables in `docs/benchmarks.md`
+  are generated from.
+* `*.md` — pre-rendered Markdown table for the same data, ready to paste into a
+  report.
 
 The directory is `.gitignore`d. **Do not commit anything under
 `benchmarks/results/`** (see `../AGENTS.md`).
 
 ## Conventions
 
-* **Numerics.** All baselines run their inner einsum / matmul with an
-  fp32 accumulator (matching the fused kernel) and read bf16 / fp16
-  inputs. Parity is asserted at `atol=1e-2, rtol=1e-2` *before*
-  timing so the speedup ratios are apples-to-apples.
-* **Warmup.** Every timed loop runs ≥ 5 untimed warmup iterations
-  before the measurement window.
-* **Timing.** CUDA events for kernel-level benches; `time.perf_counter`
-  with explicit `torch.cuda.synchronize()` for end-to-end benches.
+* **Numerics.** Baselines run their inner einsum / matmul with an fp32
+  accumulator (matching the fused kernel) and read bf16 / fp16 inputs; parity is
+  asserted before timing. See the fair-comparison protocol in
+  [`../docs/benchmarks.md`](../docs/benchmarks.md) for the exact tolerance.
+* **Warmup.** Every timed loop runs ≥ 5 untimed warmup iterations before the
+  measurement window.
+* **Timing.** CUDA events for kernel-level benches; `time.perf_counter` with an
+  explicit `torch.cuda.synchronize()` for end-to-end benches.
 * **Memory.** Peak VRAM via `torch.cuda.reset_peak_memory_stats()` +
   `max_memory_allocated()` around each variant.

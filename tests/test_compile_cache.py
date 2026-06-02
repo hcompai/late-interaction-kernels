@@ -300,7 +300,7 @@ def test_backward_unified_autotune_cache_bounded():
 
     _bwd_unified_kernel.cache.clear()
     # Nq small so the "auto" selector stays on the unified path (high-contention
-    # CSR needs Nq >= 256). Lq fixed → single autotune key across Nd, Ld.
+    # squares now route to lowmem). Lq fixed → single autotune key across Nd, Ld.
     for nd in (16, 32, 64):
         for ld in (180, 256, 512):
             Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
@@ -312,58 +312,47 @@ def test_backward_unified_autotune_cache_bounded():
     )
 
 
-def test_backward_csr_and_atomic_autotune_caches_bounded():
-    """The CSR and two-pass-atomic kernels also stay at one entry across Nd/Ld.
-
-    CSR uses a distinct key (``BWD_KEY_CSR``, no ``kd_layout``); this forces
-    both forced backward paths so the grad_Q, atomic grad_D and CSR grad_D
-    kernels are all exercised and pinned.
+def test_backward_lowmem_autotune_caches_bounded():
+    """The lowmem grad_Q and destination-owned grad_D kernels also stay at one
+    entry across Nd/Ld: both keys exclude the corpus/doc-length dims.
     """
     from late_interaction_kernels import maxsim
-    from late_interaction_kernels.backward.atomic import _bwd_dD_kernel, _bwd_dQ_kernel
-    from late_interaction_kernels.backward.csr import _bwd_dD_csr_kernel
+    from late_interaction_kernels.backward.lowmem import _bwd_dD_owned_kernel, _bwd_dQ_kernel
 
-    for k in (_bwd_dQ_kernel, _bwd_dD_kernel, _bwd_dD_csr_kernel):
+    for k in (_bwd_dQ_kernel, _bwd_dD_owned_kernel):
         k.cache.clear()
 
-    # Forced CSR grad_D path (+ shared two-pass grad_Q).
     for nd in (16, 32, 64):
         for ld in (180, 256, 512):
             Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
             D = torch.randn(nd, ld, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-            maxsim(Q, D, backward="csr").sum().backward()
-    assert len(_bwd_dD_csr_kernel.cache) == 1, (
-        f"CSR grad_D cache must stay at 1 across Nd/Ld; got {len(_bwd_dD_csr_kernel.cache)}"
+            maxsim(Q, D, backward="lowmem").sum().backward()
+    assert len(_bwd_dD_owned_kernel.cache) == 1, (
+        f"lowmem grad_D cache must stay at 1 across Nd/Ld; got {len(_bwd_dD_owned_kernel.cache)}"
     )
     assert len(_bwd_dQ_kernel.cache) == 1, (
         f"grad_Q cache must stay at 1 across Nd/Ld; got {len(_bwd_dQ_kernel.cache)}"
     )
 
-    # Forced atomic grad_D path (shares the same grad_Q kernel/key).
-    _bwd_dD_kernel.cache.clear()
-    for nd in (16, 32, 64):
-        for ld in (180, 256, 512):
-            Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-            D = torch.randn(nd, ld, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-            maxsim(Q, D, backward="atomic").sum().backward()
-    assert len(_bwd_dD_kernel.cache) == 1, (
-        f"atomic grad_D cache must stay at 1 across Nd/Ld; got {len(_bwd_dD_kernel.cache)}"
-    )
-
 
 def test_backward_kd_layout_gets_distinct_autotune_entry():
-    """kd_layout stays in the backward key: KD vs cross-product don't collide."""
+    """The layout flag stays in each backward key so KD vs cross-product don't
+    collide. ``unified`` keys on ``kd_layout``; ``lowmem`` keys on ``cross``
+    (KD auto-routes to lowmem, so force lowmem on both layouts here)."""
     from late_interaction_kernels import maxsim
+    from late_interaction_kernels.backward.lowmem import _bwd_dD_owned_kernel
     from late_interaction_kernels.backward.unified import _bwd_unified_kernel
 
     _bwd_unified_kernel.cache.clear()
     Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
     D = torch.randn(16, 180, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-    maxsim(Q, D).sum().backward()  # cross-product → kd_layout=False
+    maxsim(Q, D).sum().backward()  # cross-product → unified, kd_layout=False
     assert len(_bwd_unified_kernel.cache) == 1
 
+    _bwd_dD_owned_kernel.cache.clear()
     D_kd = torch.randn(8, 4, 180, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-    maxsim(Q, D_kd).sum().backward()  # KD layout → kd_layout=True → distinct entry
-    assert len(_bwd_unified_kernel.cache) == 2, (
-        f"kd_layout must produce a distinct backward autotune entry; got {len(_bwd_unified_kernel.cache)}"
+    maxsim(Q, D, backward="lowmem").sum().backward()  # lowmem cross → cross=True
+    maxsim(Q, D_kd, backward="lowmem").sum().backward()  # lowmem KD → cross=False
+    assert len(_bwd_dD_owned_kernel.cache) == 2, (
+        f"layout must produce a distinct lowmem backward entry; got {len(_bwd_dD_owned_kernel.cache)}"
     )

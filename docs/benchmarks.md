@@ -1,114 +1,58 @@
 # Benchmarks
 
-Single H100 80 GB SXM, bf16 inputs (fp16 for LateOn / ModernColBERT
-shapes), fp32 accumulator throughout, 50 iterations after 5 warmup,
-`torch 2.8.0+cu128`, `triton 3.4`, CUDA 12.8. Forward and `flash-maxsim`
-head-to-head numbers were last refreshed for the 0.4.0 release
-(query-token chunking for long queries).
+## Configuration
 
-Baseline package versions used for the comparison columns:
-`flash-maxsim 0.2.1`, `pylate 1.3.3`, `fast-plaid 1.4.6.280`,
-`torch.compile` from the same `torch 2.8.0`.
+Every number on this page comes from this stack unless a table says otherwise:
 
-**Fair-comparison protocol.** Every speedup on this page is measured at
-**matched numerics**: each baseline runs the inner einsum / matmul with
-an fp32 accumulator just like the fused kernel, and parity vs the eager
-reference is asserted at `atol=1e-2, rtol=1e-2` *before* timing. The
-forward and cached-contrastive sections also report a `torch.compile`
-column on the same body so you can see what Inductor alone closes.
+| | |
+| ----------------- | --------------------------------------------------------- |
+| GPU               | 1× H100 80 GB SXM                                         |
+| Base image        | NGC 25.06                                                |
+| CUDA              | 12.8                                                     |
+| PyTorch           | `2.8.0+cu128`                                            |
+| Triton            | `3.4`                                                    |
+| Inputs            | bf16 (fp16 for LateOn / ModernColBERT shapes)            |
+| Accumulator       | fp32 throughout                                          |
+| Timing            | 50-iter median over CUDA events, after 5 warmup          |
+
+### Baseline package versions
+
+All baselines are pinned PyPI releases (no git checkouts), installed into the
+stack above by the SkyPilot jobs in `scripts/` (see
+[`../benchmarks/README.md`](../benchmarks/README.md)).
+
+| package          | version       | role on this page                              |
+| ---------------- | ------------- | ---------------------------------------------- |
+| `flash-maxsim`   | `0.2.1`       | forward head-to-head and the chunking "vs flash" column |
+| `pylate`         | `1.3.3`       | vanilla-PyLate end-to-end baselines (1.5+ broke `patch_pylate`'s `(queries_mask, documents_mask)` signature, so the sweep pins 1.3.3) |
+| `fast-plaid`     | `1.4.6.280`   | PLAID rerank vs `engine.search()` (the `.280` suffix is the torch-2.8 wheel) |
+| `colpali-engine` | `>=0.3.10`    | ColQwen2 / ColPali end-to-end (`ColbertLoss`, `ColbertPairwiseCE`) |
+
+The ColQwen2 / ColPali section is the one exception to the stack above: its
+SkyPilot job pins `torch==2.11.0+cu128` / `torchvision==0.26.0+cu128` to satisfy
+`colpali-engine`'s dependency floor, so treat its absolute step times as
+same-row vanilla-vs-LIK ratios rather than cross-comparable with the other
+tables.
+
+## Fair-comparison protocol
+
+Every speedup on this page is measured at **matched numerics**: each baseline
+runs the inner einsum / matmul with an fp32 accumulator just like the fused
+kernel, and parity vs the eager reference is asserted at `atol=1e-2, rtol=1e-2`
+*before* timing. The forward and cached-contrastive sections also report a
+`torch.compile` column on the same body so you can see what Inductor alone
+closes.
 
 ## Reproducing
 
-```bash
-pip install -e ".[dev,pylate]"
-
-# forward (reranking / inference)
-python benchmarks/bench_forward.py
-
-# long-query chunking (Lq > 512): forward + training
-python benchmarks/bench_chunking.py
-
-# backward — auto / atomic / csr / unified sweep
-python benchmarks/bench_backward_method.py
-python benchmarks/bench_backward_unified.py
-
-# full training step (forward + backward): speed + peak memory
-python benchmarks/bench_training.py
-
-# LateOn / LateOn-Code / ModernColBERT long-document regime
-python benchmarks/bench_lateon.py
-
-# fused L2-normalize
-python benchmarks/bench_normalize.py
-
-# fused D-side head (training)
-python benchmarks/bench_fused_head_train.py
-
-# FP8 inference (Hopper / Blackwell)
-python benchmarks/bench_fp8.py
-
-# PyLate end-to-end
-python benchmarks/bench_pylate_training.py --batch-size 128 --neg 2
-python benchmarks/bench_cached_maxsim.py
-python benchmarks/bench_pylate_lateon.py --recipe contrastive --batch-size 4 --Ld 8192
-
-# 8-GPU DDP CachedContrastive
-torchrun --standalone --nproc_per_node=8 \
-  benchmarks/bench_pylate_lateon.py --recipe reason \
-  --batch-size 32 --mini-batch-size 32 --Ld 2048 --grad-checkpoint --ddp
-
-# Head-to-head vs flash-maxsim (same Triton-MaxSim math)
-pip install "flash-maxsim==0.2.0"   # pinned: matches the published numbers
-python benchmarks/bench_flash_maxsim.py
-
-# PLAID rerank vs fast-plaid
-python benchmarks/bench_decompress_maxsim.py     # vs PyTorch transliteration
-python benchmarks/bench_fastplaid_e2e.py         # vs `fast_plaid.engine.search()`
-
-# Apple Silicon (MPS): Metal kernel vs torch.compile vs eager
-python benchmarks/bench_mps.py                  # forward / cross-product
-python benchmarks/bench_mps.py --layout kd      # KD / pairs (4-D D)
-python benchmarks/bench_mps.py --mode train     # forward + backward
-
-# everything at once (writes to $OUTDIR)
-OUTDIR=benchmarks/results bash scripts/run_all_benchmarks.sh
-```
-
-Results land in `benchmarks/results/*.{json,md}`.
-
-## On a SkyPilot cluster
-
-```bash
-# Every table on this page in one shot (1×H100, ~25 min):
-sky launch -c lik-bench-all scripts/sky_run_all_benchmarks.yaml -y
-
-# Subsets of the full sweep via RUN_ONLY (tags: forward, inference_edge,
-# normalize, backward_method, lateon, cached_maxsim, flash_maxsim, fp8,
-# fused_head_train, pylate_training, pylate_lateon, decompress_maxsim,
-# fastplaid_e2e, pylate_realdata):
-sky launch -c lik-bench-smoke scripts/sky_run_all_benchmarks.yaml -y \
-    --env RUN_ONLY="forward cached_maxsim fused_head_train fp8"
-
-# Per-stack deep-dives (each with its own RUN_ONLY tag set):
-sky launch -c lik-pylate  scripts/sky_pylate_benchmark.yaml  -y  # all e2e pylate shapes
-sky launch -c lik-colpali scripts/sky_colpali_benchmark.yaml -y  # ColQwen2 synth + real DocVQA
-
-# Two-bench smoke test (just bench_forward + bench_backward_method):
-sky jobs launch scripts/sky_benchmark_smoke_test.yaml
-
-# PLAID-specific benches (kept separate; will likely be folded into a
-# sky_plaid_benchmark.yaml in a follow-up):
-sky jobs launch scripts/sky_decompress_bench.yaml # PLAID decompress + MaxSim
-sky jobs launch scripts/sky_fastplaid_e2e.yaml    # vs `fast_plaid.engine.search()`
-```
+Running individual scripts, the full local sweep, the SkyPilot cluster
+drivers, and the output format all live in one place:
+[`../benchmarks/README.md`](../benchmarks/README.md). This page is the
+headline numbers and the analysis behind them.
 
 ## Forward (reranking / inference)
 
-**Baseline.** Every implementation on this page runs the einsum with an
-**fp32 accumulator** (same numerical contract as the fused kernel) and
-reads `bf16` / `fp16` inputs. Parity against the eager reference is
-asserted at `atol=1e-2, rtol=1e-2` before timing, so the speedup ratios
-are apples-to-apples in precision. The reference is one line:
+The eager reference each shape is checked against is one line:
 
 ```python
 def eager_fp32(Q, D):
@@ -125,8 +69,7 @@ Triton kernel exists to skip. Empirically `torch.compile` lands within
 it's actually slower than eager because the per-call dispatch overhead
 dominates such tiny work.
 
-Full table (H100 80 GB SXM, NGC 25.06, bf16 inputs, 50-iter median over
-CUDA events):
+Full table:
 
 
 | shape                                                   | LIK      | eager (fp32 acc) | `torch.compile` (fp32 acc) | LIK vs eager | LIK vs compile | naive scratch |
@@ -161,8 +104,7 @@ working set is bounded by the output and ranges from a few KB to
 
 `flash-maxsim` (Roi Pony / IBM) was the first public Triton MaxSim
 kernel and the direct inspiration for this library. The numbers below
-come from `benchmarks/bench_flash_maxsim.py` on H100 80 GB HBM3, bf16,
-50-iter median over CUDA events. `flash-maxsim` 0.2.1 has no
+come from `bench_flash_maxsim.py`. `flash-maxsim` 0.2.1 has no
 `normalize=True` knob and no autograd-aware backward, so we report
 plain forward only.
 
@@ -188,7 +130,7 @@ ahead on the wide regimes (`rerank-very-long`, `rerank-colpali`,
 score tile), so peak working set is sub-100 KB on every shape and there's
 no memory column to compare. The real differentiators are elsewhere: a
 fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
-backward (`unified` / `csr` / `atomic`), packed/varlen, PLAID residual
+backward (`unified` / `lowmem`), packed/varlen, PLAID residual
 decompression, and a fused D-side projection head — none of which
 `flash-maxsim` ships. `bench_flash_maxsim.py` also covers KD-layout
 (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +4 to +17%) and pairwise
@@ -203,8 +145,8 @@ MaxSim is a sum over query tokens of a per-token max, splitting the query
 axis into fixed 128-token chunks and summing the per-chunk scores is
 numerically exact, and launches more, shorter programs that keep the H100
 busy. It fires only above a measured crossover (`Lq > 512`); shorter
-queries fall through to the existing core unchanged. `bench_chunking.py`,
-H100 80 GB SXM, bf16, median over CUDA events:
+queries fall through to the existing core unchanged. From
+`bench_chunking.py`:
 
 | shape                                  | un-chunked | chunked  | speedup  | vs flash |
 | -------------------------------------- | ---------- | -------- | -------- | -------- |
@@ -252,8 +194,7 @@ fast-plaid, time `engine.search()`, then load the same compressed
 tensors and call `maxsim_residual_varlen` *on the same compressed
 bytes*. To keep the comparison apples-to-apples both pipelines end on
 a `torch.topk(scores, k=10)` — `engine.search()` returns the top-10,
-so the LIK timer now folds the same final argmax in. Reproduce with
-`scripts/sky_fastplaid_e2e.yaml`.
+so the LIK timer now folds the same final argmax in.
 
 We report two LIK variants:
 
@@ -321,7 +262,7 @@ the same Triton kernel one precision step up. No requantization of
 PLAID index can ship fp8 directly), so the speedup below isolates the
 \"swap bf16 tensor cores for fp8 tensor cores\" win.
 
-H100 80 GB SXM, NGC 25.06, `bench_fp8.py`:
+From `bench_fp8.py`:
 
 
 | shape                                       | bf16     | fp8      | speedup   | label              |
@@ -353,8 +294,7 @@ fits in half the RAM.
 ## End-to-end LateOn-Code-edge training (17 M encoder)
 
 `losses.Contrastive`, in-batch negatives, bf16, grad-checkpointing,
-1×H100. Reproduce with
-`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="lateon_contrastive lateon_cached"`.
+1×H100.
 
 
 | setup                  | vanilla  | fused    | speedup   | peak (v → f)   |
@@ -373,44 +313,38 @@ runs inside the encoder forward.
 
 ## Backward paths
 
-0.3.0 ships a new `unified` path that combines CSR's deterministic
-reduction with atomic's parallelism; `auto` picks `unified` on almost
-every shape and falls back to `csr` for very-high-contention training
-batches (e.g. `Nd ≥ 256` with `Ld = 128`).
+There are two paths. `unified` is the fastest single-pass backward: it scatters
+`grad_D` with fp32 atomics, accumulating in a full-size fp32 buffer that is
+cast to the input dtype at the end. `lowmem` is the memory-optimal one: each
+output row is destination-owned, so it accumulates in fp32 *registers* and
+writes `grad_Q` / `grad_D` straight in the input dtype — no full-size fp32
+buffer, no fp32→bf16 transient, no atomics (hence deterministic).
 
+`auto` sends the gradient-heavy shapes — knowledge-distillation / hard-negative
+layouts (where `grad_D` is `n_neg`-inflated) and large high-contention in-batch
+squares — to `lowmem`, and everything else to `unified`. The split is exact:
+`lowmem`'s `grad_D` is a one-hot matmul whose wasted FLOPs scale with `Lq`, so
+it ties or beats `unified` for short queries but loses on long-query×long-doc
+cross-products, which stay on `unified`.
 
-| shape                            | atomic | csr  | unified | auto | auto picks |
-| -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.61   | 0.82 | 0.56    | 0.49 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.56   | 0.75 | 0.47    | 0.48 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 2.11   | 1.18 | 1.76    | 1.18 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.68   | 0.83 | 0.84    | 0.84 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 0.62   | 0.77 | 0.52    | 0.54 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 1.09   | 0.88 | 1.38    | 1.37 | unified    |
+Realistic shapes (H100, bf16, fwd+bwd peak memory / step time):
 
+| shape                          | `unified`        | `lowmem`         |
+| ------------------------------ | ---------------- | ---------------- |
+| pylate-text B256 Lq32 Ld300    | 96 MB / 2.23 ms  | **52 MB / 2.10 ms** |
+| colpali B128 Lq32 Ld1030       | 141 MB / 1.38 ms | **72 MB** / 1.57 ms |
+| colpali-neg B128×n8            | 1086 MB / 0.86 ms| **543 MB / 0.71 ms** |
+| colpali-neg B256×n16           | 4329 MB / 2.36 ms| **2165 MB / 1.37 ms** |
+| longq B64 Lq1030 Ld1030        | **179 MB / 5.6 ms** | 107 MB / 9.0 ms |
 
-CSR is bitwise-reproducible across runs (no atomics); `atomic` /
-`unified` drift within fp32 ULP (~1e-6 relative) because reduction
-order depends on thread scheduling. Note: on a few shapes the
-hand-picked `atomic` path beats `auto`'s `unified` choice
-(`retrieval`, `huge-Nd`); the heuristic favours the more general
-`unified` path because it generalises across batch sizes and document
-lengths without an autotune step.
-
-**Autotuned launch params.** Each backward kernel is one program per
-output row streaming a single `d_pad` vector through a doc/bucket loop —
-no block tiling to sweep, so the only useful knob is `(num_warps,
-num_stages)`. The stock launch (`num_warps=4`) over-subscribes these
-narrow programs; tuning it (the optimum sits at 1–2 warps on H100) lifts
-`auto` by **~1.2–1.45×** across the training shapes above — the biggest
-gain landing on the high-contention `train-256` csr reduction
-(1.71 → 1.18 ms). The autotune key mirrors the forward one (`Lq`,
-`d_pad`, layout flags), so the cache stays at one entry per regime
-rather than one per batch size.
+So on the hard-negative path `lowmem` roughly halves peak memory *and* runs
+~1.7× faster; on long-query cross-products `unified` keeps the speed edge.
+`lowmem` is deterministic across runs; `unified` drifts within fp32 ULP
+(reduction order depends on scheduling).
 
 ```python
-# Per-call (recommended):
-maxsim(Q, D, normalize=True, backward="csr")   # | "atomic" | "unified" | "auto"
+# Per-call override (auto is recommended):
+maxsim(Q, D, normalize=True, backward="lowmem")  # | "unified" | "auto"
 ```
 
 ## End-to-end PyLate `Contrastive` training
@@ -472,7 +406,7 @@ on the same chunked tiling (`Lq=128, d=128, mini=32`, fwd + bwd):
   same numerics as vanilla.
 * **LIK** — `late_interaction_kernels.maxsim` over the same chunking.
 
-H100 80 GB HBM3, parity checked on an 8-row probe before
+Parity is checked on an 8-row probe before
 timing. `torch.compile` lands *below* vanilla here because Dynamo
 recompiles on every fresh tile shape and the cuda-graph fast path
 trips on the pending-backward state pylate's loss leaves behind:
@@ -509,9 +443,6 @@ Real `pylate.models.ColBERT("lightonai/LateOn-Code-edge")` (`d=48`,
 loaded through `datasets`. We swap `patch_pylate()` on/off and time
 full optimizer steps (encoder forward + loss + backward + step). The
 kernel is a drop-in — no other code changes between the two columns.
-Reproduce with
-`sky launch scripts/sky_pylate_benchmark.yaml --env RUN_ONLY="realdata_contrastive realdata_reason realdata_long_2k realdata_long_4k"`
-(or `benchmarks/bench_pylate_realdata.py` directly).
 
 
 | recipe              | setup                              | vanilla PyLate | + LIK    | speedup   |
@@ -538,9 +469,7 @@ LoRA-only training (37 M of 2 246 M params trainable — the official
 ColPali recipe via `peft.get_peft_model`), AdamW + bf16 weights. We
 swap `patch_colpali_engine()` on/off and time full optimizer steps
 (vision tower + text encoder forward + ColbertLoss + backward + step).
-Reproduce with `scripts/sky_colpali_benchmark.yaml` (which drives both
-`benchmarks/bench_colpali_training.py` on synthetic shapes and
-`benchmarks/bench_colpali_realdata.py` on `vidore/docvqa_test_subsampled`).
+Synthetic shapes and real `vidore/docvqa_test_subsampled` are both covered.
 
 
 | loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v → f)     |
@@ -613,7 +542,7 @@ materialization shows up as lower memory.)
 ## Edge models (`d ∈ {48, 64}`)
 
 Edge ColBERT models (`d ∈ {48, 64}`) are more memory-bound, so the
-fused kernel widens its lead. `bench_inference_edge.py`, bf16, 50-iter:
+fused kernel widens its lead. From `bench_inference_edge.py`:
 
 
 | shape                                       | fused    | naive (fp32) | speedup   | fused mem | naive mem |
@@ -728,8 +657,6 @@ via `atomic_uint` CAS (M1-compatible), and the L2-normalize Jacobian
 is folded into the kernel writes. `KD / pairs` layouts (4-D `D` of
 shape `[Nq, K, Ld, d]`) route to the same launch via a runtime flag
 bit, matching PyLate's `colbert_kd_scores` / `colbert_scores_pairwise`.
-Run `python benchmarks/bench_mps.py --mode train` (forward + backward)
-and `--layout kd` (KD shapes) to reproduce.
 
 Training (forward + backward) on the same MacBook Air M4, fp16, 30-iter
 median:

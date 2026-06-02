@@ -68,6 +68,12 @@
     --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --mono:         var(--font-mono);  /* legacy alias used in inline SVG styles */
 
+    /* motion — the TOC collapse is the page's one significant layout move, so it
+       gets a deliberate ease-out (settles, doesn't accelerate) shared by every
+       property that travels with it. */
+    --dur-toc:  280ms;
+    --ease-toc: cubic-bezier(0.22, 1, 0.36, 1);  /* ease-out-quint */
+
     /* animation channel colors — each active variant designed to take white text */
     --q-idle:    oklch(93% 0.025 250);  --q-active:    oklch(46% 0.11 250);  /* slate blue — query */
     --d-idle:    oklch(93% 0.025 150);  --d-active:    oklch(48% 0.10 150);  /* moss — document */
@@ -269,7 +275,8 @@
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;
-    transition: color 120ms ease, border-color 120ms ease, background 120ms ease, padding 200ms ease, gap 200ms ease;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease,
+                padding var(--dur-toc) var(--ease-toc), gap var(--dur-toc) var(--ease-toc);
   }
   .toc-toggle .glyph {
     font-size: 14px;
@@ -284,28 +291,71 @@
 
   .layout {
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
+    /* Third track is a phantom gutter — 0 while expanded (no visible effect),
+       it grows to match the toggle column when collapsed so the center column
+       is symmetric and `main` reads as centered. Keeping both states at three
+       tracks lets grid-template-columns interpolate track-for-track. */
+    grid-template-columns: 240px minmax(0, 1fr) 0px;
     gap: 56px;
     max-width: 1200px; margin: 0 auto;
     padding: 40px 28px 112px;
-    transition: grid-template-columns 200ms ease;
+    transition: grid-template-columns var(--dur-toc) var(--ease-toc),
+                max-width var(--dur-toc) var(--ease-toc);
   }
   /* Collapsed: sidebar shrinks to a slim column with just the button,
-     so the toggle stays exactly where the TOC was. */
+     so the toggle stays exactly where the TOC was. The container widens
+     and `main` lifts its cap (below) so the body reclaims the freed space. */
   html[data-toc="collapsed"] .layout {
-    grid-template-columns: 44px minmax(0, 1fr);
-    max-width: 864px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    max-width: 1136px;
   }
-  html[data-toc="collapsed"] aside.toc ol { display: none; }
   html[data-toc="collapsed"] aside.toc .toc-toggle {
     padding: 6px 9px;
     gap: 0;
   }
-  html[data-toc="collapsed"] aside.toc .toc-toggle .lbl { display: none; }
+  /* The faded-out list keeps its tall layout box (visibility:hidden, not
+     display:none), so clip the sidebar to suppress the scrollbar that would
+     otherwise show in the slim collapsed column. */
+  html[data-toc="collapsed"] aside.toc { overflow: hidden; }
+  /* While the column is resizing, clip it too — otherwise restoring overflow-y:auto
+     on expand flashes the scrollbar thumb as the width animates (JS adds/removes
+     this class around the toggle; see the TOC collapse script). */
+  aside.toc.toc-animating { overflow: hidden; }
   aside.toc {
     position: sticky; top: 76px; align-self: start;
     height: calc(100vh - 100px); overflow-y: auto;
     padding-left: 0;
+  }
+  /* Fade out the list and appendix in sync with the column shrink, so they
+     dissolve as one motion. visibility:hidden keeps them out of the tab order
+     once invisible. (The scrollbar thumb that used to show through mid-transition
+     is handled separately by the .toc-animating clip, not by timing the fade.) */
+  aside.toc ol, aside.toc .toc-appendix-label {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity var(--dur-toc) var(--ease-toc),
+                visibility var(--dur-toc) var(--ease-toc);
+  }
+  html[data-toc="collapsed"] aside.toc ol,
+  html[data-toc="collapsed"] aside.toc .toc-appendix-label {
+    opacity: 0;
+    visibility: hidden;
+  }
+  /* Fade the button label AND collapse its width to zero, so the button
+     contracts to a glyph-only square. opacity:0 alone keeps the layout box,
+     which would leave the button stretched wide while collapsed. */
+  .toc-toggle .lbl {
+    opacity: 1;
+    max-width: 100px;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: opacity var(--dur-toc) var(--ease-toc),
+                max-width var(--dur-toc) var(--ease-toc);
+  }
+  html[data-toc="collapsed"] aside.toc .toc-toggle .lbl {
+    opacity: 0;
+    max-width: 0;
+    pointer-events: none;
   }
   aside.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
   aside.toc li { counter-increment: toc; margin: 1px 0; }
@@ -349,10 +399,11 @@
   aside.toc ol.toc-appendix a::before {
     content: counter(app, upper-alpha);
   }
-  html[data-toc="collapsed"] aside.toc .toc-appendix-label,
-  html[data-toc="collapsed"] aside.toc ol.toc-appendix { display: none; }
+  /* .toc-appendix-label and ol.toc-appendix fade with the parent ol rules above. */
 
-  main { min-width: 0; max-width: 720px; }
+  main { min-width: 0; max-width: 720px; transition: max-width var(--dur-toc) var(--ease-toc); }
+  /* With the TOC hidden, let the reading column breathe into the freed width. */
+  html[data-toc="collapsed"] main { max-width: 880px; }
   section { margin-top: 56px; scroll-margin-top: 84px; }
   section:first-of-type { margin-top: 0; }
 
@@ -370,17 +421,17 @@
   .appendix-divider::after {
     content: "Appendix";
     position: absolute;
-    top: -10px;
+    top: -12px;
     left: 50%;
     transform: translateX(-50%);
     background: var(--bg);
-    padding: 0 14px;
-    color: var(--ink-dim);
+    padding: 0 16px;
+    color: var(--accent);
     font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.22em;
+    font-size: 13px;
+    letter-spacing: 0.24em;
     text-transform: uppercase;
-    font-weight: 500;
+    font-weight: 600;
   }
   .lede {
     color: var(--ink-mid);
@@ -713,10 +764,26 @@
   /* responsive */
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; gap: 24px; padding: 24px 20px 80px; }
+    /* The collapsed-state selector has higher specificity and would keep the 44px
+       sidebar column at narrow widths, leaving a dead strip. Override it here. */
+    html[data-toc="collapsed"] .layout { grid-template-columns: 1fr; }
     aside.toc { display: none; }
     .anim-grid { grid-template-columns: 1fr; }
     body { font-size: 16.5px; }
     h1 { font-size: clamp(1.85rem, 7vw, 2.4rem); }
+  }
+
+  /* Honor an explicit request for less motion: every state change snaps
+     instead of animating, and anchor jumps stop smooth-scrolling. The
+     manually-driven walkthrough still steps on click — it just no longer
+     glides. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 </style>
 </head>
@@ -1216,6 +1283,45 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     to trade block size against occupancy.
   </p>
 
+  <h3 id="chunking">Long-query chunking</h3>
+
+  <p>
+    For ColPali-scale queries ($L_q \approx 1024$ visual patches), the outer
+    loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
+    inside one program, leaving the rest of the SM grid idle. Because MaxSim
+    is a sum over query tokens of a per-token max, it decomposes exactly:
+  </p>
+
+  <p>
+    $$\text{score}[i, j] = \sum_{c=0}^{n_c - 1} \sum_{s \in \text{chunk}_c} \max_t \langle \Qm_{i, s},\, \Dm_{j, t} \rangle.$$
+  </p>
+
+  <p>
+    <code>maxsim()</code> exploits this whenever $L_q &gt; 512$ by
+    reshaping $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ into
+    $\Qm_c \in \mathbb{R}^{N_q n_c \times 128 \times d}$ (128 tokens per
+    chunk, $n_c = \lceil L_q / 128 \rceil$), running the kernel over the
+    larger batch, and summing the chunk scores back per original query.
+    The reshape and sum are plain tensor ops, so autograd flows through them
+    unchanged and no custom backward is needed.
+  </p>
+
+  <p>
+    Two gains at once: more programs on the grid (better SM utilisation)
+    and the kernel always sees $L_q = 128$, pinning the autotune cache to a
+    small constant rather than one entry per distinct query length.
+  </p>
+
+  <p>
+    Splitting only pays off once the per-program serial loop dominates the
+    cost of launching the extra programs. Below that crossover the inner loop
+    is already short and the grid already full, so chunking would only add
+    launch overhead, which is slower than not chunking at all. The split therefore
+    fires only when $L_q &gt; 512$; short queries (ColBERT $L_q \leq 32$,
+    long-document $L_q \leq 512$) take the un-chunked path, which is already
+    the faster one for them.
+  </p>
+
   <h3>Step through the algorithm</h3>
   <p>
     Below is a toy execution with $L_q = 4$, $L_d = 12$, $d = 4$,
@@ -1397,8 +1503,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </div>
 
   <p>
-    The library offers three reduction strategies to handle this
-    contention:
+    The library offers two reduction strategies to handle this
+    contention; <code>auto</code> (the default) chooses between them:
   </p>
 
   <table class="tbl">
@@ -1407,39 +1513,42 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr>
         <td><code>unified</code></td>
         <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
+        <td>Default for cross-products. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
       </tr>
       <tr>
-        <td><code>csr</code></td>
+        <td><code>lowmem</code></td>
         <td>yes</td>
-        <td>Picked automatically at very high contention ($N_q, N_d \geq 256$, $L_q \leq 64$), or any time bitwise determinism matters.</td>
-      </tr>
-      <tr>
-        <td><code>atomic</code></td>
-        <td>no</td>
-        <td>Legacy two-pass; retained as a fallback on hardware with degraded fp32 atomics.</td>
+        <td>Picked for gradient-heavy shapes — KD / hard-negative layouts and high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$). Destination-owned: accumulates in fp32 registers and writes $\nabla_{\Qm} / \nabla_{\Dm}$ directly in the input dtype, so no full-size fp32 buffer, no fp32→bf16 transient, no atomics. Roughly halves backward peak memory and is the deterministic path.</td>
       </tr>
     </tbody>
   </table>
 
   <div class="note">
-    <strong>What CSR is doing here.</strong>
-    <em>CSR</em> is the classic Compressed Sparse Row layout — a
-    <code>row_ptr</code> index plus a flat array sorted by row. The
-    other two paths live with the scatter pattern at runtime and use
-    atomic adds; the CSR path <em>inverts</em> it. A one-shot batched
-    radix-sort of $(i, s)$ by argmax (plus a <code>searchsorted</code>)
-    builds per-$j$ buckets, then one Triton program per $(j, t)$ output
-    row reduces its private bucket in registers and writes once — no
-    atomics, bitwise-stable across launches. The sort only pays off
-    when atomics would actually serialise, which is exactly the
-    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime the dispatcher flags.
+    <strong>How <code>lowmem</code> avoids atomics.</strong>
+    The <code>unified</code> path lives with the scatter pattern at runtime
+    and uses fp32 atomic adds into a full-size buffer. <code>lowmem</code>
+    <em>inverts</em> it: each Triton program owns one $(j, t)$ output row
+    and reduces the contributing $(i, s)$ pairs from the saved argmax in
+    fp32 registers via a one-hot matmul, then writes once in the input
+    dtype — no atomics, bitwise-stable across launches, and no fp32→bf16
+    transient. That is why <code>auto</code> routes the high-contention
+    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime (and every KD /
+    hard-negative layout) there.
   </div>
 
   <p>
-    All three paths use Triton's stable <code>argmax</code> (lowest-index
+    All paths use Triton's stable <code>argmax</code> (lowest-index
     tie-break) on the forward, so only the $\nabla_{\Dm}$ reduction order
     distinguishes them numerically.
+  </p>
+
+  <h3>Backward launch-param autotuning</h3>
+
+  <p>
+    The backward kernels have no block-tiling dimensions to sweep. Each is one
+    Triton program per output row streaming a single embedding vector, so they
+    are autotuned over <code>num_warps</code> and <code>num_stages</code> only,
+    keyed like the forward so the cache holds one entry per training regime.
   </p>
 </section>
 
@@ -1722,9 +1831,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     That set $\{(i, s) : t^{\star}(i, j, s) = t\}$ is exactly the bucket
-    the <code>csr</code> kernel sorts pairs into, and the same contention
-    pattern the <code>unified</code> and <code>atomic</code> paths
-    resolve with <code>atomic_add</code>.
+    the <code>lowmem</code> kernel reduces per output row, and the same
+    contention pattern the <code>unified</code> path resolves with
+    <code>atomic_add</code>.
   </p>
 
   <h3>The mask falls out for free</h3>
@@ -1787,6 +1896,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   var btn = document.getElementById("toc-toggle");
   if (!btn) return;
 
+  var aside = document.querySelector("aside.toc");
+  var animTimer = null;
+
   var saved = null;
   try { saved = localStorage.getItem(KEY); } catch (e) {}
   var state = saved === "collapsed" ? "collapsed" : "expanded";
@@ -1804,6 +1916,14 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   btn.addEventListener("click", function() {
     state = state === "expanded" ? "collapsed" : "expanded";
     try { localStorage.setItem(KEY, state); } catch (e) {}
+    // Clip the sidebar's scrollbar for the duration of the width animation so the
+    // thumb doesn't flash as the column resizes; restore native scrolling once it
+    // settles (a hair past the 410ms sequenced collapse/expand).
+    if (aside) {
+      aside.classList.add("toc-animating");
+      if (animTimer) clearTimeout(animTimer);
+      animTimer = setTimeout(function() { aside.classList.remove("toc-animating"); }, 460);
+    }
     apply(state);
   });
 })();
