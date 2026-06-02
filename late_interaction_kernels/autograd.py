@@ -464,7 +464,7 @@ def maxsim_pairs(
         q_mask: optional ``[B, Lq]`` bool mask.
         d_mask: optional ``[B, Ld]`` bool mask.
         normalize: per-token L2-normalize inside the kernel.
-        backward: same semantics as :func:`maxsim` (auto / unified / atomic).
+        backward: same semantics as :func:`maxsim` (auto / unified / lowmem).
 
     Returns:
         scores: ``[B]`` fp32.

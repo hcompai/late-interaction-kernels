@@ -300,7 +300,7 @@ def test_backward_unified_autotune_cache_bounded():
 
     _bwd_unified_kernel.cache.clear()
     # Nq small so the "auto" selector stays on the unified path (high-contention
-    # CSR needs Nq >= 256). Lq fixed → single autotune key across Nd, Ld.
+    # squares now route to lowmem). Lq fixed → single autotune key across Nd, Ld.
     for nd in (16, 32, 64):
         for ld in (180, 256, 512):
             Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
