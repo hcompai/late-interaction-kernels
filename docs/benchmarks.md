@@ -472,13 +472,15 @@ swap `patch_colpali_engine()` on/off and time full optimizer steps
 Synthetic shapes and real `vidore/docvqa_test_subsampled` are both covered.
 
 
-| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak     |
-| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | -------- |
-| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 GB |
-| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 GB |
-| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 GB |
-| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 GB |
-| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 GB |
+| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v → f)     |
+| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | ---------------- |
+| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 → 9.10 GB  |
+| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 → 5.74 GB  |
+| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 → 9.10 GB  |
+| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 → 16.20 GB |
+| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 → 8.05 GB  |
+| `ColbertNegativeCE` | synth bs=4, num_neg=4, 448px       |  638.9 ms              |  700.1 ms | 0.91×     | 24.08 → 24.08 GB |
+| `ColbertPairwiseNeg`| synth bs=4, num_neg=4, 448px       |  625.6 ms              |  672.0 ms | 0.93×     | 24.08 → 24.08 GB |
 
 
 Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
@@ -486,12 +488,55 @@ forward+backward than a ModernBERT-149 M ColBERT, and the image
 modality blows up Ld (≈1 030 visual tokens at the default 448 px
 resolution). So even with LoRA-only training shrinking AdamW state
 by ~60×, the *encoder activation-grad backward* is what dominates
-the step — LIK lands in the 0.97–1.02× range here. The kernel is a
+the step — LIK lands in the 0.91–1.02× range here. The kernel is a
 drop-in — no other code changes between the two columns. Same
 takeaway as the PyLate `Contrastive` recipe on the 149 M encoder:
-when the transformer is the bottleneck, LIK doesn't move the needle,
-it just doesn't hurt. The 0.97× `ColbertPairwiseCE bs=4` cell is at
-the edge of run-to-run noise on a step this encoder-dominated.
+when the transformer is the bottleneck, LIK doesn't move the needle.
+The two explicit-negative heads sit *below* 1× (0.91–0.93×): they
+encode 4 hard negatives per query (20 images/step), so the vision
+tower dominates even more, while the fused pos/neg path trades three
+tiny einsums for three Triton launches whose overhead doesn't amortise
+on `[4, 4, 24, 1030]`-scale slabs. The fusion's win is wall-clock on
+the scoring itself and only shows once `batch × num_neg` is large —
+which the encoder hides at the e2e level. The isolation table below
+measures where it actually lands.
+
+### Explicit-negative MaxSim isolation (no encoder)
+
+Like the cached-contrastive isolation above, this strips the encoder
+and times just the explicit-negative loss head's forward+backward on
+synthetic embeddings (`bench_colpali_loss.py`, H100, bf16,
+`Lq=32, Ld=1030` ≈ ColPali visual tokens, `in_batch_term_weight=0`
+to isolate the pos/neg path this fuses). Vanilla runs the
+`einsum → amax → sum`; LIK runs `maxsim_pairs` (positives) + 4-D
+`maxsim` (negatives, which `auto`-routes the KD backward to `lowmem`).
+
+
+| shape (Lq=32, Ld=1030, d=128) | vanilla  | LIK      | speedup   | vanilla peak | LIK peak |
+| ----------------------------- | -------- | -------- | --------- | ------------ | -------- |
+| `colbert-neg` B64 × n4        | 1.41 ms  | 1.63 ms  | 0.87×     |   278 MB     |  242 MB  |
+| `colbert-neg` B128 × n4       | 1.66 ms  | 1.47 ms  | 1.13×     |   493 MB     |  420 MB  |
+| `colbert-neg` B128 × n8       | 2.48 ms  | 1.65 ms  | **1.50×** |   880 MB     |  679 MB  |
+| `colbert-neg` B256 × n8       | 4.41 ms  | 1.76 ms  | **2.50×** |  1697 MB     | 1293 MB  |
+| `colbert-neg` B256 × n16      | 7.73 ms  | 1.79 ms  | **4.31×** |  3239 MB     | 2321 MB  |
+| `pairwise-neg` B128 × n8      | 2.48 ms  | 1.48 ms  | **1.67×** |   880 MB     |  679 MB  |
+| `pairwise-neg` B256 × n8      | 4.38 ms  | 1.56 ms  | **2.81×** |  1697 MB     | 1293 MB  |
+
+
+Reading — speed: the win scales with `B × n_neg`. It's launch-bound and
+slightly behind at B=64 (0.87×), then climbs 1.13× → 4.31× as the pos/neg
+slabs grow enough to amortise the Triton launches. This is the throughput
+the encoder hides in the e2e table above.
+
+Memory: peak is *lower* for LIK too — ~13% at B64×n4, widening to ~28% at
+B256×n16. The forward never materializes the `[B, n_neg, Lq, Ld]`
+similarity tensor, and the 4-D negative backward `auto`-routes to `lowmem`,
+which owns each output row and accumulates `grad_D` in fp32 *registers*,
+writing bf16 straight out — no full-size fp32 grad buffer, no fp32→bf16
+transient. So on the hard-negative path the fused heads are both a
+throughput *and* a memory win in training, and the gap widens with
+`B × n_neg`. (The win is largest in inference, where there's no `grad_D`
+at all.)
 
 ## Edge models (`d ∈ {48, 64}`)
 

@@ -25,36 +25,17 @@ Requires: ``pip install colpali-engine datasets``.
 
 import argparse
 import gc
-import importlib.util
 import json
 import os
 import random
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import torch
+from _bench_common import Measurement, _log, _timed_step
 
-# Reuse Measurement + _timed_step + _log from the pylate bench.
-_LATEON = Path(__file__).resolve().parent / "bench_pylate_lateon.py"
-_spec = importlib.util.spec_from_file_location("_bench_pylate_lateon", _LATEON)
-_mod = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(_mod)
-Measurement = _mod.Measurement
-_log = _mod._log
-_timed_step = _mod._timed_step
-
-# Reuse loss resolution + patch detection from the synthetic bench.
-_SYNTH = Path(__file__).resolve().parent / "bench_colpali_training.py"
-_spec2 = importlib.util.spec_from_file_location("_bench_colpali_training", _SYNTH)
-_mod2 = importlib.util.module_from_spec(_spec2)
-assert _spec2.loader is not None
-_spec2.loader.exec_module(_mod2)
-_resolve_loss_cls = _mod2._resolve_loss_cls
-_is_patched = _mod2._is_patched
-_apply_lora = _mod2._apply_lora
-
+# Loss resolution + patch detection + LoRA setup live in the synthetic bench.
+from bench_colpali_training import _apply_lora, _is_patched, _resolve_loss_cls
 
 MODEL_DEFAULT = "vidore/colqwen2-v1.0"
 DATASET_DEFAULT = "vidore/docvqa_test_subsampled"

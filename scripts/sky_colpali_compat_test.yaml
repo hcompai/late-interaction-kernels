@@ -1,0 +1,95 @@
+# CUDA parity for the colpali_engine monkey-patch, on 1×H100.
+#
+#   sky launch scripts/sky_colpali_compat_test.yaml -c lik-colpali-compat -y
+#
+# tests/test_colpali_compat.py runs against the *real* colpali_engine. The
+# `colpali` extra is CPU-only (its torchvision/transformers tree conflicts with
+# the cu124 torch wheel CI uses), so the CUDA-marked forward/backward parity
+# cases can't run in gpu-ci.yml — they `importorskip` there and run here
+# instead, with colpali_engine installed out-of-band against cu128 wheels.
+# The install dance mirrors scripts/sky_colpali_benchmark.yaml.
+
+name: lik-colpali-compat-test
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+
+workdir: .
+
+envs:
+  # Required when launching from a git worktree — the `.git` file points at a
+  # host path that doesn't exist on the SkyPilot node, so hatch-vcs can't infer
+  # a version. Placeholder; never escapes the host.
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Bare CUDA image: no Python, no curl. Bootstrap uv; uv manages its own Python.
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  # colpali-engine can't share the cu124 sync (torchvision ABI), so install it
+  # directly, pinning torch+torchvision to cu128 builds whose libcudart.so.12
+  # the CUDA 12.9 container provides (PyPI torchvision needs CUDA 13). See
+  # scripts/sky_colpali_benchmark.yaml for the full rationale.
+  uv pip install "colpali-engine>=0.3.10" \
+      "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
+      --extra-index-url https://download.pytorch.org/whl/cu128
+  # torchvision +cu128's _C.so is compiled against a different torch ABI, so it
+  # fails to load with "undefined symbol". The compat tests never touch
+  # torchvision ops, but `import torchvision` (pulled transitively by
+  # colpali_engine) eagerly imports _meta_registrations, which needs that
+  # extension. Make the import optional so torchvision loads.
+  uv run python - << 'PYEOF'
+  import glob
+  hits = glob.glob(
+      "/root/sky_workdir/.venv/lib/python3.*/site-packages/torchvision/__init__.py"
+  )
+  if not hits:
+      print("WARNING: torchvision/__init__.py not found — skipping patch")
+  else:
+      tv_init = hits[0]
+      with open(tv_init) as f:
+          src = f.read()
+      old = (
+          "from torchvision import _meta_registrations, datasets, io, models, "
+          "ops, transforms, utils  # usort:skip"
+      )
+      new = (
+          "from torchvision import datasets, io, models, ops, transforms, utils  # usort:skip\n"
+          "try:\n"
+          "    from torchvision import _meta_registrations  # noqa: F401\n"
+          "except Exception:\n"
+          "    pass  # _C.so ABI mismatch: NMS meta registration unavailable"
+      )
+      if old in src:
+          with open(tv_init, "w") as f:
+              f.write(src.replace(old, new, 1))
+          print("patched torchvision/__init__.py: _meta_registrations import is optional")
+      else:
+          print("WARNING: expected __init__.py line not found — torchvision version differs")
+  PYEOF
+  # Sanity check: GPU visible + the patcher and real loss heads hydrate.
+  uv run python -c "
+  import torch
+  from colpali_engine.loss.late_interaction_losses import ColbertNegativeCELoss
+  from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
+  print('gpu', torch.cuda.get_device_name(), '| torch', torch.__version__)
+  patch_colpali_engine(); unpatch_colpali_engine()
+  print('patcher ok')
+  "
+
+run: |
+  set -euxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  # Parity tests deliberately feed unnormalized vectors in places; silence the
+  # expected warning, matching gpu-ci.yml.
+  export LIK_SUPPRESS_NORM_WARN=1
+  uv run pytest tests/test_colpali_compat.py -v --durations=20

@@ -6,51 +6,45 @@ vanilla colpali_engine against :func:`patch_colpali_engine` on
 synthetic image + query batches (no dataset download — see
 ``bench_colpali_realdata.py`` for the real-data sibling).
 
-Three loss heads are reachable through ``--loss``:
+Five loss heads are reachable through ``--loss``:
 
 * ``colbert``       — :class:`colpali_engine.loss.late_interaction_losses.ColbertLoss`
 * ``pairwise_ce``   — :class:`ColbertPairwiseCELoss`
 * ``sigmoid``       — :class:`ColbertSigmoidLoss`
+* ``colbert_neg``   — :class:`ColbertNegativeCELoss` (explicit hard negatives)
+* ``pairwise_neg``  — :class:`ColbertPairwiseNegativeCELoss` (explicit hard negatives)
 
-All three materialize the same ``einsum("bnd,csd->bcns") -> amax -> sum``
-in-batch similarity tile, which is exactly what
-``patch_colpali_engine`` replaces with the fused kernel.
+The three in-batch heads materialize the same ``einsum("bnd,csd->bcns") ->
+amax -> sum`` similarity tile. The two ``*_neg`` heads additionally score a
+``[B, n_neg, Ld, d]`` negative slab per query (``--num-neg``); both the
+diagonal positives and the per-query negatives are exactly what
+``patch_colpali_engine`` replaces with the fused kernel (``maxsim_pairs`` +
+4-D ``maxsim``), on top of the in-batch term they mix in.
 
 Usage
 -----
     python benchmarks/bench_colpali_training.py
     python benchmarks/bench_colpali_training.py --batch-size 16 --loss colbert
     python benchmarks/bench_colpali_training.py --loss pairwise_ce --grad-checkpoint
+    python benchmarks/bench_colpali_training.py --loss colbert_neg --num-neg 4
 """
 # ruff: noqa: F821  -- ruff loses ``model`` / ``loss_fn`` / ``optim`` across the
 # trailing ``del`` in ``run_one`` and false-positives on the ``step`` closure.
 
 import argparse
 import gc
-import importlib.util
 import json
 import os
 import random
 import string
 import time
-from pathlib import Path
 
 import torch
-
-# ``benchmarks/`` is not a package; reuse Measurement + _timed_step + _log
-# from bench_pylate_lateon by loading it directly.
-_LATEON = Path(__file__).resolve().parent / "bench_pylate_lateon.py"
-_spec = importlib.util.spec_from_file_location("_bench_pylate_lateon", _LATEON)
-_mod = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(_mod)
-Measurement = _mod.Measurement
-_log = _mod._log
-_timed_step = _mod._timed_step
-
+from _bench_common import Measurement, _log, _timed_step
 
 MODEL_NAME_DEFAULT = "vidore/colqwen2-v1.0"
-LOSS_CHOICES = ("colbert", "pairwise_ce", "sigmoid")
+LOSS_CHOICES = ("colbert", "pairwise_ce", "sigmoid", "colbert_neg", "pairwise_neg")
+NEGATIVE_LOSSES = ("colbert_neg", "pairwise_neg")
 
 
 def _random_query(n_words: int) -> str:
@@ -71,7 +65,9 @@ def _random_image(size: int):
 def _resolve_loss_cls(kind: str):
     from colpali_engine.loss.late_interaction_losses import (
         ColbertLoss,
+        ColbertNegativeCELoss,
         ColbertPairwiseCELoss,
+        ColbertPairwiseNegativeCELoss,
         ColbertSigmoidLoss,
     )
 
@@ -79,6 +75,8 @@ def _resolve_loss_cls(kind: str):
         "colbert": ColbertLoss,
         "pairwise_ce": ColbertPairwiseCELoss,
         "sigmoid": ColbertSigmoidLoss,
+        "colbert_neg": ColbertNegativeCELoss,
+        "pairwise_neg": ColbertPairwiseNegativeCELoss,
     }[kind]
 
 
@@ -91,6 +89,8 @@ def _is_patched(loss_cls) -> bool:
         "ColbertLoss": colpali_compat.patched_colbert_loss_forward,
         "ColbertPairwiseCELoss": colpali_compat.patched_colbert_pairwise_ce_forward,
         "ColbertSigmoidLoss": colpali_compat.patched_colbert_sigmoid_forward,
+        "ColbertNegativeCELoss": colpali_compat.patched_colbert_negative_ce_forward,
+        "ColbertPairwiseNegativeCELoss": colpali_compat.patched_colbert_pairwise_negative_ce_forward,
     }[cls_name]
     return loss_cls.forward is expected
 
@@ -145,6 +145,7 @@ def run_one(
     grad_checkpoint: bool,
     full_finetune: bool,
     device: torch.device,
+    num_neg: int = 0,
     seed: int = 0,
 ) -> Measurement:
     """Run ``iters`` training steps and report ms/step + peak GB."""
@@ -224,12 +225,16 @@ def run_one(
     loss_fn = loss_cls(temperature=0.02, normalize_scores=True)
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
+    is_negative = loss_kind in NEGATIVE_LOSSES
+
     images = [_random_image(image_size) for _ in range(batch_size)]
     queries = [_random_query(query_words) for _ in range(batch_size)]
+    neg_images = [_random_image(image_size) for _ in range(batch_size * num_neg)] if is_negative else []
 
     try:
         batch_images = processor.process_images(images).to(device)
         batch_queries = processor.process_queries(queries).to(device)
+        batch_neg_images = processor.process_images(neg_images).to(device) if is_negative else None
     except Exception as e:  # noqa: BLE001
         return Measurement(step_ms=float("nan"), peak_mb=float("nan"), err=f"process: {e}")
 
@@ -237,10 +242,21 @@ def run_one(
         optim.zero_grad(set_to_none=True)
         query_embeddings = model(**batch_queries)
         doc_embeddings = model(**batch_images)
-        loss_value = loss_fn(
-            query_embeddings=query_embeddings,
-            doc_embeddings=doc_embeddings,
-        )
+        if is_negative:
+            # Encode B*num_neg negative pages, then fold into the per-query
+            # [B, num_neg, Ld, d] slab the negative-loss heads expect.
+            neg_flat = model(**batch_neg_images)
+            neg_doc_embeddings = neg_flat.reshape(batch_size, num_neg, neg_flat.size(-2), neg_flat.size(-1))
+            loss_value = loss_fn(
+                query_embeddings=query_embeddings,
+                doc_embeddings=doc_embeddings,
+                neg_doc_embeddings=neg_doc_embeddings,
+            )
+        else:
+            loss_value = loss_fn(
+                query_embeddings=query_embeddings,
+                doc_embeddings=doc_embeddings,
+            )
         loss_value.backward()
         optim.step()
 
@@ -277,7 +293,13 @@ def main():
         "--loss",
         choices=LOSS_CHOICES,
         default="colbert",
-        help="which in-batch late-interaction loss to drive",
+        help="which late-interaction loss to drive (the *_neg heads add explicit hard negatives)",
+    )
+    ap.add_argument(
+        "--num-neg",
+        type=int,
+        default=2,
+        help="hard negatives per query for the *_neg losses (ignored otherwise)",
     )
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=2)
@@ -304,9 +326,14 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit("CUDA required")
 
+    is_negative = args.loss in NEGATIVE_LOSSES
+    if is_negative and args.num_neg < 1:
+        raise SystemExit(f"--loss {args.loss} needs --num-neg >= 1")
+    num_neg = args.num_neg if is_negative else 0
+
     device = torch.device("cuda:0")
     _log(f"GPU: {torch.cuda.get_device_name()}")
-    _log(f"model={args.model}  loss={args.loss}")
+    _log(f"model={args.model}  loss={args.loss}" + (f"  num_neg={num_neg}" if is_negative else ""))
     train_mode = "full-finetune" if args.full_finetune else "lora"
     _log(
         f"bs={args.batch_size}  image_size={args.image_size}  "
@@ -332,6 +359,7 @@ def main():
             grad_checkpoint=args.grad_checkpoint,
             full_finetune=args.full_finetune,
             device=device,
+            num_neg=num_neg,
             seed=args.seed,
         )
         results[v] = m
@@ -357,9 +385,10 @@ def main():
     gpu = torch.cuda.get_device_name().replace(" ", "_")
     ckpt_tag = "_ckpt" if args.grad_checkpoint else ""
     mode_tag = "_full" if args.full_finetune else "_lora"
+    neg_tag = f"_neg{num_neg}" if is_negative else ""
     fn = os.path.join(
         args.outdir,
-        f"colpali_{args.loss}_{gpu}_bs{args.batch_size}_img{args.image_size}{mode_tag}{ckpt_tag}.json",
+        f"colpali_{args.loss}_{gpu}_bs{args.batch_size}_img{args.image_size}{mode_tag}{neg_tag}{ckpt_tag}.json",
     )
     with open(fn, "w") as f:
         json.dump(
