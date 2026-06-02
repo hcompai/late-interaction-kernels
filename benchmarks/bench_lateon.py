@@ -138,8 +138,8 @@ def main():
     print(
         f"{'shape':<16} {'Nq':>3} {'Nd':>4} {'Lq':>3} {'Ld':>5}   "
         f"{'fwd auto':>8} {'fwd naive':>9}   "
-        f"{'bwd atom':>8} {'bwd csr':>8} {'bwd auto':>8} {'bwd naive':>9}   "
-        f"{'mem flash':>9} {'mem naive':>9}   {'auto':>5}"
+        f"{'bwd uni':>8} {'bwd lowm':>8} {'bwd auto':>8} {'bwd naive':>9}   "
+        f"{'mem flash':>9} {'mem naive':>9}   {'auto':>6}"
     )
 
     for name, Nq, Nd, Lq, Ld in shapes:
@@ -149,10 +149,9 @@ def main():
         D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float16, requires_grad=True)
 
         run_naive = Ld <= args.skip_naive_at
-        big = (Nq * Nd * Lq * d) >= 100_000_000
-        long_seq = Lq >= 1024 and Nq * Nd >= 16
-        huge_corpus = Nd >= 1024
-        pick = "csr" if (big or long_seq or huge_corpus) else "atom"
+        # Mirrors the `auto` heuristic in autograd.py for cross-product shapes.
+        high_contention = Nq >= 256 and Nd >= 256 and Lq <= 64
+        pick = "lowmem" if high_contention else "unified"
 
         if run_naive:
             try:
@@ -192,8 +191,8 @@ def main():
                 D.grad = None
             _naive_score(Q, D).sum().backward()
 
-        t_bwd_atom = _bench(_make_bwd_step("atomic"), iters=args.iters)
-        t_bwd_csr = _bench(_make_bwd_step("csr"), iters=args.iters)
+        t_bwd_uni = _bench(_make_bwd_step("unified"), iters=args.iters)
+        t_bwd_lowm = _bench(_make_bwd_step("lowmem"), iters=args.iters)
         t_bwd_auto = _bench(bwd_step, iters=args.iters)
 
         try:
@@ -214,8 +213,8 @@ def main():
         print(
             f"{name:<16} {Nq:>3} {Nd:>4} {Lq:>3} {Ld:>5}   "
             f"{t_fwd_fast:>8.2f} {t_fwd_naive:>9.2f}   "
-            f"{t_bwd_atom:>8.2f} {t_bwd_csr:>8.2f} {t_bwd_auto:>8.2f} {t_bwd_naive:>9.2f}   "
-            f"{mem_flash:>9.1f} {mem_naive:>9.1f}   {pick:>5}"
+            f"{t_bwd_uni:>8.2f} {t_bwd_lowm:>8.2f} {t_bwd_auto:>8.2f} {t_bwd_naive:>9.2f}   "
+            f"{mem_flash:>9.1f} {mem_naive:>9.1f}   {pick:>6}"
         )
 
         rows.append(
@@ -228,8 +227,8 @@ def main():
                 "d": d,
                 "fwd_auto_ms": t_fwd_fast,
                 "fwd_naive_ms": t_fwd_naive,
-                "bwd_atomic_ms": t_bwd_atom,
-                "bwd_csr_ms": t_bwd_csr,
+                "bwd_unified_ms": t_bwd_uni,
+                "bwd_lowmem_ms": t_bwd_lowm,
                 "bwd_auto_ms": t_bwd_auto,
                 "bwd_naive_ms": t_bwd_naive,
                 "flash_peak_mb": mem_flash,

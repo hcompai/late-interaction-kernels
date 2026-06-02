@@ -101,30 +101,32 @@ for `Nq = Nd = 64, Lq = 256`).
 `j ∈ Nd`, gathers `D[j, argmax[i,j,s]]`, weighted-sum, write.
 
 `grad_D` has output contention: many `(i, s)` pairs map to the same
-`(j, t)`. Three kernels, selected per-call via `maxsim(..., backward=...)`:
+`(j, t)`. Kernels selected per-call via `maxsim(..., backward=...)`:
 
-1. **`unified`** (default for typical training shapes) — single-pass fused
+1. **`unified`** (default for cross-products) — single-pass fused
    `grad_Q + grad_D` in one kernel. Hoists `Q[i, s]` out of the doc-batch
-   loop, halving HBM read traffic versus the two-pass variants. `grad_D`
-   uses fp32 `tl.atomic_add`.
+   loop, halving HBM read traffic. `grad_D` uses fp32 `tl.atomic_add`,
+   accumulated in a full-size fp32 buffer that is cast to the input dtype at
+   the end.
 
-2. **`csr`** (auto-picked at very high contention:
-   `Nq ≥ 256 ∧ Nd ≥ 256 ∧ Lq ≤ 64`) — sort `(i, s)` by argmax into per-`j`
-   CSR buckets; each `(j, t)` program reduces its bucket in registers and
-   writes once. **Bitwise-deterministic across runs.** Build cost: a few
-   hundred µs of cub radix-sort.
+2. **`lowmem`** (auto-picked where gradient buffers dominate: KD /
+   hard-negative layouts, and high contention `Nq ≥ 256 ∧ Nd ≥ 256 ∧
+   Lq ≤ 64`) — each output row is destination-owned. A one-hot matmul over
+   the saved argmax reduces `grad_D` in fp32 registers and stores it directly
+   in the input dtype; `grad_Q` reuses the row-owned kernel into a bf16
+   buffer. No full-size fp32 buffer, no fp32→bf16 transient, no atomics —
+   so it roughly halves backward peak memory and is **deterministic**.
 
-3. **`atomic`** (legacy two-pass, never picked by `auto`) — kept for
-   benchmarking and as a fallback on GPUs with degraded fp32 atomics.
+These are the only two `grad_D` strategies. `auto` (the default) picks
+`lowmem` for the gradient-heavy shapes above and `unified` otherwise.
 
 | method     | bitwise-reproducible | when to pick                          |
 | ---------- | :------------------: | ------------------------------------- |
-| `unified`  | no (atomic, ≤1e-6 r) | default for training                  |
-| `csr`      | yes                  | regression suites, very high contention |
-| `atomic`   | no (atomic, ≤1e-6 r) | fallback only                         |
+| `unified`  | no (atomic, ≤1e-6 r) | default cross-product (fastest)       |
+| `lowmem`   | yes                  | KD / hard-negatives, high contention (½ memory, deterministic) |
 
-`tl.argmax` is stable (lowest-index tie-break) on all three paths — only
-the `grad_D` reduction order differs.
+`tl.argmax` is stable (lowest-index tie-break) on both paths — only the
+`grad_D` reduction order differs.
 
 ### Backward launch-param autotuning
 

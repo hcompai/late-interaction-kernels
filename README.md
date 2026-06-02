@@ -160,6 +160,13 @@ naive path at sane batch sizes run fine here, and at a fixed HBM budget
 you fit roughly 5–10× more in-batch negatives than vanilla PyLate. Full
 table in [`docs/benchmarks.md`](docs/benchmarks.md#memory).
 
+The backward keeps the same discipline. `auto` routes the gradient-heavy
+shapes — knowledge-distillation / hard-negative layouts and large in-batch
+squares — to the `lowmem` path, which writes `grad_Q` / `grad_D` straight in
+the input dtype (fp32 accumulation in registers, no full-size fp32 buffer, no
+atomics). That roughly halves backward peak memory and is deterministic, e.g.
+a `B256 × 16-neg` ColPali step drops from 4.3 GB to 2.2 GB.
+
 ## Choose a kernel
 
 <table>
@@ -201,7 +208,7 @@ Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`,
 
 | Knob                                                              | Effect                                                            |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `maxsim(..., backward="auto" \| "unified" \| "atomic" \| "csr")`  | Per-call `grad_D` strategy. `"auto"` picks per shape.             |
+| `maxsim(..., backward="auto" \| "unified" \| "lowmem")`    | Per-call backward strategy. `"auto"` picks per shape: `"lowmem"` (bf16 grads, ~½ peak memory, deterministic) where gradient buffers dominate, `"unified"` (fastest) elsewhere. |
 | `LIK_DISABLE=1`                                                   | Patched entry points delegate to vanilla PyLate / colpali_engine. |
 | `LIK_SUPPRESS_NORM_WARN=1`                                        | Silence the "looks unnormalized" one-shot warning.                |
 | `LIK_DISABLE_COMPILE=1`                                           | Skip `torch.compile` on the MPS path (eager fallback).            |

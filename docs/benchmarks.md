@@ -130,7 +130,7 @@ ahead on the wide regimes (`rerank-very-long`, `rerank-colpali`,
 score tile), so peak working set is sub-100 KB on every shape and there's
 no memory column to compare. The real differentiators are elsewhere: a
 fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
-backward (`unified` / `csr` / `atomic`), packed/varlen, PLAID residual
+backward (`unified` / `lowmem`), packed/varlen, PLAID residual
 decompression, and a fused D-side projection head — none of which
 `flash-maxsim` ships. `bench_flash_maxsim.py` also covers KD-layout
 (`Q[B, Lq, d] × D[B, K, Ld, d] → [B, K]`, LIK +4 to +17%) and pairwise
@@ -313,44 +313,38 @@ runs inside the encoder forward.
 
 ## Backward paths
 
-0.3.0 ships a new `unified` path that combines CSR's deterministic
-reduction with atomic's parallelism; `auto` picks `unified` on almost
-every shape and falls back to `csr` for very-high-contention training
-batches (e.g. `Nd ≥ 256` with `Ld = 128`).
+There are two paths. `unified` is the fastest single-pass backward: it scatters
+`grad_D` with fp32 atomics, accumulating in a full-size fp32 buffer that is
+cast to the input dtype at the end. `lowmem` is the memory-optimal one: each
+output row is destination-owned, so it accumulates in fp32 *registers* and
+writes `grad_Q` / `grad_D` straight in the input dtype — no full-size fp32
+buffer, no fp32→bf16 transient, no atomics (hence deterministic).
 
+`auto` sends the gradient-heavy shapes — knowledge-distillation / hard-negative
+layouts (where `grad_D` is `n_neg`-inflated) and large high-contention in-batch
+squares — to `lowmem`, and everything else to `unified`. The split is exact:
+`lowmem`'s `grad_D` is a one-hot matmul whose wasted FLOPs scale with `Lq`, so
+it ties or beats `unified` for short queries but loses on long-query×long-doc
+cross-products, which stay on `unified`.
 
-| shape                            | atomic | csr  | unified | auto | auto picks |
-| -------------------------------- | ------ | ---- | ------- | ---- | ---------- |
-| `train-32` (32 × 32, Ld=128)     | 0.61   | 0.82 | 0.56    | 0.49 | unified    |
-| `train-128` (128 × 128, Ld=128)  | 0.56   | 0.75 | 0.47    | 0.48 | unified    |
-| `train-256` (256 × 256, Ld=128)  | 2.11   | 1.18 | 1.76    | 1.18 | **csr**    |
-| `retrieval` (16 × 512, Ld=300)   | 0.68   | 0.83 | 0.84    | 0.84 | unified    |
-| `long-Lq` (Lq=1024, Ld=64)       | 0.62   | 0.77 | 0.52    | 0.54 | unified    |
-| `huge-Nd` (16 × 1024, Ld=128)    | 1.09   | 0.88 | 1.38    | 1.37 | unified    |
+Realistic shapes (H100, bf16, fwd+bwd peak memory / step time):
 
+| shape                          | `unified`        | `lowmem`         |
+| ------------------------------ | ---------------- | ---------------- |
+| pylate-text B256 Lq32 Ld300    | 96 MB / 2.23 ms  | **52 MB / 2.10 ms** |
+| colpali B128 Lq32 Ld1030       | 141 MB / 1.38 ms | **72 MB** / 1.57 ms |
+| colpali-neg B128×n8            | 1086 MB / 0.86 ms| **543 MB / 0.71 ms** |
+| colpali-neg B256×n16           | 4329 MB / 2.36 ms| **2165 MB / 1.37 ms** |
+| longq B64 Lq1030 Ld1030        | **179 MB / 5.6 ms** | 107 MB / 9.0 ms |
 
-CSR is bitwise-reproducible across runs (no atomics); `atomic` /
-`unified` drift within fp32 ULP (~1e-6 relative) because reduction
-order depends on thread scheduling. Note: on a few shapes the
-hand-picked `atomic` path beats `auto`'s `unified` choice
-(`retrieval`, `huge-Nd`); the heuristic favours the more general
-`unified` path because it generalises across batch sizes and document
-lengths without an autotune step.
-
-**Autotuned launch params.** Each backward kernel is one program per
-output row streaming a single `d_pad` vector through a doc/bucket loop —
-no block tiling to sweep, so the only useful knob is `(num_warps,
-num_stages)`. The stock launch (`num_warps=4`) over-subscribes these
-narrow programs; tuning it (the optimum sits at 1–2 warps on H100) lifts
-`auto` by **~1.2–1.45×** across the training shapes above — the biggest
-gain landing on the high-contention `train-256` csr reduction
-(1.71 → 1.18 ms). The autotune key mirrors the forward one (`Lq`,
-`d_pad`, layout flags), so the cache stays at one entry per regime
-rather than one per batch size.
+So on the hard-negative path `lowmem` roughly halves peak memory *and* runs
+~1.7× faster; on long-query cross-products `unified` keeps the speed edge.
+`lowmem` is deterministic across runs; `unified` drifts within fp32 ULP
+(reduction order depends on scheduling).
 
 ```python
-# Per-call (recommended):
-maxsim(Q, D, normalize=True, backward="csr")   # | "atomic" | "unified" | "auto"
+# Per-call override (auto is recommended):
+maxsim(Q, D, normalize=True, backward="lowmem")  # | "unified" | "auto"
 ```
 
 ## End-to-end PyLate `Contrastive` training

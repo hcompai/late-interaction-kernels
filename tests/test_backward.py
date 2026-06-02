@@ -5,14 +5,10 @@ Covers three things:
 1. **Gradient parity vs PyTorch autograd** — the kernel's backward must match the
    autograd of the pure-PyTorch reference within the expected fp16 / tf32 ULP drift,
    with and without masks.
-2. **Path equivalence** — the ``backward=`` kwarg (``"atomic" | "csr" | "unified" | "auto"``)
-   must produce the same gradients up to fp32-reduction-order noise (grad_Q is bitwise
-   identical across paths because the Q-grad kernel is the same).
+2. **Path equivalence** — the ``backward=`` kwarg (``"unified" | "lowmem" | "auto"``)
+   must produce the same gradients up to fp32-reduction-order noise.
 3. **Stress cases for grad_D** — hot buckets (one doc token wins for every query),
    empty buckets (most doc tokens never win), and non-power-of-two ``d``.
-
-Plus a unit test for the CSR builder (``_build_csr``) on a hand-computed 2×2 / Lq=3
-/ Ld=4 example.
 """
 
 import pytest
@@ -143,7 +139,7 @@ def test_masked_doc_token_gets_zero_grad():
 
 
 # --------------------------------------------------------------------------- #
-# 3. Atomic vs CSR path equivalence                                           #
+# 3. unified vs lowmem path equivalence                                       #
 # --------------------------------------------------------------------------- #
 
 
@@ -157,46 +153,48 @@ def test_masked_doc_token_gets_zero_grad():
         (8, 8, 32, 200, 128),
     ],
 )
-def test_atomic_csr_equivalence(Nq, Nd, Lq, Ld, d, rel):
-    """Both backward paths consume the *same* argmax buffer, so they must agree
-    up to fp32 reduction-order noise. grad_Q comes from the same kernel either
-    way and must be bitwise identical."""
+def test_unified_lowmem_equivalence(Nq, Nd, Lq, Ld, d, rel):
+    """Both backward paths consume the *same* argmax buffer. grad_Q matches to
+    fp32 (both accumulate in fp32 registers). grad_D drifts more: lowmem reduces
+    it with a bf16/fp16 one-hot matmul (its compute dtype is never fp32), so vs
+    unified's fp32 atomics it carries bf16-matmul precision even for fp32 inputs."""
     from late_interaction_kernels import maxsim
 
     Q = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
     D = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32)
     grad_out = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
-    Qa = Q.clone().requires_grad_(True)
-    Da = D.clone().requires_grad_(True)
-    maxsim(Qa, Da, backward="atomic").backward(grad_out)
+    Qu = Q.clone().requires_grad_(True)
+    Du = D.clone().requires_grad_(True)
+    maxsim(Qu, Du, backward="unified").backward(grad_out)
 
-    Qc = Q.clone().requires_grad_(True)
-    Dc = D.clone().requires_grad_(True)
-    maxsim(Qc, Dc, backward="csr").backward(grad_out)
+    Ql = Q.clone().requires_grad_(True)
+    Dl = D.clone().requires_grad_(True)
+    maxsim(Ql, Dl, backward="lowmem").backward(grad_out)
 
-    assert torch.equal(Qa.grad, Qc.grad), "grad_Q must be bitwise identical"
-    assert rel(Dc.grad, Da.grad) < 1e-5
+    assert rel(Ql.grad, Qu.grad) < 1e-5, "grad_Q must match (row-owned, same math)"
+    assert rel(Dl.grad, Du.grad) < 2e-3
 
 
-def test_atomic_csr_equivalence_bf16(rel):
-    """bf16 inputs: grad_Q identical, grad_D within bf16 ULP drift."""
+def test_unified_lowmem_equivalence_bf16(rel):
+    """bf16 inputs: lowmem rounds each program's grad_D to bf16, unified rounds
+    once after an fp32 accumulate — they must agree within bf16 ULP drift."""
     from late_interaction_kernels import maxsim
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.bfloat16)
     D0 = torch.randn(8, 128, 128, device="cuda", dtype=torch.bfloat16)
     go = torch.randn(4, 8, device="cuda", dtype=torch.float32)
 
-    Qa = Q0.clone().requires_grad_(True)
-    Da = D0.clone().requires_grad_(True)
-    maxsim(Qa, Da, backward="atomic").backward(go)
+    Qu = Q0.clone().requires_grad_(True)
+    Du = D0.clone().requires_grad_(True)
+    maxsim(Qu, Du, backward="unified").backward(go)
 
-    Qc = Q0.clone().requires_grad_(True)
-    Dc = D0.clone().requires_grad_(True)
-    maxsim(Qc, Dc, backward="csr").backward(go)
+    Ql = Q0.clone().requires_grad_(True)
+    Dl = D0.clone().requires_grad_(True)
+    maxsim(Ql, Dl, backward="lowmem").backward(go)
 
-    assert torch.equal(Qa.grad, Qc.grad)
-    assert rel(Dc.grad.float(), Da.grad.float()) < 5e-3
+    assert rel(Ql.grad.float(), Qu.grad.float()) < 5e-3
+    assert rel(Dl.grad.float(), Du.grad.float()) < 5e-3
 
 
 def test_auto_selects_a_valid_path(rel):
@@ -211,20 +209,14 @@ def test_auto_selects_a_valid_path(rel):
         go = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
 
         grads = {}
-        for m in ("auto", "csr", "atomic", "unified"):
+        for m in ("auto", "unified", "lowmem"):
             Q = Q0.clone().requires_grad_(True)
             D = D0.clone().requires_grad_(True)
             maxsim(Q, D, backward=m).backward(go)
             grads[m] = (Q.grad.clone(), D.grad.clone())
 
-        # grad_Q is row-owned in every path — all four must agree bitwise.
-        for m in ("csr", "atomic", "unified"):
-            assert torch.equal(grads["auto"][0], grads[m][0]), f"grad_Q diverges for {m=}"
-
         # grad_D: auto must match whichever explicit path its heuristic picked.
-        # Reorder drift across atomic variants is ~1e-3 in fp32, so we pick the
-        # closest path as ground truth and check that match.
-        dists = {m: rel(grads["auto"][1], grads[m][1]) for m in ("csr", "atomic", "unified")}
+        dists = {m: rel(grads["auto"][1], grads[m][1]) for m in ("unified", "lowmem")}
         closest = min(dists, key=dists.get)
         assert dists[closest] < 1e-4, (
             f"auto grad_D matches neither path at tight tol ({Nq=}, {Nd=}); dists={dists}"
@@ -236,12 +228,12 @@ def test_auto_selects_a_valid_path(rel):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("method", ["atomic", "csr"])
+@pytest.mark.parametrize("method", ["unified", "lowmem"])
 def test_hot_bucket_single_winner(method):
-    """Worst case for both paths: every ``(i, j, s)`` argmax collapses to t=0.
-    Atomic path: maximum cache-line contention. CSR path: one bucket holds
-    ``Nq * Lq`` entries, all other buckets are empty. Both must produce nonzero
-    grad on token 0 and exactly zero grad everywhere else."""
+    """Worst case for grad_D: every ``(i, j, s)`` argmax collapses to t=0.
+    Unified: maximum atomic cache-line contention. Lowmem: one doc-token row
+    accumulates ``Nq * Lq`` entries. Both must produce nonzero grad on token 0
+    and exactly zero grad everywhere else."""
     from late_interaction_kernels import maxsim
 
     Nq, Nd, Lq, Ld, d = 8, 4, 32, 64, 128
@@ -258,8 +250,9 @@ def test_hot_bucket_single_winner(method):
     assert Dv.grad[:, 0, :].abs().max().item() > 0.0
 
 
-def test_empty_buckets_write_zero():
-    """Most CSR buckets are empty (only t=3 ever wins). The kernel must still
+@pytest.mark.parametrize("method", ["unified", "lowmem"])
+def test_empty_buckets_write_zero(method):
+    """Most doc tokens never win (only t=3 ever does). The backward must still
     write zeros to every non-winning ``(j, t)`` output cell."""
     from late_interaction_kernels import maxsim
 
@@ -271,7 +264,7 @@ def test_empty_buckets_write_zero():
 
     Qv = Q.clone().requires_grad_(True)
     Dv = D.clone().requires_grad_(True)
-    maxsim(Qv, Dv, backward="csr").backward(go)
+    maxsim(Qv, Dv, backward=method).backward(go)
     mask = torch.ones(Ld, dtype=torch.bool, device="cuda")
     mask[3] = False
     assert Dv.grad[:, mask, :].abs().max().item() == 0.0
@@ -283,10 +276,10 @@ def test_empty_buckets_write_zero():
 # --------------------------------------------------------------------------- #
 
 
-def test_csr_is_bitwise_deterministic():
-    """CSR is genuinely bitwise-deterministic: every bucket reduces in a fixed
-    order inside one program, no atomics. Running backward three times on the
-    same input must produce the exact same grad tensors."""
+def test_lowmem_is_bitwise_deterministic():
+    """lowmem is genuinely bitwise-deterministic: each doc-token row reduces in
+    a fixed order inside one program, no atomics. Running backward three times on
+    the same input must produce the exact same grad tensors."""
     from late_interaction_kernels import maxsim
 
     Q0 = torch.randn(4, 32, 128, device="cuda", dtype=torch.float32)
@@ -297,14 +290,14 @@ def test_csr_is_bitwise_deterministic():
     for _ in range(3):
         Q = Q0.clone().requires_grad_(True)
         D = D0.clone().requires_grad_(True)
-        maxsim(Q, D, backward="csr").backward(go)
+        maxsim(Q, D, backward="lowmem").backward(go)
         grads.append((Q.grad.clone(), D.grad.clone()))
     for k in range(1, 3):
         assert torch.equal(grads[0][0], grads[k][0])
         assert torch.equal(grads[0][1], grads[k][1])
 
 
-@pytest.mark.parametrize("backward", ["unified", "atomic", "csr"])
+@pytest.mark.parametrize("backward", ["unified", "lowmem"])
 def test_fully_d_masked_row_does_not_poison_grad_d(backward):
     """Argmax sentinel: a query row whose docs are all masked must not write
     a spurious atomic-add into ``grad_D[d_global, 0, :]``.
@@ -334,9 +327,9 @@ def test_fully_d_masked_row_does_not_poison_grad_d(backward):
     )
 
 
-def test_atomic_is_numerically_stable_across_runs(rel):
+def test_unified_is_numerically_stable_across_runs(rel):
     """fp32 ``atomic_add`` reduction order depends on thread scheduling, so the
-    atomic path is *not* strictly bitwise-reproducible across runs — but the
+    unified path is *not* strictly bitwise-reproducible across runs — but the
     drift is bounded by fp32 ULP (~1e-6 relative). grad_Q (no atomics) still
     matches exactly."""
     from late_interaction_kernels import maxsim
@@ -349,49 +342,8 @@ def test_atomic_is_numerically_stable_across_runs(rel):
     for _ in range(3):
         Q = Q0.clone().requires_grad_(True)
         D = D0.clone().requires_grad_(True)
-        maxsim(Q, D, backward="atomic").backward(go)
+        maxsim(Q, D, backward="unified").backward(go)
         grads.append((Q.grad.clone(), D.grad.clone()))
     for k in range(1, 3):
         assert torch.equal(grads[0][0], grads[k][0])  # grad_Q is scatter-free
         assert rel(grads[0][1], grads[k][1]) < 1e-5
-
-
-# --------------------------------------------------------------------------- #
-# 6. CSR builder unit test                                                    #
-# --------------------------------------------------------------------------- #
-
-
-def test_build_csr_hand_computed():
-    """Hand-checkable CSR for a ``Nq=Nd=2, Lq=3, Ld=4`` argmax.
-
-    With the argmax below, bucket ``(j=0, t=0)`` gets 3 entries, ``(j=0, t=2)``
-    gets 2, ``(j=0, t=3)`` gets 1, ``(j=0, t=1)`` is empty, etc. We verify both
-    ``row_ptr`` and that every entry in ``perm`` lands in the correct bucket.
-    """
-    from late_interaction_kernels.backward.csr import _build_csr
-
-    Nq, Nd, Lq, Ld = 2, 2, 3, 4
-    #   (i=0, j=0): s -> [0, 2, 2]
-    #   (i=0, j=1): s -> [1, 1, 3]
-    #   (i=1, j=0): s -> [0, 0, 3]
-    #   (i=1, j=1): s -> [2, 2, 2]
-    argmax = torch.tensor(
-        [[0, 2, 2], [1, 1, 3], [0, 0, 3], [2, 2, 2]],
-        device="cuda",
-        dtype=torch.int32,
-    )
-    row_ptr, perm = _build_csr(argmax, Nq, Nd, Lq, Ld)
-    assert row_ptr.shape == (Nd, Ld + 1)
-    assert perm.shape == (Nd, Nq * Lq)
-
-    # j=0: t-counts = [3, 0, 2, 1]  → row_ptr = cumsum([0, 3, 0, 2, 1]) = [0, 3, 3, 5, 6]
-    # j=1: t-counts = [0, 2, 3, 1]  → row_ptr = [0, 0, 2, 5, 6]
-    assert row_ptr[0].tolist() == [0, 3, 3, 5, 6]
-    assert row_ptr[1].tolist() == [0, 0, 2, 5, 6]
-
-    for j in range(Nd):
-        for t in range(Ld):
-            for off in range(row_ptr[j, t].item(), row_ptr[j, t + 1].item()):
-                flat = perm[j, off].item()
-                i, s = flat // Lq, flat % Lq
-                assert argmax[i * Nd + j, s].item() == t

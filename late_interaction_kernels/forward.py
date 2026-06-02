@@ -179,8 +179,7 @@ def _maxsim_fwd_kernel(
 # Small-input bypass: for tiny shapes (inference / REPL / tests) the autotune
 # sweep (~5 s) dominates the actual work (sub-ms), and the optimum-vs-fixed
 # gap is single-digit percent. The fixed config below fits ≤ 96 KiB SMEM so
-# it lands on every supported GPU family. Mirrors flash-maxsim's
-# ``_maxsim_fwd_kernel_small`` (their ``flash_maxsim.py`` L337-348).
+# it lands on every supported GPU family.
 _SMALL_BYPASS_NQND = 500  # max Nq * Nd  (grid size)
 _SMALL_BYPASS_LQLD = 200_000  # max Lq * Ld (per-program work)
 _SMALL_BYPASS_D = 256  # max embedding dim (SMEM ceiling)

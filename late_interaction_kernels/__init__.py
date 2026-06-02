@@ -18,7 +18,7 @@ in submodules and must be imported explicitly:
 - FP8 inference → ``late_interaction_kernels.fp8``
 
 Picking a backward strategy is per-call: ``maxsim(..., backward="auto" | "unified"
-| "csr" | "atomic")`` (or the same kwarg on :class:`MaxSimScorer`).
+| "lowmem")`` (or the same kwarg on :class:`MaxSimScorer`).
 
 See the README for the full API and benchmarks.
 """

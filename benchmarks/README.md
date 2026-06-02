@@ -33,8 +33,8 @@ script for its full option list and the values `--only` accepts.
 | `bench_chunking.py` | Long-query (`Lq > 512`) chunking: forward + training vs the un-chunked core, with flash as an external reference. |
 | `bench_inference_edge.py` | Small-d (`d ∈ {48, 64}`) edge ColBERT regimes, `inference_mode`. |
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
-| `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `csr` vs `atomic` vs naive. |
-| `bench_backward_unified.py` | Backward-only timing of the unified kernel vs two-pass paths. |
+| `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `lowmem` vs naive. |
+| `bench_backward_lowmem.py` | Backward time + peak memory: `lowmem` vs `unified` on PyLate/ColPali shapes, with flash-maxsim and a PyLate-naive einsum baseline. |
 | `bench_training.py` | Full training step (forward + backward) speed and peak memory, with flash as an external reference. |
 | `bench_backward_0_5.py` | Fused `maxsim_residual` / `maxsim_varlen` backward vs "unpack + autograd". |
 | `bench_lateon.py` | LateOn / LateOn-Code shapes (Ld up to 16 384, d=128). |
