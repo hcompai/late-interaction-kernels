@@ -221,7 +221,10 @@ def maxsim_backward_lowmem(
         Q: ``[Nq, Lq, d]``.
         D: ``[Nd, Ld, d]`` cross-product, or ``[Nq*K, Ld, d]`` KD/pairs.
         argmax: ``[Nq*Nd_eff, Lq]`` int32 saved by the forward.
-        q_mask: optional ``[Nq, Lq]`` int8/bool.
+        q_mask: optional ``[Nq, Lq]`` mask. Pass ``int8`` to share the autotune
+            entry with the mask-absent path (the autotuner keys on the arg
+            dtype, so a ``bool`` mask gets its own sweep). Internal callers
+            convert to ``int8`` before ``save_for_backward``.
         kd_layout: per-query slab indexing.
 
     Returns ``(grad_Q, grad_D)`` already in ``Q`` / ``D`` dtypes.

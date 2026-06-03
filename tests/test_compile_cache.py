@@ -217,6 +217,30 @@ def test_forward_mask_shares_autotune_entry():
     )
 
 
+def test_forward_argmax_presence_shares_autotune_entry():
+    """Inference (``save_argmax=False``) and training (``True``) share one entry.
+
+    The argmax placeholder is int32 (matching the real argmax buffer), so a
+    forward-only call and a backward-enabled call at the same shape don't split
+    the autotune cache. Uses ``Nq*Nd = 32*32 = 1024 > 500`` so the inference
+    call clears ``_should_bypass_autotune`` and actually populates the cache.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    Q = torch.randn(32, 32, 128, device="cuda", dtype=torch.float16)
+    D = torch.randn(32, 256, 128, device="cuda", dtype=torch.float16)
+    maxsim(Q, D)  # inference → save_argmax=False (int32 placeholder)
+    maxsim(Q.requires_grad_(), D.requires_grad_())  # training → save_argmax=True
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 1, (
+        f"save_argmax True/False must share one autotune entry; got {len(cache)}. "
+        "The argmax placeholder must match the real argmax dtype (int32)."
+    )
+
+
 def test_forward_small_input_bypasses_autotune():
     """Small inference shapes route through the no-autotune fast path.
 

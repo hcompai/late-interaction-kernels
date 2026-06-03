@@ -223,7 +223,10 @@ def maxsim_backward_unified(
         Q: ``[Nq, Lq, d]``.
         D: ``[Nd, Ld, d]`` cross-product, or ``[Nq*K, Ld, d]`` KD/pairs.
         argmax: ``[Nq*Nd, Lq]`` int32 — the winner buffer from the forward.
-        q_mask: optional ``[Nq, Lq]`` bool mask.
+        q_mask: optional ``[Nq, Lq]`` mask. Pass it as ``int8`` to share the
+            autotune entry with the mask-absent path (the autotuner keys on the
+            arg dtype, so a ``bool`` mask gets its own entry/sweep). Internal
+            callers already convert to ``int8`` before ``save_for_backward``.
 
     Returns:
         ``(grad_Q, grad_D)`` cast back to the dtypes of ``Q`` and ``D``.

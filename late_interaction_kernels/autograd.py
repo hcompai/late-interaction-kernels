@@ -87,11 +87,10 @@ def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tens
 # ``ceil(Lq / chunk)`` more programs — which keeps the H100 busy when a long
 # query (ColPali ~1k visual patches) would otherwise serialise a long
 # ``static_range`` loop inside one program. Picking a power-of-two chunk also
-# pins the kernel's ``Lq`` constexpr, so large-Lq workloads collapse onto a
-# small constant number of autotune entries instead of one per Lq bucket: one
-# when Lq is an exact multiple of the chunk (no tail, has_q_mask=False) and one
-# for the tail-padded case (has_q_mask=True), times two again if a user d_mask
-# is in play. Bounded by a tiny constant, vs the per-Lq sweep it replaces.
+# pins the kernel's ``Lq`` constexpr, so every large-Lq workload collapses onto
+# the single ``Lq = chunk`` autotune entry — the mask flags are out of the key
+# and absent masks use a dtype-matched placeholder, so exact-multiple and
+# tail-padded queries share it. One entry total, vs the per-Lq sweep it replaces.
 # The 128 value is measured on H100 (interacts with the smallest autotune
 # BLOCK_Q); the optimum may shift on A100/T4.
 _LQ_CHUNK = 128
