@@ -4,7 +4,7 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-03
 
 ### Added
 
@@ -18,20 +18,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `unified` still handles the common and long-query cross-products, where it
   is fastest. Measured on H100 (bf16, fwd+bwd): a `B256 × 16-neg` ColPali
   step drops from 4.3 GB / 2.36 ms to **2.2 GB / 1.37 ms** (≈½ memory,
-  ~1.7× faster); `pylate-text B256` from 96 MB to 52 MB. Gradients match the
-  other backends to bf16 rounding. Select per-call with `backward="lowmem"`.
-
-### Removed
-
-- **Backward methods `atomic` and `csr`.** The dense `grad_D` strategies
-  collapse to two: `unified` (fastest, fp32 atomics) and `lowmem`
-  (memory-optimal, deterministic). The legacy two-pass `atomic` path was
-  strictly dominated by `unified`, and `csr`'s determinism niche is now
-  covered by `lowmem`, so both were deleted along with the CSR build/sort
-  machinery. `backward=` now accepts `"auto" | "unified" | "lowmem"`;
-  `"auto"` is unchanged in behaviour. No effect on the `auto` default.
-
-## [0.4.0] - 2026-05-31
+  ~1.7× faster); `pylate-text B256` from 96 MB to 52 MB. Gradients match
+  `unified` to bf16 rounding. Select per-call with `backward="lowmem"`.
+- **colpali_engine explicit-negative loss heads now fused.**
+  `patch_colpali_engine()` previously accelerated only the in-batch CE term
+  of `ColbertNegativeCELoss` / `ColbertPairwiseNegativeCELoss`; their
+  explicit positive and per-query negative scoring stayed on the unfused
+  einsum. The positive term now routes through `maxsim_pairs` (diagonal
+  `q[i]·d[i]`) and the `[B, n_neg, Ld, d]` negative slab through 4-D
+  `maxsim` (KD layout), so neither materialises the similarity tensor; the
+  in-batch term keeps reusing the already-patched inner head (no double
+  work). Pos/neg fusion is CUDA-only — MPS / CPU fall back to the original
+  einsum for those terms while the in-batch term still accelerates. The 4-D
+  negative backward `auto`-routes to `lowmem`, making the fused heads a
+  training memory win too (peak ~13–28% below vanilla, widening with
+  `B × n_neg`) on top of the speedup (up to **4.31×** at `B256 × 16-neg`
+  in the MaxSim-isolation bench).
+- **`colpali` install extra** — `pip install
+  "late-interaction-kernels[colpali]"` pulls `colpali-engine>=0.3.10,<1`
+  for `patch_colpali_engine()`. CPU-only in CI (colpali_engine's
+  torchvision tree conflicts with the CUDA torch wheel, so it is never
+  co-activated with `torch-cuda`; the GPU parity tests install it
+  out-of-band), mirroring the `pylate` extra.
 
 ### Changed
 
@@ -53,21 +61,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the existing core unchanged — no regression. Chunking is
   cross-product-only; the KD / pairs path (4-D `D`) is unaffected and
   long-`Lq` KD should use `maxsim_varlen`.
-- **Autotuned backward launch params — faster training step.** All four
-  backward kernels (unified fused grad, two-pass `grad_Q`, atomic
-  `grad_D`, CSR `grad_D`) previously launched with Triton's stock
+- **Autotuned backward launch params — faster training step.** The
+  backward kernels previously launched with Triton's stock
   `num_warps=4`. Each is one program per output row streaming a single
-  `d_pad` vector through a doc/bucket loop, so 4 warps over-subscribe
-  the narrow program — the H100 optimum is 1–2 warps. All four are now
-  `@triton.autotune`d over a small `(num_warps, num_stages)` grid via a
-  shared `backward/_autotune.py` config module. The key mirrors the
-  forward autotuner (`Lq`, `d_pad`, layout flags; `Nd` / `Ld` stay out),
-  so the cache holds one entry per regime rather than one per batch
-  size, and atomic-accumulating kernels use `reset_to_zero` so autotune
-  trials don't pile onto each other. Measured on H100 (bf16), tuning
-  lifts `auto` by **~1.2–1.45× across the training shapes** (see the
-  backward table in `benchmarks.md`), the largest gain on the
-  high-contention `train-256` csr reduction, all at lower peak memory.
+  `d_pad` vector through a doc loop, so 4 warps over-subscribe the
+  narrow program — the H100 optimum is 1–2 warps. Every backward kernel
+  is now `@triton.autotune`d over a small `(num_warps, num_stages)`
+  grid via a shared `backward/_autotune.py` config module. The key
+  mirrors the forward autotuner (`Lq`, `d_pad`, layout flags; `Nd` /
+  `Ld` stay out), so the cache holds one entry per regime rather than
+  one per batch size, and atomic-accumulating kernels use
+  `reset_to_zero` so autotune trials don't pile onto each other.
+  Measured on H100 (bf16), tuning lifts `auto` by **~1.2–1.45× across
+  the training shapes** (see the backward table in `benchmarks.md`),
+  the largest gain on the high-contention `train-256` reduction, all at
+  lower peak memory.
+
+### Removed
+
+- [breaking] **Backward methods `atomic` and `csr`.** The dense `grad_D`
+  strategies collapse to two: `unified` (fastest, fp32 atomics) and
+  `lowmem` (memory-optimal, deterministic). The legacy two-pass `atomic`
+  path was strictly dominated by `unified`, and `csr`'s determinism niche
+  is now covered by `lowmem`, so both were deleted along with the CSR
+  build/sort machinery. `backward=` now accepts
+  `"auto" | "unified" | "lowmem"`; passing `"atomic"` or `"csr"` now
+  raises `ValueError`. The `auto` default is unaffected.
 
 ### Fixed
 
