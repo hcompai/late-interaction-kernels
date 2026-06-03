@@ -211,7 +211,10 @@ def maxsim_backward_lowmem(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Backward producing bf16/fp16 grads directly (no fp32 buffers, no atomics).
 
-    Same gradients as the other backends to bf16 rounding; deterministic.
+    Same gradients as the unified backend to bf16 rounding; deterministic.
+    The ``grad_D`` one-hot reduction runs at ``pick_compute_dtype`` matmul
+    precision, so fp32 inputs get fp16-precision ``grad_D`` (``grad_Q`` is a
+    gather and stays fp32-accurate); use ``unified`` for fp32 accumulation.
 
     Args:
         grad_scores: ``[Nq, Nd_eff]`` upstream gradient.

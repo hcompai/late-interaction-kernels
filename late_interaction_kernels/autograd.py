@@ -370,6 +370,10 @@ def maxsim(
             gradient-heavy shapes (KD / hard-negatives, high-contention
             squares) to ``"lowmem"`` (bf16 grads, ~½ peak memory,
             deterministic) and the rest to ``"unified"`` (fastest).
+            ``"lowmem"`` writes grads in the input dtype and reduces
+            ``grad_D`` with half-precision matmuls, so fp32 inputs get
+            fp16-precision ``grad_D``; pass ``backward="unified"`` if you
+            need full fp32 accumulation.
 
     Returns:
         scores: fp32, shape as above.
