@@ -27,7 +27,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import autotune_placeholder, next_pow2, pick_compute_dtype
 
 if _HAS_TRITON:
     # grad_Q: one program per (q_batch, q_token), gathers the winning D row per
@@ -232,7 +232,9 @@ def maxsim_backward_lowmem(
     d_pad = next_pow2(d)
 
     has_q_mask = q_mask is not None
-    qm_ptr = q_mask if has_q_mask else Q
+    # int8 placeholder (not Q) so present-vs-absent q_mask doesn't split the
+    # autotune cache via Triton's dtype-keying. See _utils.autotune_placeholder.
+    qm_ptr = q_mask if has_q_mask else autotune_placeholder(Q, torch.int8)
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
 
     # --- grad_Q: row-owned kernel, bf16 output (fp32 accumulate in-kernel) ---

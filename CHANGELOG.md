@@ -9,17 +9,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Variable-length training no longer pays repeated autotune sweeps.**
-  Dropped `has_q_mask` / `has_d_mask` from the forward and backward autotune
-  keys. They are `constexpr` toggles (a masked load + `-inf` fill) that change
-  generated code but not the winning `(BLOCK_Q, BLOCK_D, num_warps,
-  num_stages)` tile, so keying on them forced a fresh 5–10 s autotune sweep
-  every time a new `(Lq, mask)` combination first appeared mid-run. On
-  ColQwen2 / ColPali training with variable query lengths this fired sweeps as
-  late as step 14 and cost up to **1.6× end-to-end** on
-  `vidore/docvqa_test_subsampled`. Autotune now reuses the cached config across
-  mask combinations (Triton still JIT-compiles a correct, separately
-  specialized kernel per `constexpr` value); steady-state numerics and the
-  selected configs are unchanged.
+  On ColQwen2 / ColPali training with variable query lengths, a fresh 5–10 s
+  Triton autotune sweep fired every time a query batch first toggled its mask
+  presence — as late as step 14, costing up to **1.6× end-to-end** on
+  `vidore/docvqa_test_subsampled`. Two causes, both fixed: (1) `has_q_mask` /
+  `has_d_mask` were in the forward and backward autotune keys (they are
+  `constexpr` toggles that change codegen but not the winning `(BLOCK_Q,
+  BLOCK_D, num_warps, num_stages)` tile); and (2) Triton's autotuner also keys
+  on the dtype of every tensor argument, and the absent-mask placeholder was
+  `Q` (bf16) rather than the real mask dtype (int8) — so present-vs-absent
+  re-split the cache regardless of the named key. Absent optional args now use
+  a dtype-matched placeholder (`autotune_placeholder`), and the mask flags are
+  out of the keys. Autotune reuses the cached config across mask combinations
+  (Triton still JIT-compiles a correct, separately specialized kernel per
+  `constexpr` value); steady-state numerics and the selected configs are
+  unchanged.
 
 ## [0.4.0] - 2026-06-03
 

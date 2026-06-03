@@ -184,12 +184,13 @@ def test_forward_normalize_shares_autotune_entry():
 def test_forward_mask_shares_autotune_entry():
     """Toggling ``q_mask`` / ``d_mask`` must NOT spawn a new autotune entry.
 
-    ``has_q_mask`` / ``has_d_mask`` are tl.constexpr toggles (a masked load +
-    ``-inf`` fill before the row-max) that change codegen but not the winning
-    ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` tile. They were in the key,
-    which made variable-length training pay a fresh autotune sweep every time a
-    new ``(Lq, has_q_mask)`` combo appeared mid-run (the docvqa spike). This is
-    the canary if anyone re-adds them.
+    Two things had to be true for this: (1) ``has_q_mask`` / ``has_d_mask`` out
+    of the named autotune key (they're constexpr toggles that don't shift the
+    winning tile), and (2) the absent-mask placeholder matching the real mask's
+    dtype — Triton's autotuner appends ``str(arg.dtype)`` of every tensor arg to
+    its cache key, so a ``None``→int8 flip (or a bf16 ``Q`` stand-in) re-split
+    the cache and re-triggered the sweep on each variable-length batch (the
+    docvqa spike). Canary for both regressions.
     """
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.forward import _maxsim_fwd_kernel

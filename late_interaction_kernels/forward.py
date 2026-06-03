@@ -11,7 +11,12 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import (
+    autotune_placeholder,
+    ensure_contiguous_last,
+    next_pow2,
+    pick_compute_dtype,
+)
 
 
 @triton.autotune(
@@ -270,10 +275,13 @@ def _run_forward(
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
-    # Triton rejects None pointers; pass a live tensor the kernel won't read.
-    q_mask_ptr = q_mask if has_q_mask else Q
-    d_mask_ptr = d_mask if has_d_mask else D
-    argmax_ptr = argmax if save_argmax else scores
+    # Triton rejects None pointers AND its autotuner keys on every tensor arg's
+    # dtype, so the placeholder must match the real arg's dtype (int8 mask,
+    # int32 argmax) — else present-vs-absent would split the autotune cache and
+    # re-sweep on each variable-length batch. The kernel never reads it.
+    q_mask_ptr = q_mask if has_q_mask else autotune_placeholder(Q, torch.int8)
+    d_mask_ptr = d_mask if has_d_mask else autotune_placeholder(D, torch.int8)
+    argmax_ptr = argmax if save_argmax else autotune_placeholder(scores, torch.int32)
 
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)

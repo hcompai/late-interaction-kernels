@@ -36,6 +36,25 @@ def ensure_contiguous_last(x: torch.Tensor) -> torch.Tensor:
     return x.contiguous()
 
 
+@functools.cache
+def _cached_placeholder(device: str, dtype: torch.dtype) -> torch.Tensor:
+    return torch.empty(1, device=device, dtype=dtype)
+
+
+def autotune_placeholder(ref: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """A cached 1-element ``dtype`` tensor on ``ref``'s device, to stand in for
+    an absent optional kernel arg.
+
+    Triton's autotuner appends ``str(arg.dtype)`` of every tensor argument to
+    its cache key, so an optional arg that flips between ``None`` and a real
+    tensor must be backed by a placeholder of the *real* arg's dtype — otherwise
+    present-vs-absent changes the key and re-triggers the (5–10 s) sweep on
+    every variable-length batch. The kernel never reads it: its ``has_*``
+    constexpr is ``False`` and the matching strides are zero.
+    """
+    return _cached_placeholder(str(ref.device), dtype)
+
+
 def pick_compute_dtype(Q: torch.Tensor, D: torch.Tensor) -> torch.dtype:
     """Pick the compute dtype for `tl.dot`.
 

@@ -20,7 +20,7 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_TRITON = False
 
-from late_interaction_kernels._utils import next_pow2
+from late_interaction_kernels._utils import autotune_placeholder, next_pow2
 from late_interaction_kernels.backward._autotune import BWD_CONFIGS, BWD_KEY
 
 
@@ -242,7 +242,9 @@ def maxsim_backward_unified(
     grad_D = torch.zeros(Nd_total, Ld, d, device=D.device, dtype=torch.float32)
 
     has_q_mask = q_mask is not None
-    qm_ptr = q_mask if has_q_mask else Q
+    # int8 placeholder (not Q) so present-vs-absent q_mask doesn't split the
+    # autotune cache via Triton's dtype-keying. See _utils.autotune_placeholder.
+    qm_ptr = q_mask if has_q_mask else autotune_placeholder(Q, torch.int8)
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
 
     _bwd_unified_kernel[(Nq * Lq,)](
