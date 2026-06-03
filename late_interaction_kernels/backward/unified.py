@@ -1,9 +1,10 @@
 """Single-pass fused ``grad_Q`` + ``grad_D`` kernel (FA-2 style).
 
 Hoists ``Q[i, s, :]`` out of the doc-batch loop, roughly halving HBM
-read traffic versus the two-pass backward. Row-owned ``grad_Q``
-accumulation (no atomic) + ``tl.atomic_add`` for ``grad_D``. Default
-``"auto"`` / ``"unified"`` backward.
+read traffic versus a two-pass backward (separate ``grad_Q`` /
+``grad_D`` kernels). Row-owned ``grad_Q`` accumulation (no atomic) +
+``tl.atomic_add`` for ``grad_D``. Default ``"auto"`` / ``"unified"``
+backward.
 
 See :doc:`../docs/design.md` for the full HBM-traffic derivation and
 numerical contract.
@@ -41,9 +42,9 @@ def maxsim_backward_unified_reference(
 
     Returns (grad_Q, grad_D) in the dtypes of Q and D.
 
-    This is the same math as the two-pass Triton backward, expressed
-    without any kernel fusion. It exists to let us validate the
-    upcoming unified Triton kernel to fp32 tolerance before shipping it.
+    This is the same math as the unified Triton kernel, expressed
+    without any kernel fusion. It exists to validate the Triton kernel
+    to fp32 tolerance.
     """
     Nq, Lq, d = Q.shape
     Nd, Ld, _ = D.shape
@@ -90,8 +91,9 @@ if _HAS_TRITON:
     #   1) accumulates grad_Q  += grad_scores[i, j] * D[j, argmax[i, j, s]]
     #   2) atomic_add  grad_D[j, argmax[i, j, s]] += grad_scores[i, j] * Q[i, s]
     #
-    # The key optimisation vs the two-pass backward: Q[i, s, :] is hoisted
-    # out of the j loop. The two-pass dD reloads it Nd times.
+    # The key optimisation vs a two-pass backward (separate grad_Q / grad_D
+    # kernels): Q[i, s, :] is hoisted out of the j loop; a standalone dD
+    # kernel would reload it Nd times.
 
     # grad_D accumulates with atomic_add, so it must be re-zeroed before each
     # autotune trial — otherwise trials pile onto each other's results.
@@ -156,7 +158,7 @@ if _HAS_TRITON:
 
         # Hoist Q[i, s, :] out of the j loop — amortizes across all j's
         # atomic_add into grad_D. This is the single biggest HBM win
-        # vs the two-pass backward.
+        # vs a two-pass backward.
         qv = tl.load(
             Q_ptr + q_idx * stride_q_n + s * stride_q_l + emb_off * stride_q_k,
             mask=emb_mask,
@@ -227,10 +229,7 @@ def maxsim_backward_unified(
         ``(grad_Q, grad_D)`` cast back to the dtypes of ``Q`` and ``D``.
     """
     if not _HAS_TRITON:  # pragma: no cover
-        raise RuntimeError(
-            "maxsim_backward_unified requires Triton; install a CUDA-enabled "
-            "Triton or use the two-pass backward."
-        )
+        raise RuntimeError("maxsim_backward_unified requires Triton; install a CUDA-enabled Triton build.")
     if not (Q.is_cuda and D.is_cuda):
         raise RuntimeError("maxsim_backward_unified requires CUDA tensors.")
 
