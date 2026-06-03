@@ -200,10 +200,11 @@ def test_unified_lowmem_equivalence_bf16(rel):
 def test_auto_selects_a_valid_path(rel):
     """``auto`` must produce results matching *one of* the two explicit paths
     (whichever its heuristic selected). Run across shapes that exercise both
-    branches of the heuristic."""
+    branches of the heuristic: the first two stay on ``unified``, the
+    (256, 256, 32) square crosses the high-contention boundary to ``lowmem``."""
     from late_interaction_kernels import maxsim
 
-    for Nq, Nd, Lq, Ld, d in [(2, 4, 16, 32, 128), (64, 64, 32, 128, 128)]:
+    for Nq, Nd, Lq, Ld, d in [(2, 4, 16, 32, 128), (64, 64, 32, 128, 128), (256, 256, 32, 64, 64)]:
         Q0 = torch.randn(Nq, Lq, d, device="cuda", dtype=torch.float32)
         D0 = torch.randn(Nd, Ld, d, device="cuda", dtype=torch.float32)
         go = torch.randn(Nq, Nd, device="cuda", dtype=torch.float32)
