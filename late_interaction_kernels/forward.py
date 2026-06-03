@@ -11,7 +11,12 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import (
+    autotune_placeholder,
+    ensure_contiguous_last,
+    next_pow2,
+    pick_compute_dtype,
+)
 
 
 @triton.autotune(
@@ -24,10 +29,15 @@ from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, p
     # winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` config. Keeping
     # it would double the cache cardinality for zero perf win (verified on
     # H100, A100 sweeps).
+    # ``has_q_mask`` / ``has_d_mask`` are out too: like ``normalize`` they are
+    # constexpr toggles (a masked load + ``-inf`` fill) that change codegen,
+    # not the winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` tile, so
+    # keeping them only multiplied the sweep count — every new ``Lq``×mask
+    # combo paid a full autotune sweep mid-training on variable-length queries.
     # ``kd_layout`` *is* in the key because the two modes hit very different
     # D-side cache patterns (in-batch reuses D across queries; KD/pairs
     # don't), and the best (BLOCK_Q, BLOCK_D, num_warps) trade-off shifts.
-    key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "kd_layout"],
+    key=["Lq", "d_pad", "kd_layout"],
     prune_configs_by={"early_config_prune": prune_forward},
     **autotune_kwargs(),
 )
@@ -265,10 +275,13 @@ def _run_forward(
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
-    # Triton rejects None pointers; pass a live tensor the kernel won't read.
-    q_mask_ptr = q_mask if has_q_mask else Q
-    d_mask_ptr = d_mask if has_d_mask else D
-    argmax_ptr = argmax if save_argmax else scores
+    # Triton rejects None pointers AND its autotuner keys on every tensor arg's
+    # dtype, so the placeholder must match the real arg's dtype (int8 mask,
+    # int32 argmax) — else present-vs-absent would split the autotune cache and
+    # re-sweep on each variable-length batch. The kernel never reads it.
+    q_mask_ptr = q_mask if has_q_mask else autotune_placeholder(Q, torch.int8)
+    d_mask_ptr = d_mask if has_d_mask else autotune_placeholder(D, torch.int8)
+    argmax_ptr = argmax if save_argmax else autotune_placeholder(scores, torch.int32)
 
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
     dm_strides = (d_mask.stride(0), d_mask.stride(1)) if has_d_mask else (0, 0)
