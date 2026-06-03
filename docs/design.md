@@ -197,7 +197,10 @@ and as `d_model` shrinks below ~128.
 ### Forward
 
 Tuned over `BLOCK_Q × BLOCK_D × num_warps × num_stages` keyed on
-`(Lq, Ld, d_pad, mask flags, normalize)`. Configs are pruned by:
+`(Lq, d_pad, kd_layout)`. `Ld`, the mask flags, and `normalize` stay out of
+the key — they're constexpr/runtime toggles that change codegen but not the
+winning tile, so keeping them only multiplied the sweep count. Configs are
+pruned by:
 
 * shared-memory budget (≤ 224 KiB on H100, ≤ 164 KiB on A100),
 * `BLOCK_Q > 2 · Lq` (block bigger than the problem).
@@ -212,8 +215,8 @@ autotune cache onto a small constant regardless of the original query length.
 ### Backward
 
 Tuned over `num_warps × num_stages` (no block-tiling dimension) keyed on
-`(Lq, d_pad, mask flags, kd_layout)`, so one entry covers all batch sizes in a
-training regime.
+`(Lq, d_pad, kd_layout)`, so one entry covers all batch sizes and mask
+combinations in a training regime.
 
 Autotune runs once per key per process and caches the winner.
 

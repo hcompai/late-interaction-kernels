@@ -97,7 +97,7 @@ if _HAS_TRITON:
 
     @triton.autotune(
         configs=forward_configs(),
-        key=["Lq", "d_pad", "has_q_mask", "cross"],
+        key=["Lq", "d_pad", "cross"],
         prune_configs_by={"early_config_prune": prune_forward},
         **autotune_kwargs(),
     )

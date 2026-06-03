@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-03
+
+### Fixed
+
+- **Variable-length training no longer pays repeated autotune sweeps.**
+  Dropped `has_q_mask` / `has_d_mask` from the forward and backward autotune
+  keys. They are `constexpr` toggles (a masked load + `-inf` fill) that change
+  generated code but not the winning `(BLOCK_Q, BLOCK_D, num_warps,
+  num_stages)` tile, so keying on them forced a fresh 5–10 s autotune sweep
+  every time a new `(Lq, mask)` combination first appeared mid-run. On
+  ColQwen2 / ColPali training with variable query lengths this fired sweeps as
+  late as step 14 and cost up to **1.6× end-to-end** on
+  `vidore/docvqa_test_subsampled`. Autotune now reuses the cached config across
+  mask combinations (Triton still JIT-compiles a correct, separately
+  specialized kernel per `constexpr` value); steady-state numerics and the
+  selected configs are unchanged.
+
 ## [0.4.0] - 2026-06-03
 
 ### Added

@@ -9,12 +9,15 @@ unified path.
 
 The key mirrors the forward autotuner: ``Lq`` (already power-of-two bucketed
 upstream, and the dimension that separates the ColBERT ``Lq=32`` regime from
-ColPali ``Lq=1024``), ``d_pad``, and the layout flags. ``Nd`` / ``Ld`` stay
+ColPali ``Lq=1024``), ``d_pad``, and the layout flag. ``Nd`` / ``Ld`` stay
 out of the key so the cache holds one entry per regime instead of one per
 batch size — the chosen ``num_warps`` is stable across ``Nd`` within a
-regime. Correctness is unaffected — every config in ``BWD_CONFIGS`` computes
-the same gradient — so a stale-but-suboptimal config is only ever a perf
-question, never a correctness one.
+regime. ``has_q_mask`` is out too: it toggles a masked load, not the optimal
+``(num_warps, num_stages)``, so keying on it only doubled the sweep count on
+variable-length training (matches the forward autotuner). Correctness is
+unaffected — every config in ``BWD_CONFIGS`` computes the same gradient — so a
+stale-but-suboptimal config is only ever a perf question, never a correctness
+one.
 
 ``reset_to_zero`` (used by the unified atomic-accumulating kernel at its
 decoration site) is needed so the autotuner's *benchmark trials* don't
@@ -39,7 +42,7 @@ if _HAS_TRITON:
 
     # Layout-aware kernels (grad_Q, unified) — kd_layout flips the doc-index
     # math and shifts the optimum, so it stays in the key.
-    BWD_KEY = ["Lq", "d_pad", "has_q_mask", "kd_layout"]
+    BWD_KEY = ["Lq", "d_pad", "kd_layout"]
 else:  # pragma: no cover
     BWD_CONFIGS = []
     BWD_KEY = []

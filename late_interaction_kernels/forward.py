@@ -24,10 +24,15 @@ from late_interaction_kernels._utils import ensure_contiguous_last, next_pow2, p
     # winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` config. Keeping
     # it would double the cache cardinality for zero perf win (verified on
     # H100, A100 sweeps).
+    # ``has_q_mask`` / ``has_d_mask`` are out too: like ``normalize`` they are
+    # constexpr toggles (a masked load + ``-inf`` fill) that change codegen,
+    # not the winning ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` tile, so
+    # keeping them only multiplied the sweep count — every new ``Lq``×mask
+    # combo paid a full autotune sweep mid-training on variable-length queries.
     # ``kd_layout`` *is* in the key because the two modes hit very different
     # D-side cache patterns (in-batch reuses D across queries; KD/pairs
     # don't), and the best (BLOCK_Q, BLOCK_D, num_warps) trade-off shifts.
-    key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "kd_layout"],
+    key=["Lq", "d_pad", "kd_layout"],
     prune_configs_by={"early_config_prune": prune_forward},
     **autotune_kwargs(),
 )

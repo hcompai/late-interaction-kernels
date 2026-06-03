@@ -5,7 +5,9 @@ key:
 
 * Dense forward: ``Ld`` is OUT of the key — distinct doc lengths share
   one cache entry. ``Lq`` is IN the key (drives ``tl.static_range``
-  unrolling).
+  unrolling). ``normalize`` / ``has_q_mask`` / ``has_d_mask`` are OUT —
+  constexpr toggles that don't shift the winning tile, so variable-length
+  (masked) training reuses one entry instead of sweeping per mask combo.
 * Scatter pair-list kernel: ``max_lq`` and ``max_ld`` are OUT of the
   key — the kernel keys only on ``d_pad``, so variable-seqlen pair
   lists share a single autotune entry.
@@ -62,18 +64,17 @@ def test_forward_kernel_buckets_lq_to_pow2():
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
-    # All of these fall in the bucket=32 slot. We deliberately exclude
-    # lq=32 from the sweep: `_bucket_lq` only creates a q_mask when Lq
-    # < bucket (the padded values need a mask), so lq=32 would land with
-    # has_q_mask=False while the others have has_q_mask=True, and the
-    # autotune key (which includes has_q_mask) would split the cache.
-    for lq in (17, 19, 23, 25, 29, 31):
+    # All of these fall in the bucket=32 slot. lq=32 lands exact (no pad,
+    # has_q_mask=False) while the rest are tail-padded (has_q_mask=True); the
+    # mask flag is out of the autotune key, so every one shares the single
+    # bucket-32 entry.
+    for lq in (17, 19, 23, 25, 29, 31, 32):
         Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
-    assert len(cache) == 1, f"Lq=17..31 should bucket to a single autotune entry; got {len(cache)}"
+    assert len(cache) == 1, f"Lq=17..32 should bucket to a single autotune entry; got {len(cache)}"
 
 
 def test_large_lq_chunks_to_single_autotune_entry():
@@ -103,29 +104,30 @@ def test_large_lq_chunks_to_single_autotune_entry():
     )
 
 
-def test_chunked_tail_padding_bounds_cache_at_two_entries():
-    """Tail-padded long Lq adds at most one extra entry (has_q_mask=True).
+def test_chunked_tail_padding_shares_single_autotune_entry():
+    """Tail-padded and exact-multiple long Lq share one autotune entry.
 
     Exact multiples of 128 chunk with no tail → has_q_mask=False; a non-multiple
-    (e.g. 1030) synthesizes a q_mask → has_q_mask=True. The two land on distinct
-    autotune keys, so a workload mixing both is bounded at exactly 2 — still a
-    tiny constant vs the per-Lq sweep, but not literally one.
+    (e.g. 1030) synthesizes a q_mask → has_q_mask=True. Since the mask flag is
+    out of the autotune key, both collapse onto the single chunked Lq=128 entry
+    — so a workload mixing exact and tail-padded long queries pays exactly one
+    sweep, not two.
     """
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.forward import _maxsim_fwd_kernel
 
     _maxsim_fwd_kernel.cache.clear()
     D = torch.randn(4, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
-    for lq in (1024, 2048):  # exact multiples → one shared (has_q_mask=False) entry
+    for lq in (1024, 2048):  # exact multiples → no tail (has_q_mask=False)
         Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
-    for lq in (1030, 1670):  # tail-padded → one shared (has_q_mask=True) entry
+    for lq in (1030, 1670):  # tail-padded → synthesized q_mask (has_q_mask=True)
         Q = torch.randn(2, lq, 128, device="cuda", dtype=torch.float16, requires_grad=True)
         _ = maxsim(Q, D)
 
     cache = _maxsim_fwd_kernel.cache
-    assert len(cache) == 2, (
-        f"mixed exact-multiple and tail-padded long Lq must bound the cache at 2; got {len(cache)}"
+    assert len(cache) == 1, (
+        f"exact-multiple and tail-padded long Lq must share one autotune entry; got {len(cache)}"
     )
 
 
@@ -176,6 +178,41 @@ def test_forward_normalize_shares_autotune_entry():
         f"normalize=True/False must share one autotune entry; got {len(cache)}. "
         "If autotune behaviour changed and normalize genuinely shifts the optimum, "
         "re-add it to the key in forward.py and update this test."
+    )
+
+
+def test_forward_mask_shares_autotune_entry():
+    """Toggling ``q_mask`` / ``d_mask`` must NOT spawn a new autotune entry.
+
+    ``has_q_mask`` / ``has_d_mask`` are tl.constexpr toggles (a masked load +
+    ``-inf`` fill before the row-max) that change codegen but not the winning
+    ``(BLOCK_Q, BLOCK_D, num_warps, num_stages)`` tile. They were in the key,
+    which made variable-length training pay a fresh autotune sweep every time a
+    new ``(Lq, has_q_mask)`` combo appeared mid-run (the docvqa spike). This is
+    the canary if anyone re-adds them.
+    """
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.forward import _maxsim_fwd_kernel
+
+    _maxsim_fwd_kernel.cache.clear()
+    # requires_grad routes through autograd (save_argmax=True) so the
+    # small-input bypass never fires and the autotuner always runs. Lq=32 is an
+    # exact bucket, so the only thing changing across calls is the mask flags.
+    Q = torch.randn(8, 32, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    D = torch.randn(8, 256, 128, device="cuda", dtype=torch.float16, requires_grad=True)
+    q_mask = torch.ones(8, 32, dtype=torch.bool, device="cuda")
+    d_mask = torch.ones(8, 256, dtype=torch.bool, device="cuda")
+
+    _ = maxsim(Q, D)  # has_q_mask=False, has_d_mask=False
+    _ = maxsim(Q, D, q_mask=q_mask)  # has_q_mask=True
+    _ = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask)  # + has_d_mask=True
+
+    cache = _maxsim_fwd_kernel.cache
+    assert len(cache) == 1, (
+        f"mask flags must share one autotune entry; got {len(cache)}. "
+        "has_q_mask/has_d_mask are constexpr toggles that don't shift the winning "
+        "tile — re-adding them to the key in forward.py re-introduces the "
+        "variable-length autotune-spike regression."
     )
 
 
