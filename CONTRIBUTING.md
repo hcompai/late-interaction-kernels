@@ -24,7 +24,7 @@ pytest -q
 
 ## Autotune for a new GPU
 
-Run the relevant `benchmarks/bench_*.py`, add a shortlist in
+Run the relevant `benchmarks/kernels/bench_*.py`, add a shortlist in
 `late_interaction_kernels/_autotune.py` keyed on the device-name prefix,
 re-run and include before / after in the PR.
 
