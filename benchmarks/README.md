@@ -23,10 +23,11 @@ Every script records peak GPU memory per variant: `peak_mb` in the JSON output
 values warrant it (e2e training shapes reach 25+ GB). Pass `--help` on any
 script for its full option list and the values `--only` accepts.
 
-`bench_colpali_e2e.py` is the one exception to the flag shape: it runs a single
-(batch size, variant) cell per process — so an OOM is an isolated, recorded
-outcome — and takes `--variant vanilla|lik --batch-size B --output FILE.json`.
-The sweep loop lives in `scripts/sky_colpali_e2e.yaml`.
+`bench_colpali_e2e.py` and `bench_pylate_e2e.py` are the exception to the flag
+shape: they run a single (batch size, variant) cell per process — so an OOM is
+an isolated, recorded outcome — and take
+`--variant vanilla|lik --batch-size B --output FILE.json`. The sweep loops live
+in `scripts/sky_colpali_e2e.yaml` / `scripts/sky_pylate_e2e.yaml`.
 
 ## What each script measures
 
@@ -62,8 +63,9 @@ The sweep loop lives in `scripts/sky_colpali_e2e.yaml`.
 | script | what it drives |
 | --- | --- |
 | `bench_colpali_e2e.py` | Real ColQwen2 + LoRA training steps (`ColModelTraining` recipe) on a subset of `vidore/colpali_train_set`, with the loss head instrumented: per-MaxSim-call VRAM (in-train + exact isolated replay), step times, whole-run peak, OOM-as-outcome. `--variant vanilla\|lik` toggles `patch_colpali_engine()`. Adapted from the harness in [colpali PR #412](https://github.com/illuin-tech/colpali/pull/412). |
+| `bench_pylate_e2e.py` | The PyLate sibling: real `SentenceTransformerTrainer` steps (GTE-ModernColBERT-v1 + `Contrastive`) on MS MARCO triplets, same instrumentation/replay/OOM-as-outcome design. `--variant vanilla\|lik` toggles `patch_pylate()`; `--score-mini-batch-size` exercises PyLate's own chunking mitigation. |
 | `bench_colpali_loss.py` | MaxSim loss-head isolation on synthetic embeddings (no encoder) — the explicit-negative heads. |
-| `summarize_colpali_e2e.py` | Renders the `bench_colpali_e2e.py` sweep results: op-VRAM table, batch-ceiling table, log-log plot. |
+| `summarize_colpali_e2e.py` / `summarize_pylate_e2e.py` | Render the e2e sweep results: op-VRAM table, batch-ceiling table, log-log plot. |
 
 ### Platform-specific
 
@@ -82,7 +84,7 @@ versions are in [`../docs/benchmarks.md`](../docs/benchmarks.md#baseline-package
 | `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py`, `bench_training.py` |
 | `fast-plaid` | `bench_fastplaid.py`, `bench_fastplaid_e2e.py` |
 | `colpali-engine` (`==0.3.16`) | `bench_colpali_e2e.py`, `bench_colpali_loss.py` |
-| `pylate` | `bench_cached_maxsim.py` (installed by the `pylate` extra) |
+| `pylate` (`==1.5.0`) | `bench_pylate_e2e.py`, `bench_cached_maxsim.py` (installed by the `pylate` extra) |
 
 ### One script
 
@@ -122,6 +124,7 @@ specific tables and pin their own baselines:
 | job | covers |
 | --- | --- |
 | `scripts/sky_colpali_e2e.yaml` | ColQwen2 e2e MaxSim-VRAM batch sweep (vanilla vs LIK) + optional loss isolation |
+| `scripts/sky_pylate_e2e.yaml` | PyLate e2e MaxSim-VRAM batch sweep (vanilla vs LIK + chunked-vanilla cells) |
 | `scripts/sky_benchmark_smoke_test.yaml` | two-bench smoke test (`bench_forward` + `bench_backward_method`) |
 | `scripts/sky_decompress_bench.yaml` | PLAID decompress + MaxSim |
 | `scripts/sky_fastplaid_e2e.yaml` | rerank vs `fast_plaid.engine.search()` |

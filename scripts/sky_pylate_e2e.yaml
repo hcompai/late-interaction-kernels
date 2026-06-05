@@ -1,0 +1,108 @@
+# E2E PyLate training sweep: per-op MaxSim VRAM + batch-size ceiling, vanilla vs LIK.
+#
+#   sky launch scripts/sky_pylate_e2e.yaml -c lik-pylate-e2e -y
+#
+# The PyLate sibling of scripts/sky_colpali_e2e.yaml. For each (batch size,
+# variant) cell, benchmarks/bench_pylate_e2e.py runs a few real
+# SentenceTransformerTrainer steps (GTE-ModernColBERT-v1 + Contrastive on
+# MS MARCO triplets) with the loss's score_metric instrumented, then replays
+# each recorded shape on an isolated graph. Fresh process per cell so a CUDA
+# OOM is isolated; the bench catches OOM and writes an {"oom": true} marker
+# (exit 0) with the calls recorded so far.
+#
+# On top of the vanilla/lik sweep, the two largest batch sizes also run a
+# vanilla cell with --score-mini-batch-size (PyLate's own chunking knob) so
+# the summary can compare LIK against PyLate's built-in mitigation.
+#
+# Results: benchmarks/results/pylate_e2e_b<B>_<label>.json (also echoed to the log).
+# Pull:    rsync -avP 'lik-pylate-e2e:sky_workdir/benchmarks/results/' ./benchmarks/results/
+# Tables:  python benchmarks/summarize_pylate_e2e.py --results-dir benchmarks/results \
+#              --plot benchmarks/results/pylate_e2e_vram.png
+
+name: lik-pylate-e2e
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+  memory: 64+
+
+workdir: .
+
+envs:
+  # Required when launching from a git worktree — the `.git` file points at a
+  # host path that doesn't exist on the SkyPilot node, so hatch-vcs can't infer
+  # a version. Placeholder; never escapes the host.
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+  HF_HOME: /tmp/hf_home
+  # Space-separated per-device batch sizes to sweep.
+  BATCH_SIZES: "64 128 256 512 1024"
+  # Batch sizes that additionally run a vanilla --score-mini-batch-size cell.
+  CHUNKED_BATCH_SIZES: "512 1024"
+  SCORE_MINI_BATCH_SIZE: "64"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Bare CUDA image: no Python, no curl. Bootstrap uv; uv manages its own Python.
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  # PyLate rides the synced torch tree — no out-of-band torch pin needed,
+  # unlike the colpali job. 1.5.0 is the ColBERTScores loss routing this
+  # benchmark instruments.
+  uv pip install "pylate==1.5.0" datasets
+  # Sanity check: GPU visible + model/loss/patcher all hydrate.
+  uv run python -c "
+  import torch
+  from pylate import losses, models
+  from late_interaction_kernels import patch_pylate, unpatch_pylate
+  print('gpu', torch.cuda.get_device_name(), '| torch', torch.__version__)
+  patch_pylate(); unpatch_pylate()
+  print('patcher ok')
+  "
+
+run: |
+  set -uxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  export LIK_SUPPRESS_NORM_WARN=1
+
+  mkdir -p benchmarks/results
+  emit() { echo "=================== RESULT $1 ==================="; cat "$1"; echo; echo "=================== END $1 ==================="; }
+
+  for B in $BATCH_SIZES; do
+    for VARIANT in vanilla lik; do
+      out="benchmarks/results/pylate_e2e_b${B}_${VARIANT}.json"
+      echo "==================================================="
+      echo "batch_size=$B · variant=$VARIANT"
+      echo "==================================================="
+      # bench_pylate_e2e exits 0 on OOM (writes an oom marker). A non-zero exit
+      # is a real crash; record it so the sweep keeps going.
+      uv run python benchmarks/bench_pylate_e2e.py \
+        --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
+        --output "$out" \
+        || printf '{"batch_size": %s, "variant": "%s", "crashed": true}\n' "$B" "$VARIANT" > "$out"
+      emit "$out"
+    done
+  done
+
+  for B in $CHUNKED_BATCH_SIZES; do
+    out="benchmarks/results/pylate_e2e_b${B}_vanilla-chunk${SCORE_MINI_BATCH_SIZE}.json"
+    echo "==================================================="
+    echo "batch_size=$B · variant=vanilla · score_mini_batch_size=$SCORE_MINI_BATCH_SIZE"
+    echo "==================================================="
+    uv run python benchmarks/bench_pylate_e2e.py \
+      --variant vanilla --batch-size "$B" --max-steps 4 \
+      --score-mini-batch-size "$SCORE_MINI_BATCH_SIZE" \
+      --output "$out" \
+      || printf '{"batch_size": %s, "variant": "vanilla", "score_mini_batch_size": %s, "crashed": true}\n' \
+           "$B" "$SCORE_MINI_BATCH_SIZE" > "$out"
+    emit "$out"
+  done
+
+  echo "Done. Results in benchmarks/results/pylate_e2e_*.json"
+  ls -la benchmarks/results/
