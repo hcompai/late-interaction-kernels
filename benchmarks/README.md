@@ -41,8 +41,6 @@ in `scripts/sky_colpali_e2e.yaml` / `scripts/sky_pylate_e2e.yaml`.
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
 | `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `lowmem` vs naive. |
 | `bench_backward_lowmem.py` | Backward time + peak memory: `lowmem` vs `unified` on PyLate/ColPali shapes, with flash-maxsim and a PyLate-naive einsum baseline. |
-| `bench_training.py` | Full training step (forward + backward) speed and peak memory, with flash as an external reference. |
-| `bench_backward_0_5.py` | Fused `maxsim_residual` / `maxsim_varlen` backward vs "unpack + autograd". |
 | `bench_lateon.py` | LateOn / LateOn-Code shapes (Ld up to 16 384, d=128). |
 | `bench_compile_cache.py` | Cold-pass autotune cost across 18 distinct `Ld` values. |
 | `bench_flash_maxsim.py` | Head-to-head vs `flash-maxsim` (same Triton-MaxSim math). |
@@ -53,7 +51,6 @@ in `scripts/sky_colpali_e2e.yaml` / `scripts/sky_pylate_e2e.yaml`.
 
 | script | what it isolates |
 | --- | --- |
-| `bench_fastplaid.py` | Isolated rerank step (`bmm + mask + max + sum`) vs `maxsim` on the same shapes. |
 | `bench_fastplaid_e2e.py` | `fast_plaid.engine.search()` vs our scoring kernel on the same on-disk compressed index. |
 | `bench_decompress_maxsim.py` | Fast-plaid's decompress + rerank pipeline (PyTorch transliteration) vs `maxsim_residual` / `maxsim_residual_varlen`. |
 | `bench_cached_maxsim.py` | PyLate `CachedContrastive`'s chunked MaxSim vs vanilla vs `torch.compile` vs LIK. |
@@ -81,8 +78,8 @@ versions are in [`../docs/benchmarks.md`](../docs/benchmarks.md#baseline-package
 
 | baseline | needed by |
 | --- | --- |
-| `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py`, `bench_training.py` |
-| `fast-plaid` | `bench_fastplaid.py`, `bench_fastplaid_e2e.py` |
+| `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py` |
+| `fast-plaid` | `bench_fastplaid_e2e.py` |
 | `colpali-engine` (`==0.3.16`) | `bench_colpali_e2e.py`, `bench_colpali_loss.py` |
 | `pylate` (`==1.5.0`) | `bench_pylate_e2e.py`, `bench_cached_maxsim.py` (installed by the `pylate` extra) |
 
