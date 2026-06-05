@@ -42,7 +42,7 @@ run: |
   rm -rf ~/.triton/cache || true
 
   echo "=== bench_flash_maxsim (bf16) — all shapes, full report ==="
-  uv run python benchmarks/bench_flash_maxsim.py --dtype bf16 2>&1 | tee /tmp/bench/fm_bf16.log
+  uv run python benchmarks/kernels/bench_flash_maxsim.py --dtype bf16 2>&1 | tee /tmp/bench/fm_bf16.log
 
   echo "=== which autotune config won on rerank-colpali? ==="
   uv run python - <<'PY'

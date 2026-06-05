@@ -10,7 +10,7 @@ Reads the ``colpali_e2e_b<B>_<variant>.json`` files written by
 3. optionally a log-log plot of the op totals.
 
 Usage:
-    python benchmarks/summarize_colpali_e2e.py --results-dir benchmarks/results \\
+    python benchmarks/colpali/summarize_colpali_e2e.py --results-dir benchmarks/results \\
         --plot benchmarks/results/colpali_e2e_vram.png
 """
 

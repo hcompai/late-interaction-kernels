@@ -22,11 +22,11 @@ given shape we want to know, not hide it.
 Usage::
 
     pip install "flash-maxsim==0.2.1"   # pinned to match the published numbers
-    python benchmarks/bench_flash_maxsim.py
-    python benchmarks/bench_flash_maxsim.py --quick      # skip biggest shapes
-    python benchmarks/bench_flash_maxsim.py --only train-batch
-    python benchmarks/bench_flash_maxsim.py --no-kd      # cross-product only
-    python benchmarks/bench_flash_maxsim.py --no-pairs   # skip pairwise
+    python benchmarks/kernels/bench_flash_maxsim.py
+    python benchmarks/kernels/bench_flash_maxsim.py --quick      # skip biggest shapes
+    python benchmarks/kernels/bench_flash_maxsim.py --only train-batch
+    python benchmarks/kernels/bench_flash_maxsim.py --no-kd      # cross-product only
+    python benchmarks/kernels/bench_flash_maxsim.py --no-pairs   # skip pairwise
 
 Writes a Markdown + JSON report to ``benchmarks/results/flash_maxsim_<gpu>_<dtype>.{md,json}``.
 """

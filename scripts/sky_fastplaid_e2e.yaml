@@ -52,7 +52,7 @@ run: |
   mkdir -p "${ART}"
 
   echo ">>> fast-plaid e2e comparison"
-  uv run python benchmarks/bench_fastplaid_e2e.py --outdir "${ART}" --small 2>&1 | tee "${ART}/bench_e2e.log"
+  uv run python benchmarks/plaid/bench_fastplaid_e2e.py --outdir "${ART}" --small 2>&1 | tee "${ART}/bench_e2e.log"
 
   echo ">>> artifact summary"
   find "${ART}" -type f | sort

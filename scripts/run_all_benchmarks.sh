@@ -16,19 +16,19 @@ run() {
   ( "$@" ) || echo "WARN: $* failed (exit $?) — continuing"
 }
 
-run python benchmarks/bench_forward.py          --outdir "${OUTDIR}"
-run python benchmarks/bench_inference_edge.py   --outdir "${OUTDIR}"
-run python benchmarks/bench_backward_method.py  --outdir "${OUTDIR}"
-run python benchmarks/bench_normalize.py        --outdir "${OUTDIR}"
-run python benchmarks/bench_lateon.py           --outdir "${OUTDIR}"
-run python benchmarks/bench_cached_maxsim.py    --outdir "${OUTDIR}"
-run python benchmarks/bench_compile_cache.py    --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_forward.py         --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_inference_edge.py  --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_backward_method.py --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_normalize.py       --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_longdoc.py         --outdir "${OUTDIR}"
+run python benchmarks/pylate/bench_cached_maxsim.py    --outdir "${OUTDIR}"
+run python benchmarks/kernels/bench_compile_cache.py   --outdir "${OUTDIR}"
 
 # Head-to-head vs flash-maxsim — same Triton-MaxSim math, direct
 # apples-to-apples speedup numbers. Skip if the package isn't installed
 # (install pinned with: ``pip install "flash-maxsim==0.2.1"``).
 if python -c "import flash_maxsim" >/dev/null 2>&1; then
-  run python benchmarks/bench_flash_maxsim.py   --outdir "${OUTDIR}"
+  run python benchmarks/kernels/bench_flash_maxsim.py   --outdir "${OUTDIR}"
 else
   echo "INFO: flash_maxsim not installed, skipping bench_flash_maxsim.py"
 fi

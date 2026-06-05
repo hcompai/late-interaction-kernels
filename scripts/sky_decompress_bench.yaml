@@ -46,13 +46,13 @@ run: |
   uv run pytest tests/test_plaid.py -v 2>&1 | tee "${ART}/test_plaid.log"
 
   echo ">>> bench nbits=2 bf16 (PLAID default)"
-  uv run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_bf16.log"
+  uv run python benchmarks/plaid/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_bf16.log"
 
   echo ">>> bench nbits=4 bf16"
-  uv run python benchmarks/bench_decompress_maxsim.py --nbits 4 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb4_bf16.log"
+  uv run python benchmarks/plaid/bench_decompress_maxsim.py --nbits 4 --dtype bf16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb4_bf16.log"
 
   echo ">>> bench nbits=2 fp16"
-  uv run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype fp16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_fp16.log"
+  uv run python benchmarks/plaid/bench_decompress_maxsim.py --nbits 2 --dtype fp16 --outdir "${ART}" 2>&1 | tee "${ART}/bench_nb2_fp16.log"
 
   echo ">>> artifact summary"
   find "${ART}" -type f | sort

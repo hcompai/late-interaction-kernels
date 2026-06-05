@@ -25,7 +25,7 @@ workdir: .
 envs:
   SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
   # Space-separated subset of bench tags to run; empty means "run all".
-  # Tags: forward, inference_edge, normalize, backward_method, lateon,
+  # Tags: forward, inference_edge, normalize, backward_method, longdoc,
   #       cached_maxsim, flash_maxsim, fp8, fused_head_train,
   #       decompress_maxsim, fastplaid_e2e.
   # Smoke-test the README numbers with:
@@ -72,24 +72,24 @@ run: |
   }
 
   # --- microbenchmarks (docs/benchmarks.md tables 1, 2, 3, 5, 6, 8, 10) -------
-  should_run forward         && run python benchmarks/bench_forward.py          --outdir "$OUT"
-  should_run inference_edge  && run python benchmarks/bench_inference_edge.py   --outdir "$OUT"
-  should_run normalize       && run python benchmarks/bench_normalize.py        --outdir "$OUT"
-  should_run backward_method && run python benchmarks/bench_backward_method.py  --outdir "$OUT"
-  should_run lateon          && run python benchmarks/bench_lateon.py           --outdir "$OUT"
-  should_run cached_maxsim   && run python benchmarks/bench_cached_maxsim.py    --outdir "$OUT" --variants all
-  should_run flash_maxsim    && run python benchmarks/bench_flash_maxsim.py     --outdir "$OUT"
+  should_run forward         && run python benchmarks/kernels/bench_forward.py         --outdir "$OUT"
+  should_run inference_edge  && run python benchmarks/kernels/bench_inference_edge.py  --outdir "$OUT"
+  should_run normalize       && run python benchmarks/kernels/bench_normalize.py       --outdir "$OUT"
+  should_run backward_method && run python benchmarks/kernels/bench_backward_method.py --outdir "$OUT"
+  should_run longdoc         && run python benchmarks/kernels/bench_longdoc.py         --outdir "$OUT"
+  should_run cached_maxsim   && run python benchmarks/pylate/bench_cached_maxsim.py    --outdir "$OUT" --variants all
+  should_run flash_maxsim    && run python benchmarks/kernels/bench_flash_maxsim.py    --outdir "$OUT"
 
   # --- FP8 + fused head (both now write JSON + MD alongside the log) ---------
-  should_run fp8              && run python benchmarks/bench_fp8.py              --outdir "$OUT" 2>&1 | tee "$OUT/fp8.log"
-  should_run fused_head_train && run python benchmarks/bench_fused_head_train.py --outdir "$OUT" 2>&1 | tee "$OUT/fused_head_train.log"
+  should_run fp8              && run python benchmarks/kernels/bench_fp8.py              --outdir "$OUT" 2>&1 | tee "$OUT/fp8.log"
+  should_run fused_head_train && run python benchmarks/kernels/bench_fused_head_train.py --outdir "$OUT" 2>&1 | tee "$OUT/fused_head_train.log"
 
   # --- PLAID decompress + maxsim (memory/perf table in PLAID section) --------
-  should_run decompress_maxsim && run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "$OUT" \
+  should_run decompress_maxsim && run python benchmarks/plaid/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "$OUT" \
       2>&1 | tee "$OUT/decompress_nb2_bf16.log"
 
   # --- end-to-end fast-plaid comparison (PLAID main table) -------------------
-  should_run fastplaid_e2e && run python benchmarks/bench_fastplaid_e2e.py --outdir "$OUT" \
+  should_run fastplaid_e2e && run python benchmarks/plaid/bench_fastplaid_e2e.py --outdir "$OUT" \
       2>&1 | tee "$OUT/fastplaid_e2e.log"
 
   echo ""

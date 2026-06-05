@@ -518,7 +518,7 @@ computation into query chunks — at 6.02 s/step and 62.2 GiB vs LIK's
 fused kernel buys it while speeding the step up, with no knob to tune.
 
 Reproduce: `sky launch scripts/sky_pylate_e2e.yaml`, then
-`benchmarks/summarize_pylate_e2e.py --regime plain|ckpt`.
+`benchmarks/pylate/summarize_pylate_e2e.py --regime plain|ckpt`.
 
 ## End-to-end ColQwen2 / ColPali training
 
@@ -581,7 +581,7 @@ whatever scraps remain. Net: **vanilla maxes out at B=64, LIK trains B=128**
 (8.5 s/step) — 2× batch headroom from removing the op's B² term.
 
 Reproduce: `sky launch scripts/sky_colpali_e2e.yaml`, then
-`benchmarks/summarize_colpali_e2e.py` renders both tables and the log-log
+`benchmarks/colpali/summarize_colpali_e2e.py` renders both tables and the log-log
 plot from the per-cell JSONs.
 
 ### Explicit-negative MaxSim isolation (no encoder)
@@ -691,7 +691,7 @@ implementations land on Apple Silicon and the dispatch picks per call:
   overhead doesn't amortise on.
 
 MacBook Air Apple M4 (2025, 16 GB unified memory), fp16, 30-iter median
-(`benchmarks/bench_mps.py`). `metal` needs `d ≤ 128` and `d % 8 == 0`;
+(`benchmarks/kernels/bench_mps.py`). `metal` needs `d ≤ 128` and `d % 8 == 0`;
 outside that the dispatch transparently falls back to `compile`.
 
 

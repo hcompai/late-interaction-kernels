@@ -12,8 +12,8 @@ Usage
 -----
 ::
 
-    python benchmarks/bench_fused_head_train.py
-    python benchmarks/bench_fused_head_train.py --only lateon-B4-Ld300
+    python benchmarks/kernels/bench_fused_head_train.py
+    python benchmarks/kernels/bench_fused_head_train.py --only lateon-B4-Ld300
 """
 
 import argparse

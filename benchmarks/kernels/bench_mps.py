@@ -21,11 +21,11 @@ overhead to amortise.
 
 Usage::
 
-    python benchmarks/bench_mps.py                     # cross-product forward
-    python benchmarks/bench_mps.py --layout kd         # KD / pairs (4-D D)
-    python benchmarks/bench_mps.py --mode train        # forward + backward
-    python benchmarks/bench_mps.py --quick
-    python benchmarks/bench_mps.py --dtype bf16
+    python benchmarks/kernels/bench_mps.py                     # cross-product forward
+    python benchmarks/kernels/bench_mps.py --layout kd         # KD / pairs (4-D D)
+    python benchmarks/kernels/bench_mps.py --mode train        # forward + backward
+    python benchmarks/kernels/bench_mps.py --quick
+    python benchmarks/kernels/bench_mps.py --dtype bf16
 
 Writes ``benchmarks/results/mps_<chip>_<dtype>{_train}.{md,json}``.
 """

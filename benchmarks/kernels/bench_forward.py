@@ -25,8 +25,8 @@ a fake speedup.
 
 Usage::
 
-    python benchmarks/bench_forward.py
-    python benchmarks/bench_forward.py --dtype fp16 --quick
+    python benchmarks/kernels/bench_forward.py
+    python benchmarks/kernels/bench_forward.py --dtype fp16 --quick
 
 Writes a Markdown table + JSON to ``benchmarks/results/forward_<gpu>_<dtype>.{md,json}``.
 """

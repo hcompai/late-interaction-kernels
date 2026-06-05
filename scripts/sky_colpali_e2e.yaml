@@ -2,7 +2,7 @@
 #
 #   sky launch scripts/sky_colpali_e2e.yaml -c lik-colpali-e2e -y
 #
-# For each (batch size, variant) cell, benchmarks/bench_colpali_e2e.py runs a few
+# For each (batch size, variant) cell, benchmarks/colpali/bench_colpali_e2e.py runs a few
 # real ColQwen2 + LoRA training steps on a subset of vidore/colpali_train_set with
 # the loss head instrumented (per-call forward peak and bytes held for backward),
 # then replays each recorded shape on an isolated graph to bracket the op's
@@ -12,7 +12,7 @@
 #
 # Results: benchmarks/results/colpali_e2e_b<B>_<variant>.json (also echoed to the log).
 # Pull:    rsync -avP 'lik-colpali-e2e:sky_workdir/benchmarks/results/' ./benchmarks/results/
-# Tables:  python benchmarks/summarize_colpali_e2e.py --results-dir benchmarks/results \
+# Tables:  python benchmarks/colpali/summarize_colpali_e2e.py --results-dir benchmarks/results \
 #              --plot benchmarks/results/colpali_e2e_vram.png \
 #              --ceiling-plot benchmarks/results/colpali_e2e_ceiling.png
 
@@ -118,7 +118,7 @@ run: |
       echo "==================================================="
       # bench_colpali_e2e exits 0 on OOM (writes an oom marker). A non-zero exit
       # is a real crash; record it so the sweep keeps going.
-      uv run python benchmarks/bench_colpali_e2e.py \
+      uv run python benchmarks/colpali/bench_colpali_e2e.py \
         --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
         --output "$out" \
         || printf '{"batch_size": %s, "variant": "%s", "crashed": true}\n' "$B" "$VARIANT" > "$out"
@@ -130,7 +130,7 @@ run: |
     echo "=============================================================="
     echo "  MaxSim isolation — explicit-negative loss heads (no encoder)"
     echo "=============================================================="
-    uv run python benchmarks/bench_colpali_loss.py --sweep \
+    uv run python benchmarks/colpali/bench_colpali_loss.py --sweep \
       2>&1 | tee benchmarks/results/loss_isolation.log
   fi
 

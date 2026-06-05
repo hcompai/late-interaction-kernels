@@ -27,9 +27,9 @@ Metrics reported:
 
 Usage
 -----
-    python benchmarks/bench_cached_maxsim.py
-    python benchmarks/bench_cached_maxsim.py --variants flash       # skip vanilla when naive OOMs
-    python benchmarks/bench_cached_maxsim.py --only reason-bs64-2k  # one shape only
+    python benchmarks/pylate/bench_cached_maxsim.py
+    python benchmarks/pylate/bench_cached_maxsim.py --variants flash       # skip vanilla when naive OOMs
+    python benchmarks/pylate/bench_cached_maxsim.py --only reason-bs64-2k  # one shape only
 """
 
 # ruff: noqa: F821  -- closures capture Q / D_ / d_mask from enclosing run_shape scope

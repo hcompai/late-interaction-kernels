@@ -3,7 +3,7 @@
 #   sky launch scripts/sky_pylate_e2e.yaml -c lik-pylate-e2e -y
 #
 # The PyLate sibling of scripts/sky_colpali_e2e.yaml. For each (batch size,
-# variant) cell, benchmarks/bench_pylate_e2e.py runs a few real
+# variant) cell, benchmarks/pylate/bench_pylate_e2e.py runs a few real
 # SentenceTransformerTrainer steps (GTE-ModernColBERT-v1 + Contrastive on
 # MS MARCO triplets) with the loss's score_metric instrumented, then replays
 # each recorded shape on an isolated graph. Fresh process per cell so a CUDA
@@ -16,7 +16,7 @@
 #
 # Results: benchmarks/results/pylate_e2e_b<B>_<label>.json (also echoed to the log).
 # Pull:    rsync -avP 'lik-pylate-e2e:sky_workdir/benchmarks/results/' ./benchmarks/results/
-# Tables:  python benchmarks/summarize_pylate_e2e.py --results-dir benchmarks/results \
+# Tables:  python benchmarks/pylate/summarize_pylate_e2e.py --results-dir benchmarks/results \
 #              --plot benchmarks/results/pylate_e2e_vram.png \
 #              --ceiling-plot benchmarks/results/pylate_e2e_ceiling.png
 
@@ -87,7 +87,7 @@ run: |
       echo "==================================================="
       # bench_pylate_e2e exits 0 on OOM (writes an oom marker). A non-zero exit
       # is a real crash; record it so the sweep keeps going.
-      uv run python benchmarks/bench_pylate_e2e.py \
+      uv run python benchmarks/pylate/bench_pylate_e2e.py \
         --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
         --output "$out" \
         || printf '{"batch_size": %s, "variant": "%s", "crashed": true}\n' "$B" "$VARIANT" > "$out"
@@ -101,7 +101,7 @@ run: |
       echo "==================================================="
       echo "batch_size=$B · variant=$VARIANT · grad-checkpoint"
       echo "==================================================="
-      uv run python benchmarks/bench_pylate_e2e.py \
+      uv run python benchmarks/pylate/bench_pylate_e2e.py \
         --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
         --grad-checkpoint \
         --output "$out" \
@@ -116,7 +116,7 @@ run: |
     echo "==================================================="
     echo "batch_size=$B · variant=vanilla · grad-checkpoint · score_mini_batch_size=$SCORE_MINI_BATCH_SIZE"
     echo "==================================================="
-    uv run python benchmarks/bench_pylate_e2e.py \
+    uv run python benchmarks/pylate/bench_pylate_e2e.py \
       --variant vanilla --batch-size "$B" --max-steps 4 \
       --grad-checkpoint \
       --score-mini-batch-size "$SCORE_MINI_BATCH_SIZE" \
