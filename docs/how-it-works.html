@@ -295,9 +295,9 @@
        it grows to match the toggle column when collapsed so the center column
        is symmetric and `main` reads as centered. Keeping both states at three
        tracks lets grid-template-columns interpolate track-for-track. */
-    grid-template-columns: 240px minmax(0, 1fr) 0px;
+    grid-template-columns: 210px minmax(0, 1fr) 0px;
     gap: 56px;
-    max-width: 1200px; margin: 0 auto;
+    max-width: 1000px; margin: 0 auto;
     padding: 40px 28px 112px;
     transition: grid-template-columns var(--dur-toc) var(--ease-toc),
                 max-width var(--dur-toc) var(--ease-toc);
@@ -307,7 +307,7 @@
      and `main` lifts its cap (below) so the body reclaims the freed space. */
   html[data-toc="collapsed"] .layout {
     grid-template-columns: 44px minmax(0, 1fr) 44px;
-    max-width: 1136px;
+    max-width: 936px;
   }
   html[data-toc="collapsed"] aside.toc .toc-toggle {
     padding: 6px 9px;
@@ -401,9 +401,9 @@
   }
   /* .toc-appendix-label and ol.toc-appendix fade with the parent ol rules above. */
 
-  main { min-width: 0; max-width: 720px; transition: max-width var(--dur-toc) var(--ease-toc); }
+  main { min-width: 0; max-width: 620px; transition: max-width var(--dur-toc) var(--ease-toc); }
   /* With the TOC hidden, let the reading column breathe into the freed width. */
-  html[data-toc="collapsed"] main { max-width: 880px; }
+  html[data-toc="collapsed"] main { max-width: 680px; }
   section { margin-top: 56px; scroll-margin-top: 84px; }
   section:first-of-type { margin-top: 0; }
 
