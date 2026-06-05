@@ -461,6 +461,65 @@ shifted up the batch axis because the encoder is 9× smaller. The `bs=64, Ld=300
 headline win (1.15× in 0.3.0); it regressed to ~1.00× in this sweep
 and is queued for investigation in 0.3.1 (see CHANGELOG).
 
+## End-to-end PyLate training (GTE-ModernColBERT-v1)
+
+The PyLate sibling of the ColQwen2 harness below (`bench_pylate_e2e.py`, same
+instrumentation/replay/OOM-as-outcome design): real
+`SentenceTransformerTrainer` steps with `lightonai/GTE-ModernColBERT-v1`
+(ModernBERT 149 M, `d=128`, `Lq=48`, `Ld=300` fixed-pad) + `Contrastive` on
+real `sentence-transformers/msmarco-bm25` triplets (1 explicit negative, so
+N=2 document slots), bf16 autocast, PyLate `1.5.0`. `lik` is one
+`patch_pylate()` call. Two regimes per (batch, variant) cell:
+
+**Canonical recipe (no grad-checkpointing): the encoder binds first.**
+Without checkpointing, ModernBERT's activations for `3 × B` sequences fill
+the 80 GB card at B=256 — vanilla, LIK, *and* PyLate's own
+`score_mini_batch_size` chunking all OOM identically on a sub-GiB
+allocation with ~78 GiB already used. Both variants train B=128
+(step peak ~51–53 GiB) at the same speed. On this recipe the MaxSim term
+never becomes the constraint, so LIK cannot move the ceiling — it only trims
+the op's transient (1.8 GiB → 56 MiB at B=128).
+
+**`--grad-checkpoint` (the regime matching the ColQwen2 bench): the B²
+score transient binds, and LIK moves both the ceiling and the step time.**
+Vanilla PyLate's grid is *transient* rather than held — `ColBERTScores`
+materializes one document-slot at a time and `.max(dim)` saves int64 indices,
+not the grid — but the transient still scales B² and is one contiguous fp32
+allocation per slot:
+
+| batch size | vanilla: fwd transient | vanilla: bwd spike | LIK: fwd transient | LIK: held | LIK: bwd spike |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 1.80 GiB | 1.77 GiB | 54 MiB | 54 MiB | 62 MiB |
+| 256 | 7.13 GiB | 7.03 GiB | 124 MiB | 124 MiB | 110 MiB |
+| 512 | 28.37 GiB | 28.03 GiB | 314 MiB | 312 MiB | 157 MiB |
+| 1024 | **OOM** | — | 893 MiB | 885 MiB | 186 MiB |
+
+| batch size | vanilla | vanilla + `score_mini_batch_size=64` | LIK |
+| --- | --- | --- | --- |
+| 128 | 9.55 GiB | — | 8.75 GiB |
+| 256 | 20.92 GiB | — | 15.79 GiB |
+| 512 | 54.10 GiB | 30.60 GiB | **29.72 GiB** |
+| 1024 | **OOM** (56.25 GiB grid alloc) | 62.18 GiB · 6.02 s/step | **57.67 GiB · 4.81 s/step** |
+
+Reading: at B=1024 vanilla dies on a single **56.25 GiB** request — exactly
+the `[1024, 1024, 48, 300]` fp32 per-slot grid (the embeddings promote to
+fp32 through `F.normalize` under autocast), recorded by the harness as an
+OOM *inside* the score call. LIK's footprint stays sub-GiB (per-slot argmax
+buffers + outputs, linear in B). Because the grid transient overlaps the
+step's peak here, whole-step memory splits *before* the OOM — 29.7 vs
+54.1 GiB at B=512 — and, with a 149 M encoder too small to hide the op, LIK
+is also **1.07–1.12× faster per step** (B=256: 1.23 vs 1.31 s; B=512: 2.40
+vs 2.69 s), holding ~210 samples/s flat from B=64 to B=1024.
+
+The honest comparison the harness was built for: PyLate's own mitigation
+(`score_mini_batch_size=64`) also reaches B=1024 by serializing the score
+computation into query chunks — at 6.02 s/step and 62.2 GiB vs LIK's
+4.81 s/step and 57.7 GiB. Chunking buys the ceiling with recompute; the
+fused kernel buys it while speeding the step up, with no knob to tune.
+
+Reproduce: `sky launch scripts/sky_pylate_e2e.yaml`, then
+`benchmarks/summarize_pylate_e2e.py --regime plain|ckpt`.
+
 ## End-to-end ColQwen2 / ColPali training
 
 Real colpali-engine training recipe, instrumented at the MaxSim op

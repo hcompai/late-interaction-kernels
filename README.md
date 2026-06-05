@@ -134,6 +134,7 @@ is asserted at `atol=1e-2` before timing.
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.00-1.06× e2e     |
 | ColQwen2 training, MaxSim-op VRAM at B=128 (real `colpali_train_set`) | 7.8 GiB → 61 MiB (**~130×**); 2× max batch |
+| PyLate `Contrastive` training, grad-ckpt (real MS MARCO)    | step peak 54 → 30 GiB at B=512; 2× max batch, 1.07-1.12× e2e |
 
 Full tables and reproduction commands
 live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench

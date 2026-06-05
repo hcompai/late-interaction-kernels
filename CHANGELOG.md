@@ -32,6 +32,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/benchmarks.md`'s ColQwen2 section now carries these tables; the
   v0.4.x per-loss-head step-time table they supersede is summarized there.
 
+- **`bench_pylate_e2e.py` — the PyLate sibling of the ColQwen2 harness.**
+  Same per-call instrumentation / isolated replay / OOM-as-outcome design,
+  on the real PyLate recipe: `SentenceTransformerTrainer` +
+  `GTE-ModernColBERT-v1` + `Contrastive` on MS MARCO triplets, vanilla vs
+  `patch_pylate()` per cell (`scripts/sky_pylate_e2e.yaml`,
+  `summarize_pylate_e2e.py`). Sweeps two regimes — the canonical recipe and
+  `--grad-checkpoint` (the regime matching the ColQwen2 bench, where the
+  encoder term shrinks enough for the B² score transient to bind) — plus
+  `--score-mini-batch-size` cells covering PyLate's own chunking mitigation.
+  Measured on 1×H100 80 GB (grad-ckpt regime): vanilla OOMs at B=1024 on a
+  single 56.25 GiB grid allocation where LIK trains it at 4.81 s/step; step
+  peak 54.1 → 29.7 GiB at B=512; LIK runs 1.07–1.12× faster per step than
+  vanilla and 1.25× faster than PyLate's `score_mini_batch_size` chunking
+  at matched B=1024. On the canonical no-ckpt recipe the encoder
+  activations cap the batch at B=128 before MaxSim matters — every variant
+  OOMs at B=256 alike. Tables in `docs/benchmarks.md`.
+
+### Fixed
+
+- **`patch_pylate()` works on PyLate 1.5 again.** 1.5 renamed the scoring
+  module (`pylate.scores.scores` → `pylate.scores.colbert`) and rerouted the
+  contrastive losses through `ColBERTScores`, which resolves
+  `colbert_scores` from module globals at call time; the patch now detects
+  the layout, patches the defining module (covering the loss path), and
+  rewrites only `Distillation`'s import-time capture on 1.5. The pylate
+  extra's `>=1.3.3,<2` range is accurate again — no more 1.3.3 pin.
+
 ### Removed
 
 - The previous e2e training benches — `bench_colpali_training.py`,

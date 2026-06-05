@@ -36,9 +36,13 @@ envs:
   # a version. Placeholder; never escapes the host.
   SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
   HF_HOME: /tmp/hf_home
-  # Space-separated per-device batch sizes to sweep.
-  BATCH_SIZES: "64 128 256 512 1024"
-  # Batch sizes that additionally run a vanilla --score-mini-batch-size cell.
+  # Canonical-recipe (no grad ckpt) batch sizes: the encoder activations cap
+  # the batch at ~B=128 on 80 GB, so larger cells just measure that ceiling.
+  BATCH_SIZES: "64 128 256"
+  # --grad-checkpoint batch sizes: the regime matching the ColQwen2 bench,
+  # where the encoder term shrinks and the B² score transient binds instead.
+  CKPT_BATCH_SIZES: "128 256 512 1024"
+  # Ckpt batch sizes that additionally run a vanilla --score-mini-batch-size cell.
   CHUNKED_BATCH_SIZES: "512 1024"
   SCORE_MINI_BATCH_SIZE: "64"
 
@@ -90,16 +94,33 @@ run: |
     done
   done
 
+  for B in $CKPT_BATCH_SIZES; do
+    for VARIANT in vanilla lik; do
+      out="benchmarks/results/pylate_e2e_b${B}_${VARIANT}-ckpt.json"
+      echo "==================================================="
+      echo "batch_size=$B · variant=$VARIANT · grad-checkpoint"
+      echo "==================================================="
+      uv run python benchmarks/bench_pylate_e2e.py \
+        --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
+        --grad-checkpoint \
+        --output "$out" \
+        || printf '{"batch_size": %s, "variant": "%s", "grad_checkpointing": true, "crashed": true}\n' \
+             "$B" "$VARIANT" > "$out"
+      emit "$out"
+    done
+  done
+
   for B in $CHUNKED_BATCH_SIZES; do
-    out="benchmarks/results/pylate_e2e_b${B}_vanilla-chunk${SCORE_MINI_BATCH_SIZE}.json"
+    out="benchmarks/results/pylate_e2e_b${B}_vanilla-ckpt-chunk${SCORE_MINI_BATCH_SIZE}.json"
     echo "==================================================="
-    echo "batch_size=$B · variant=vanilla · score_mini_batch_size=$SCORE_MINI_BATCH_SIZE"
+    echo "batch_size=$B · variant=vanilla · grad-checkpoint · score_mini_batch_size=$SCORE_MINI_BATCH_SIZE"
     echo "==================================================="
     uv run python benchmarks/bench_pylate_e2e.py \
       --variant vanilla --batch-size "$B" --max-steps 4 \
+      --grad-checkpoint \
       --score-mini-batch-size "$SCORE_MINI_BATCH_SIZE" \
       --output "$out" \
-      || printf '{"batch_size": %s, "variant": "vanilla", "score_mini_batch_size": %s, "crashed": true}\n' \
+      || printf '{"batch_size": %s, "variant": "vanilla", "grad_checkpointing": true, "score_mini_batch_size": %s, "crashed": true}\n' \
            "$B" "$SCORE_MINI_BATCH_SIZE" > "$out"
     emit "$out"
   done

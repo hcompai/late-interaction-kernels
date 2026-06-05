@@ -29,9 +29,14 @@ def _fmt_mib(value: float | None) -> str:
 
 
 def _label(data: dict) -> str:
-    """Chunked-vanilla cells get their own column family so they don't collide."""
+    """Ckpt / chunked cells get their own column families so regimes don't collide."""
+    label: str = data["variant"]
+    if data.get("grad_checkpointing"):
+        label += "-ckpt"
     chunk = data.get("score_mini_batch_size")
-    return f"{data['variant']}-chunk{chunk}" if chunk else data["variant"]
+    if chunk:
+        label += f"-chunk{chunk}"
+    return label
 
 
 def _load_cells(results_dir: Path) -> dict[tuple[int, str], dict]:
@@ -106,7 +111,9 @@ def _print_batch_ceiling_table(batch_sizes: list[int], cells: dict[tuple[int, st
 
 
 def _print_chunked_cells(cells: dict[tuple[int, str], dict]) -> None:
-    extra = sorted(key for key in cells if key[1] not in VARIANTS)
+    # Main vanilla/lik families (either regime) are covered by the tables above.
+    main_labels = {v for base in ("vanilla", "lik") for v in (base, f"{base}-ckpt")}
+    extra = sorted(key for key in cells if key[1] not in main_labels)
     if not extra:
         return
     print("\n## PyLate's own mitigation: score_mini_batch_size cells\n")
@@ -130,8 +137,8 @@ def _write_plot(plot_path: Path, batch_sizes: list[int], cells: dict[tuple[int, 
 
     # The plot needs both variants' op totals; keep only fully-populated batch sizes.
     plotted = [b for b in batch_sizes if all(_op_total(cells.get((b, v))) is not None for v in VARIANTS)]
-    vanilla_totals = [_op_total(cells[(b, "vanilla")]) for b in plotted]
-    lik_totals = [_op_total(cells[(b, "lik")]) for b in plotted]
+    vanilla_totals = [_op_total(cells[(b, VARIANTS[0])]) for b in plotted]
+    lik_totals = [_op_total(cells[(b, VARIANTS[1])]) for b in plotted]
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.plot(plotted, vanilla_totals, "o-", color="tab:red", label="vanilla (PyLate einsum)")
@@ -164,7 +171,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--plot", type=Path, default=None)
+    parser.add_argument(
+        "--regime",
+        choices=["plain", "ckpt"],
+        default="plain",
+        help="Which cells fill the main vanilla/LIK columns: the canonical recipe or --grad-checkpoint.",
+    )
     args = parser.parse_args()
+
+    global VARIANTS
+    if args.regime == "ckpt":
+        VARIANTS = tuple(f"{v}-ckpt" for v in VARIANTS)
 
     cells = _load_cells(args.results_dir)
     batch_sizes: list[int] = sorted({batch for batch, label in cells if label in VARIANTS})

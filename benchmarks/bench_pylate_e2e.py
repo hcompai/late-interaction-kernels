@@ -265,6 +265,13 @@ def main() -> None:
         default=0,
         help="PyLate's own mitigation knob: chunk Contrastive's query axis (0 = off, the default recipe).",
     )
+    parser.add_argument(
+        "--grad-checkpoint",
+        action="store_true",
+        help="Checkpoint the encoder. Off in PyLate's canonical recipe — but without it the encoder"
+        " activations cap the batch at ~B=128 on 80 GB before the score grid matters; this regime"
+        " matches the ColQwen2 bench (which checkpoints) and is where the MaxSim term binds.",
+    )
     args = parser.parse_args()
 
     if args.variant == "lik":
@@ -277,6 +284,11 @@ def main() -> None:
     from sentence_transformers import SentenceTransformerTrainer
 
     model = models.ColBERT(model_name_or_path=args.model)
+    if args.grad_checkpoint:
+        # SentenceTransformer doesn't expose this; reach the HF encoder directly.
+        model[0].auto_model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
     loss_func = losses.Contrastive(
         model=model,
         score_mini_batch_size=args.score_mini_batch_size or None,
@@ -308,6 +320,7 @@ def main() -> None:
         "query_length": model.query_length,
         "document_length": model.document_length,
         "score_mini_batch_size": args.score_mini_batch_size or None,
+        "grad_checkpointing": args.grad_checkpoint,
     }
 
     # OOM is an expected sweep outcome: record it and exit 0 so the driver keeps going.
