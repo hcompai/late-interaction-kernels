@@ -50,6 +50,11 @@ def _vanilla_group_scores(
     return torch.stack(per_group, dim=2).reshape(-1, batch * n_slots)
 
 
+def _as_bool(mask: torch.Tensor) -> torch.Tensor:
+    """Mirror the patch's ``_mask_as_bool``: bool masks pass through with no copy."""
+    return mask if mask.dtype == torch.bool else mask != 0
+
+
 def _lik_group_scores(
     queries: torch.Tensor,
     documents: torch.Tensor,
@@ -61,11 +66,11 @@ def _lik_group_scores(
     from late_interaction_kernels.autograd import maxsim
 
     batch, n_slots = documents.shape[0], documents.shape[1]
-    q_mask = None if queries_mask is None else queries_mask != 0
+    q_mask = None if queries_mask is None else _as_bool(queries_mask)
     per_group: list[torch.Tensor] = []
     for slot in range(n_slots):
         per_group.append(
-            maxsim(queries, documents[:, slot], q_mask=q_mask, d_mask=documents_mask[:, slot] != 0)
+            maxsim(queries, documents[:, slot], q_mask=q_mask, d_mask=_as_bool(documents_mask[:, slot]))
         )
     return torch.stack(per_group, dim=2).reshape(-1, batch * n_slots)
 
@@ -135,17 +140,18 @@ def _make_step_timer():
 def _replay_op_isolated(fn: GroupScoresFn, record: dict) -> dict:
     """Replay one recorded ``score_metric`` call on fresh random embeddings whose graph
     contains only the scoring op, so the forward/saved/backward peaks bracket exactly.
-    Masks are replayed as all-ones of the recorded shapes (allocation-identical to the
-    real skiplist masks). Returns MiB deltas, or an OOM marker."""
+    Masks are replayed as all-True bool tensors of the recorded shapes — the dtype
+    ``extract_skiplist_mask`` produces, so the lik path's pass-through (no ``!= 0``
+    copy) matches training. Returns MiB deltas, or an OOM marker."""
     dtype = getattr(torch, record["dtype"].removeprefix("torch."))
     queries = torch.randn(record["queries_shape"], dtype=dtype, device="cuda", requires_grad=True)
     documents = torch.randn(record["documents_shape"], dtype=dtype, device="cuda", requires_grad=True)
     queries_mask = (
-        torch.ones(record["queries_mask_shape"], dtype=dtype, device="cuda")
+        torch.ones(record["queries_mask_shape"], dtype=torch.bool, device="cuda")
         if record.get("queries_mask_shape")
         else None
     )
-    documents_mask = torch.ones(record["documents_mask_shape"], dtype=dtype, device="cuda")
+    documents_mask = torch.ones(record["documents_mask_shape"], dtype=torch.bool, device="cuda")
 
     torch.cuda.synchronize()
     before_forward_bytes = torch.cuda.memory_allocated()

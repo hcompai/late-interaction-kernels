@@ -17,6 +17,7 @@ Usage:
 import argparse
 import glob
 import json
+import math
 from pathlib import Path
 
 VARIANTS = ("vanilla", "lik")
@@ -44,6 +45,7 @@ def _load_cells(results_dir: Path) -> dict[tuple[int, str], dict]:
             "saved": summary["max_saved_for_backward_mib"],
             "bwd": summary["max_backward_transient_peak_mib"],
             "step_peak": data["step_peak_alloc_mib"],
+            "step_reserved": data["step_peak_reserved_mib"],
             "oom": data["oom"],
             "oom_message": data.get("oom_message"),
         }
@@ -77,7 +79,9 @@ def _print_op_vram_table(batch_sizes: list[int], cells: dict[tuple[int, str], di
 
 
 def _print_batch_ceiling_table(batch_sizes: list[int], cells: dict[tuple[int, str], dict]) -> None:
-    print("\n## Batch-size ceiling (whole-step peak alloc)\n")
+    # Fragmentation is a reserved-vs-alloc story (the colpali B=128 OOM is a small
+    # request failing with ~25 GiB reserved-but-unallocated), so show both.
+    print("\n## Batch-size ceiling (whole-step peak alloc / reserved)\n")
     print("| batch size | vanilla | LIK |")
     print("| --- | --- | --- |")
     for batch in batch_sizes:
@@ -87,9 +91,9 @@ def _print_batch_ceiling_table(batch_sizes: list[int], cells: dict[tuple[int, st
             if cell is None or cell.get("crashed"):
                 row.append("crashed" if cell else "n/a")
             elif cell["oom"]:
-                row.append(f"OOM ({_fmt_mib(cell['step_peak'])} pre-OOM)")
+                row.append(f"OOM ({_fmt_mib(cell['step_peak'])} / {_fmt_mib(cell['step_reserved'])} pre-OOM)")
             else:
-                row.append(_fmt_mib(cell["step_peak"]))
+                row.append(f"{_fmt_mib(cell['step_peak'])} / {_fmt_mib(cell['step_reserved'])}")
         print("| " + " | ".join(row) + " |")
 
     for batch in batch_sizes:
@@ -121,9 +125,14 @@ def _write_plot(plot_path: Path, batch_sizes: list[int], cells: dict[tuple[int, 
     ax.set_ylabel("MaxSim op VRAM: held + backward spike\n(log scale)")
     ax.set_title("VRAM attributable to the MaxSim op")
     ax.grid(True, which="both", alpha=0.3)
-    # Slope annotations: vanilla quadruples per doubling (B² score grid), LIK doubles (grad_D).
+    # Slope annotations derived from the data so a drifting run can't end up with a
+    # figure asserting a scaling the points don't show. Expected: vanilla ~×4 per
+    # doubling (B² score grid), LIK ~×2 (grad_D, linear).
+    doublings = math.log2(plotted[-1] / plotted[-2])
+    vanilla_rate = (vanilla_totals[-1] / vanilla_totals[-2]) ** (1 / doublings)
+    lik_rate = (lik_totals[-1] / lik_totals[-2]) ** (1 / doublings)
     ax.annotate(
-        "×4 per doubling (B²)",
+        f"×{vanilla_rate:.1f} per doubling (B² grid)",
         xy=(plotted[-2], vanilla_totals[-2]),
         xytext=(-10, 14),
         textcoords="offset points",
@@ -131,7 +140,7 @@ def _write_plot(plot_path: Path, batch_sizes: list[int], cells: dict[tuple[int, 
         ha="right",
     )
     ax.annotate(
-        "×2 per doubling (grad_D, linear)",
+        f"×{lik_rate:.1f} per doubling (grad_D, linear)",
         xy=(plotted[-2], lik_totals[-2]),
         xytext=(-10, 14),
         textcoords="offset points",
