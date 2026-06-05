@@ -104,7 +104,7 @@ working set is bounded by the output and ranges from a few KB to
 
 `flash-maxsim` (Roi Pony / IBM) was the first public Triton MaxSim
 kernel and the direct inspiration for this library. The numbers below
-come from `bench_flash_maxsim.py`. `flash-maxsim` 0.2.1 has no
+come from `benchmarks/kernels/bench_flash_maxsim.py`. `flash-maxsim` 0.2.1 has no
 `normalize=True` knob and no autograd-aware backward, so we report
 plain forward only.
 
@@ -146,7 +146,7 @@ axis into fixed 128-token chunks and summing the per-chunk scores is
 numerically exact, and launches more, shorter programs that keep the H100
 busy. It fires only above a measured crossover (`Lq > 512`); shorter
 queries fall through to the existing core unchanged. From
-`bench_chunking.py`:
+`benchmarks/kernels/bench_chunking.py`:
 
 | shape                                  | un-chunked | chunked  | speedup  | vs flash |
 | -------------------------------------- | ---------- | -------- | -------- | -------- |
@@ -262,7 +262,7 @@ the same Triton kernel one precision step up. No requantization of
 PLAID index can ship fp8 directly), so the speedup below isolates the
 \"swap bf16 tensor cores for fp8 tensor cores\" win.
 
-From `bench_fp8.py`:
+From `benchmarks/kernels/bench_fp8.py`:
 
 
 | shape                                       | bf16     | fp8      | speedup   | label              |
@@ -366,8 +366,10 @@ that's the story this section tells. Numbers apply equally to
 `lightonai/LateOn-Code` (same backbone, `d=128`).
 
 MaxSim only (one `colbert_scores` call, fp16 inputs + fp32
-accumulator, `auto` backward). Parity vs the fp32-acc naive reference
-is asserted before timing on every shape that fits in HBM:
+accumulator, `auto` backward), from
+`benchmarks/kernels/bench_longdoc.py` (formerly `bench_lateon.py`).
+Parity vs the fp32-acc naive reference is asserted before timing on
+every shape that fits in HBM:
 
 
 | shape                                     | fwd LIK | fwd naive | bwd LIK | bwd naive | peak LIK | peak naive |
@@ -463,7 +465,8 @@ and is queued for investigation in 0.3.1 (see CHANGELOG).
 
 ## End-to-end PyLate training (GTE-ModernColBERT-v1)
 
-The PyLate sibling of the ColQwen2 harness below (`bench_pylate_e2e.py`, same
+The PyLate sibling of the ColQwen2 harness below
+(`benchmarks/pylate/bench_pylate_e2e.py`, same
 instrumentation/replay/OOM-as-outcome design): real
 `SentenceTransformerTrainer` steps with `lightonai/GTE-ModernColBERT-v1`
 (ModernBERT 149 M, `d=128`, `Lq=48`, `Ld=300` fixed-pad) + `Contrastive` on
@@ -523,7 +526,7 @@ Reproduce: `sky launch scripts/sky_pylate_e2e.yaml`, then
 ## End-to-end ColQwen2 / ColPali training
 
 Real colpali-engine training recipe, instrumented at the MaxSim op
-(`bench_colpali_e2e.py`, adapted from the harness in
+(`benchmarks/colpali/bench_colpali_e2e.py`, adapted from the harness in
 [colpali PR #412](https://github.com/illuin-tech/colpali/pull/412)):
 `vidore/colqwen2-base` (Qwen2-VL 2 B backbone) + LoRA r=32 via the release's
 own `ColModelTrainingConfig`, `ColbertPairwiseCELoss`, grad-checkpointing,
@@ -588,7 +591,7 @@ plot from the per-cell JSONs.
 
 Like the cached-contrastive isolation above, this strips the encoder
 and times just the explicit-negative loss head's forward+backward on
-synthetic embeddings (`bench_colpali_loss.py`, H100, bf16,
+synthetic embeddings (`benchmarks/colpali/bench_colpali_loss.py`, H100, bf16,
 `Lq=32, Ld=1030` ≈ ColPali visual tokens, `in_batch_term_weight=0`
 to isolate the pos/neg path this fuses). Vanilla runs the
 `einsum → amax → sum`; LIK runs `maxsim_pairs` (positives) + 4-D
@@ -624,7 +627,8 @@ at all.)
 ## Edge models (`d ∈ {48, 64}`)
 
 Edge ColBERT models (`d ∈ {48, 64}`) are more memory-bound, so the
-fused kernel widens its lead. From `bench_inference_edge.py`:
+fused kernel widens its lead. From
+`benchmarks/kernels/bench_inference_edge.py`:
 
 
 | shape                                       | fused    | naive (fp32) | speedup   | fused mem | naive mem |
