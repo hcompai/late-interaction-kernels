@@ -165,12 +165,14 @@ def test_patched_falls_back_on_cpu():
 
 
 def test_contrastive_loss_uses_patched_scores():
-    """Verify `patch_pylate()` propagates into `pylate.losses.contrastive`.
+    """Verify `patch_pylate()` reaches the path `Contrastive` scores through.
 
-    (Historical name kept "flash" — there is no FlashAttention here, just
-    the fused Triton MaxSim kernel.)
+    PyLate <= 1.4 losses capture `colbert_scores` at import time; 1.5 losses
+    route through `ColBERTScores`, which resolves the symbol from the defining
+    module's globals at call time. Assert whichever reference this version uses.
     """
     from late_interaction_kernels.pylate_compat import (
+        _scores_defining_module,
         patch_pylate,
         patched_colbert_scores,
         unpatch_pylate,
@@ -180,16 +182,21 @@ def test_contrastive_loss_uses_patched_scores():
     try:
         import pylate.losses.contrastive as c
 
-        assert c.colbert_scores is patched_colbert_scores
+        defining, new_layout = _scores_defining_module()
+        if new_layout:
+            assert defining.colbert_scores is patched_colbert_scores
+        else:
+            assert c.colbert_scores is patched_colbert_scores
     finally:
         unpatch_pylate()
 
 
 def test_cached_contrastive_loss_uses_patched_scores():
     """`CachedContrastive` is the LightOn Reason-ModernColBERT training recipe —
-    it chunks MaxSim via the `score_metric` parameter (default `colbert_scores`).
-    Make sure our patch intercepts that import too."""
+    it chunks MaxSim via the `score_metric` parameter. Make sure our patch
+    intercepts the reference this PyLate version's loss actually calls."""
     from late_interaction_kernels.pylate_compat import (
+        _scores_defining_module,
         patch_pylate,
         patched_colbert_scores,
         unpatch_pylate,
@@ -199,7 +206,11 @@ def test_cached_contrastive_loss_uses_patched_scores():
     try:
         import pylate.losses.cached_contrastive as cc
 
-        assert cc.colbert_scores is patched_colbert_scores
+        defining, new_layout = _scores_defining_module()
+        if new_layout:
+            assert defining.colbert_scores is patched_colbert_scores
+        else:
+            assert cc.colbert_scores is patched_colbert_scores
     finally:
         unpatch_pylate()
 
@@ -225,19 +236,27 @@ def test_unpatch_restores_original():
     """`unpatch_pylate()` must restore PyLate's original refs everywhere."""
     from pylate.scores import colbert_scores as original_fn
 
-    from late_interaction_kernels.pylate_compat import patch_pylate, unpatch_pylate
+    from late_interaction_kernels.pylate_compat import (
+        _scores_defining_module,
+        patch_pylate,
+        unpatch_pylate,
+    )
 
     patch_pylate()
     unpatch_pylate()
 
-    import pylate.losses.cached_contrastive as cc
-    import pylate.losses.contrastive as c
     import pylate.losses.distillation as dd
     from pylate.scores import colbert_scores as restored_fn
 
     assert restored_fn is original_fn
-    assert c.colbert_scores is original_fn
-    assert cc.colbert_scores is original_fn
+    defining, new_layout = _scores_defining_module()
+    assert defining.colbert_scores is original_fn
+    if not new_layout:
+        import pylate.losses.cached_contrastive as cc
+        import pylate.losses.contrastive as c
+
+        assert c.colbert_scores is original_fn
+        assert cc.colbert_scores is original_fn
     # distillation captures colbert_kd_scores; make sure that's restored too.
     from pylate.scores import colbert_kd_scores as original_kd_fn
 

@@ -24,7 +24,7 @@ stack above by the SkyPilot jobs in `scripts/` (see
 | package          | version       | role on this page                              |
 | ---------------- | ------------- | ---------------------------------------------- |
 | `flash-maxsim`   | `0.2.1`       | forward head-to-head and the chunking "vs flash" column |
-| `pylate`         | `1.3.3`       | vanilla-PyLate end-to-end baselines (1.5+ broke `patch_pylate`'s `(queries_mask, documents_mask)` signature, so the sweep pins 1.3.3) |
+| `pylate`         | `1.5.0`       | vanilla-PyLate end-to-end baselines (older tables on this page were produced against `1.3.3`; `patch_pylate()` supports both layouts) |
 | `fast-plaid`     | `1.4.6.280`   | PLAID rerank vs `engine.search()` (the `.280` suffix is the torch-2.8 wheel) |
 | `colpali-engine` | `0.3.16`      | ColQwen2 / ColPali end-to-end (`ColbertPairwiseCE`) and loss isolation |
 
