@@ -149,8 +149,10 @@ def _build_training_config(model_name: str, batch_size: int, max_steps: int, n_s
 def _make_fixed_trainer_cls():
     """A ``ContrastiveTrainer`` subclass fixing two v0.3.16 bugs under transformers 5.x.
 
-    Both fixes landed upstream in colpali PR #412 but are unreleased; remove this shim
-    once colpali-engine > 0.3.16 ships them.
+    TODO(colpali#412): once the PR merges and a colpali-engine release ships it,
+    drop this shim and toggle variants via ``COLPALI_SCORES_BACKEND`` instead of
+    ``patch_colpali_engine()`` (the LIK-side patches retire in favor of the
+    native integration).
     """
     from colpali_engine.trainer.contrastive_trainer import ContrastiveTrainer
     from transformers import Trainer
