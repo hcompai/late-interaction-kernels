@@ -167,10 +167,58 @@ def _write_plot(plot_path: Path, batch_sizes: list[int], cells: dict[tuple[int, 
     print(f"\nWrote plot to {plot_path}")
 
 
+def _write_ceiling_plot(plot_path: Path, batch_sizes: list[int], cells: dict[tuple[int, str], dict]) -> None:
+    """The batch-sweep figure from colpali PR #412: whole-step peak per variant,
+    identical while both fit, hatched where a variant OOMs."""
+    # Imported here so the tables work in a venv without matplotlib.
+    import matplotlib.pyplot as plt
+
+    plotted = [
+        b for b in batch_sizes if all((b, v) in cells and not cells[(b, v)].get("crashed") for v in VARIANTS)
+    ]
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    positions = range(len(plotted))
+    width = 0.38
+    colors = {"vanilla": "tab:red", "lik": "tab:green"}
+    for offset, variant in zip((-width / 2, width / 2), VARIANTS, strict=True):
+        peaks = [cells[(b, variant)]["step_peak"] / 1024 for b in plotted]
+        ooms = [cells[(b, variant)]["oom"] for b in plotted]
+        bars = ax.bar(
+            [p + offset for p in positions],
+            peaks,
+            width,
+            color=colors[variant.split("-")[0]],
+            label=f"{variant} (hatched = OOM)",
+        )
+        for bar, oom in zip(bars, ooms, strict=True):
+            if oom:
+                bar.set_hatch("//")
+                bar.set_alpha(0.45)
+                ax.annotate(
+                    "OOM",
+                    xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=9,
+                    color="black",
+                )
+    ax.set_xticks(list(positions), [str(b) for b in plotted])
+    ax.set_xlabel("per-device batch size")
+    ax.set_ylabel("whole-step peak allocated VRAM (GiB)")
+    ax.set_title("Batch-size ceiling (OOM bars show the pre-OOM peak)")
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(plot_path, dpi=150)
+    print(f"\nWrote ceiling plot to {plot_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--plot", type=Path, default=None)
+    parser.add_argument("--ceiling-plot", type=Path, default=None)
     parser.add_argument(
         "--regime",
         choices=["plain", "ckpt"],
@@ -192,6 +240,8 @@ def main() -> None:
 
     if args.plot is not None:
         _write_plot(args.plot, batch_sizes, cells)
+    if args.ceiling_plot is not None:
+        _write_ceiling_plot(args.ceiling_plot, batch_sizes, cells)
 
 
 if __name__ == "__main__":

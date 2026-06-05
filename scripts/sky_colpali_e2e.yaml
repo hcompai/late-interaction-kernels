@@ -13,7 +13,8 @@
 # Results: benchmarks/results/colpali_e2e_b<B>_<variant>.json (also echoed to the log).
 # Pull:    rsync -avP 'lik-colpali-e2e:sky_workdir/benchmarks/results/' ./benchmarks/results/
 # Tables:  python benchmarks/summarize_colpali_e2e.py --results-dir benchmarks/results \
-#              --plot benchmarks/results/colpali_e2e_vram.png
+#              --plot benchmarks/results/colpali_e2e_vram.png \
+#              --ceiling-plot benchmarks/results/colpali_e2e_ceiling.png
 
 name: lik-colpali-e2e
 
