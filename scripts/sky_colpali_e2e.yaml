@@ -1,0 +1,138 @@
+# E2E ColQwen2 training sweep: per-op MaxSim VRAM + batch-size ceiling, vanilla vs LIK.
+#
+#   sky launch scripts/sky_colpali_e2e.yaml -c lik-colpali-e2e -y
+#
+# For each (batch size, variant) cell, benchmarks/bench_colpali_e2e.py runs a few
+# real ColQwen2 + LoRA training steps on a subset of vidore/colpali_train_set with
+# the loss head instrumented (per-call forward peak and bytes held for backward),
+# then replays each recorded shape on an isolated graph to bracket the op's
+# backward exactly. Fresh process per cell so a CUDA OOM is isolated; the bench
+# catches OOM and writes an {"oom": true} marker (exit 0) with the calls recorded
+# so far. Adapted from the harness in colpali PR #412.
+#
+# Results: benchmarks/results/colpali_e2e_b<B>_<variant>.json (also echoed to the log).
+# Pull:    rsync -avP 'lik-colpali-e2e:sky_workdir/benchmarks/results/' ./benchmarks/results/
+# Tables:  python benchmarks/summarize_colpali_e2e.py --results-dir benchmarks/results \
+#              --plot benchmarks/results/colpali_e2e_vram.png \
+#              --ceiling-plot benchmarks/results/colpali_e2e_ceiling.png
+
+name: lik-colpali-e2e
+
+resources:
+  infra: kubernetes
+  image_id: docker:nvidia/cuda:12.9.2-runtime-ubuntu24.04
+  accelerators: H100:1
+  cpus: 16+
+  memory: 64+
+
+workdir: .
+
+envs:
+  # Required when launching from a git worktree — the `.git` file points at a
+  # host path that doesn't exist on the SkyPilot node, so hatch-vcs can't infer
+  # a version. Placeholder; never escapes the host.
+  SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+  HF_HOME: /tmp/hf_home
+  # Space-separated per-device batch sizes to sweep.
+  BATCH_SIZES: "16 32 64 128"
+  # Set to 1 to also run the MaxSim loss-head isolation sweep (no encoder).
+  RUN_LOSS_ISOLATION: "0"
+
+setup: |
+  set -eux
+  cd ~/sky_workdir
+  # Bare CUDA image: no Python, no curl. Bootstrap uv; uv manages its own Python.
+  apt-get update -y
+  apt-get install -y --no-install-recommends curl ca-certificates
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv sync --frozen --extra dev --extra torch-cuda
+  # colpali-engine can't share the cu124 sync (torchvision ABI), so install it
+  # directly, pinning torch+torchvision to cu128 builds whose libcudart.so.12
+  # the CUDA 12.9 container provides (PyPI torchvision needs CUDA 13).
+  # 0.3.16 pulls transformers>=5.3,<6 and peft; accelerate backs the HF Trainer.
+  uv pip install "colpali-engine==0.3.16" accelerate datasets pillow \
+      "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
+      --extra-index-url https://download.pytorch.org/whl/cu128
+  # torchvision +cu128's _C.so is compiled against a different torch ABI, so it
+  # fails to load with "undefined symbol". ColQwen2 never touches torchvision
+  # ops, but `import torchvision` (pulled transitively by colpali_engine)
+  # eagerly imports _meta_registrations, which needs that extension. Make the
+  # import optional so torchvision loads.
+  uv run python - << 'PYEOF'
+  import glob
+  hits = glob.glob(
+      "/root/sky_workdir/.venv/lib/python3.*/site-packages/torchvision/__init__.py"
+  )
+  if not hits:
+      print("WARNING: torchvision/__init__.py not found — skipping patch")
+  else:
+      tv_init = hits[0]
+      with open(tv_init) as f:
+          src = f.read()
+      old = (
+          "from torchvision import _meta_registrations, datasets, io, models, "
+          "ops, transforms, utils  # usort:skip"
+      )
+      new = (
+          "from torchvision import datasets, io, models, ops, transforms, utils  # usort:skip\n"
+          "try:\n"
+          "    from torchvision import _meta_registrations  # noqa: F401\n"
+          "except Exception:\n"
+          "    pass  # _C.so ABI mismatch: NMS meta registration unavailable"
+      )
+      if old in src:
+          with open(tv_init, "w") as f:
+              f.write(src.replace(old, new, 1))
+          print("patched torchvision/__init__.py: _meta_registrations import is optional")
+      else:
+          print("WARNING: expected __init__.py line not found — torchvision version differs")
+  PYEOF
+  # Sanity check: GPU visible + model/processor/loss/patcher all hydrate.
+  uv run python -c "
+  import torch
+  from colpali_engine.loss.late_interaction_losses import ColbertPairwiseCELoss
+  from colpali_engine.models import ColQwen2Processor
+  from late_interaction_kernels import patch_colpali_engine, unpatch_colpali_engine
+  print('gpu', torch.cuda.get_device_name(), '| torch', torch.__version__)
+  proc = ColQwen2Processor.from_pretrained('vidore/colqwen2-base', max_num_visual_tokens=768)
+  print('processor ok', type(proc).__name__)
+  patch_colpali_engine(); unpatch_colpali_engine()
+  print('patcher ok')
+  "
+
+run: |
+  set -uxo pipefail
+  cd ~/sky_workdir
+  export PATH="$HOME/.local/bin:$PATH"
+  export LIK_SUPPRESS_NORM_WARN=1
+
+  mkdir -p benchmarks/results
+  emit() { echo "=================== RESULT $1 ==================="; cat "$1"; echo; echo "=================== END $1 ==================="; }
+
+  for B in $BATCH_SIZES; do
+    for VARIANT in vanilla lik; do
+      out="benchmarks/results/colpali_e2e_b${B}_${VARIANT}.json"
+      echo "==================================================="
+      echo "batch_size=$B · variant=$VARIANT"
+      echo "==================================================="
+      # bench_colpali_e2e exits 0 on OOM (writes an oom marker). A non-zero exit
+      # is a real crash; record it so the sweep keeps going.
+      uv run python benchmarks/bench_colpali_e2e.py \
+        --variant "$VARIANT" --batch-size "$B" --max-steps 4 \
+        --output "$out" \
+        || printf '{"batch_size": %s, "variant": "%s", "crashed": true}\n' "$B" "$VARIANT" > "$out"
+      emit "$out"
+    done
+  done
+
+  if [ "${RUN_LOSS_ISOLATION}" = "1" ]; then
+    echo "=============================================================="
+    echo "  MaxSim isolation — explicit-negative loss heads (no encoder)"
+    echo "=============================================================="
+    uv run python benchmarks/bench_colpali_loss.py --sweep \
+      2>&1 | tee benchmarks/results/loss_isolation.log
+  fi
+
+  echo "Done. Results in benchmarks/results/colpali_e2e_*.json"
+  ls -la benchmarks/results/

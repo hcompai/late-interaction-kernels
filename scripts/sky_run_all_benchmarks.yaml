@@ -9,6 +9,8 @@
 # Skipped sections (kept as-is in docs):
 #   * Apple Silicon (MPS) — needs an Apple device, not H100.
 #   * 8-GPU DDP cached-contrastive — single-cluster budget.
+#   * ColQwen2 e2e training — needs the out-of-band colpali-engine install;
+#     run scripts/sky_colpali_e2e.yaml instead.
 
 name: lik-bench-all
 
@@ -25,8 +27,7 @@ envs:
   # Space-separated subset of bench tags to run; empty means "run all".
   # Tags: forward, inference_edge, normalize, backward_method, lateon,
   #       cached_maxsim, flash_maxsim, fp8, fused_head_train,
-  #       pylate_training, pylate_lateon, decompress_maxsim,
-  #       fastplaid_e2e, pylate_realdata.
+  #       decompress_maxsim, fastplaid_e2e.
   # Smoke-test the README numbers with:
   #   sky launch --env RUN_ONLY="forward cached_maxsim fused_head_train fp8" ...
   RUN_ONLY: ""
@@ -83,31 +84,6 @@ run: |
   should_run fp8              && run python benchmarks/bench_fp8.py              --outdir "$OUT" 2>&1 | tee "$OUT/fp8.log"
   should_run fused_head_train && run python benchmarks/bench_fused_head_train.py --outdir "$OUT" 2>&1 | tee "$OUT/fused_head_train.log"
 
-  # --- end-to-end PyLate Contrastive sweep (table 9) -------------------------
-  if should_run pylate_training; then
-    for bs_neg in "64 1" "128 2" "256 3"; do
-      set -- $bs_neg
-      bs=$1; neg=$2
-      run python benchmarks/bench_pylate_training.py \
-          --batch-size $bs --neg $neg --lq 32 --ld 200 --d 128 \
-          2>&1 | tee "$OUT/pylate_training_bs${bs}_neg${neg}.log"
-    done
-  fi
-
-  # --- end-to-end LateOn-Code-edge training (table 7) ------------------------
-  if should_run pylate_lateon; then
-    for shape in "256 256" "192 512" "128 1024" "64 2048"; do
-      set -- $shape
-      bs=$1; ld=$2
-      run python benchmarks/bench_pylate_lateon.py \
-          --model lightonai/LateOn-Code-edge \
-          --recipe contrastive \
-          --batch-size $bs --Lq 32 --Ld $ld \
-          --iters 8 --warmup 2 --outdir "$OUT" \
-          2>&1 | tee "$OUT/lateon_edge_bs${bs}_ld${ld}.log"
-    done
-  fi
-
   # --- PLAID decompress + maxsim (memory/perf table in PLAID section) --------
   should_run decompress_maxsim && run python benchmarks/bench_decompress_maxsim.py --nbits 2 --dtype bf16 --outdir "$OUT" \
       2>&1 | tee "$OUT/decompress_nb2_bf16.log"
@@ -115,30 +91,6 @@ run: |
   # --- end-to-end fast-plaid comparison (PLAID main table) -------------------
   should_run fastplaid_e2e && run python benchmarks/bench_fastplaid_e2e.py --outdir "$OUT" \
       2>&1 | tee "$OUT/fastplaid_e2e.log"
-
-  # --- LateOn-Code-edge real-data training (real MS MARCO table) -------------
-  if should_run pylate_realdata; then
-    run python benchmarks/bench_pylate_realdata.py \
-        --model lightonai/LateOn-Code-edge \
-        --recipe contrastive \
-        --batch-size 16 --Lq 32 --Ld 256 \
-        --steps 20 --warmup 3 --outdir "$OUT" \
-        2>&1 | tee "$OUT/realdata_contrastive_bs16_ld256.log"
-
-    run python benchmarks/bench_pylate_realdata.py \
-        --model lightonai/LateOn-Code-edge \
-        --recipe reason \
-        --batch-size 64 --mini-batch-size 16 --Lq 32 --Ld 300 \
-        --steps 12 --warmup 3 --grad-checkpoint --outdir "$OUT" \
-        2>&1 | tee "$OUT/realdata_cached_bs64_ld300.log"
-
-    run python benchmarks/bench_pylate_realdata.py \
-        --model lightonai/LateOn-Code-edge \
-        --recipe reason \
-        --batch-size 128 --mini-batch-size 16 --Lq 32 --Ld 512 \
-        --steps 8 --warmup 2 --grad-checkpoint --outdir "$OUT" \
-        2>&1 | tee "$OUT/realdata_cached_bs128_ld512.log"
-  fi
 
   echo ""
   echo "=== artifacts ==="

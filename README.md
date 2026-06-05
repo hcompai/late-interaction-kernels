@@ -133,6 +133,8 @@ is asserted at `atol=1e-2` before timing.
 | Fused D-side head (training)                                | 1.5-4.5× on `Nd · Ld` large |
 | FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
 | LateOn-Code-edge training (real MS MARCO triplets)          | 1.00-1.06× e2e     |
+| ColQwen2 training, MaxSim-op VRAM at B=128 (real `colpali_train_set`) | 7.8 GiB → 61 MiB (**~130×**); 2× max batch |
+| PyLate `Contrastive` training, grad-ckpt (real MS MARCO)    | step peak 54 → 30 GiB at B=512; 2× max batch, 1.07-1.12× e2e |
 
 Full tables and reproduction commands
 live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench
@@ -159,6 +161,16 @@ Two things this buys you: long-context shapes (`Ld ≥ 8k`) that OOM the
 naive path at sane batch sizes run fine here, and at a fixed HBM budget
 you fit roughly 5–10× more in-batch negatives than vanilla PyLate. Full
 table in [`docs/benchmarks.md`](docs/benchmarks.md#memory).
+
+In real ColQwen2 training that B²-growing score grid is exactly what caps
+the trainable batch: on an 80 GB H100 (LoRA + grad-checkpointing, real
+`vidore/colpali_train_set` pages) vanilla colpali-engine OOMs at
+`per_device_train_batch_size=128` — a 1.81 GiB contiguous request failing
+while 25 GiB sit reserved-but-unallocated, fragmentation caused by the
+7.8 GiB the MaxSim op holds and spikes — where the fused kernel's 61 MiB
+trains B=128 at full speed, doubling the batch ceiling at identical
+steady-state step time. Tables and harness in
+[`docs/benchmarks.md`](docs/benchmarks.md#end-to-end-colqwen2--colpali-training).
 
 The backward keeps the same discipline. `auto` routes the gradient-heavy
 shapes — knowledge-distillation / hard-negative layouts and large in-batch

@@ -188,10 +188,38 @@ def patched_colbert_scores_pairwise(
     return maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 
 
+def _scores_defining_module():
+    """The module where ``colbert_scores`` is defined — PyLate 1.5 renamed it
+    (``scores.scores`` → ``scores.colbert``) and rerouted the contrastive losses
+    through ``ColBERTScores``, which resolves the symbol from these module
+    globals at call time — so on the new layout, patching here covers the loss
+    path and only ``Distillation`` keeps an import-time capture."""
+    try:
+        import pylate.scores.scores as defining  # type: ignore  # PyLate <= 1.4
+
+        return defining, False
+    except ImportError:
+        import pylate.scores.colbert as defining  # type: ignore  # PyLate >= 1.5
+
+        return defining, True
+
+
+def _loss_capture_targets(new_layout: bool) -> tuple[tuple[str, str], ...]:
+    """Loss modules that captured a scoring symbol at import time, per layout."""
+    if new_layout:
+        return (("pylate.losses.distillation", "colbert_kd_scores"),)
+    return (
+        ("pylate.losses.contrastive", "colbert_scores"),
+        ("pylate.losses.cached_contrastive", "colbert_scores"),
+        ("pylate.losses.distillation", "colbert_kd_scores"),
+    )
+
+
 def patch_pylate():
     """Install the fused kernel as the default MaxSim across ``pylate.scores`` and PyLate's loss modules."""
     import pylate.scores as api  # type: ignore
-    import pylate.scores.scores as s  # type: ignore
+
+    s, new_layout = _scores_defining_module()
 
     if "colbert_scores" in _ORIGINAL:
         return  # already patched
@@ -212,18 +240,14 @@ def patch_pylate():
         s.colbert_scores_pairwise = patched_colbert_scores_pairwise
         api.colbert_scores_pairwise = patched_colbert_scores_pairwise
 
-    # PyLate loss modules capture `colbert_scores` at import time; patch
+    # Some PyLate loss modules capture a scoring symbol at import time; patch
     # those references too. Warn if any are unreachable so users notice
     # silent fallbacks after a future PyLate refactor.
     import importlib
     import warnings
 
     missed: list[str] = []
-    for mod_name, attr in (
-        ("pylate.losses.contrastive", "colbert_scores"),
-        ("pylate.losses.cached_contrastive", "colbert_scores"),
-        ("pylate.losses.distillation", "colbert_kd_scores"),
-    ):
+    for mod_name, attr in _loss_capture_targets(new_layout):
         try:
             mod = importlib.import_module(mod_name)
             if not hasattr(mod, attr):
@@ -257,7 +281,8 @@ def unpatch_pylate():
         return
 
     import pylate.scores as api  # type: ignore
-    import pylate.scores.scores as s  # type: ignore
+
+    s, new_layout = _scores_defining_module()
 
     s.colbert_scores = _ORIGINAL["colbert_scores"]
     s.colbert_kd_scores = _ORIGINAL["colbert_kd_scores"]
@@ -267,16 +292,12 @@ def unpatch_pylate():
         s.colbert_scores_pairwise = _ORIGINAL["colbert_scores_pairwise"]
         api.colbert_scores_pairwise = _ORIGINAL["colbert_scores_pairwise"]
 
-    for mod_name, attr, orig_key in (
-        ("pylate.losses.contrastive", "colbert_scores", "colbert_scores"),
-        ("pylate.losses.cached_contrastive", "colbert_scores", "colbert_scores"),
-        ("pylate.losses.distillation", "colbert_kd_scores", "colbert_kd_scores"),
-    ):
+    for mod_name, attr in _loss_capture_targets(new_layout):
         try:
             import importlib
 
             mod = importlib.import_module(mod_name)
-            setattr(mod, attr, _ORIGINAL[orig_key])
+            setattr(mod, attr, _ORIGINAL[attr])
         except Exception:
             pass
 

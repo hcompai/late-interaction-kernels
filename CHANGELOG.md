@@ -4,6 +4,72 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`bench_colpali_e2e.py` — a real-recipe ColQwen2 e2e training benchmark.**
+  Adapted from the harness in
+  [colpali PR #412](https://github.com/illuin-tech/colpali/pull/412): a few
+  real `ColModelTraining` steps (ColQwen2 + LoRA r=32,
+  `ColbertPairwiseCELoss`, grad-checkpointing, bf16) on a subset of
+  `vidore/colpali_train_set`, with the loss head instrumented to record
+  per-MaxSim-call VRAM in-train and replay each recorded shape on an isolated
+  graph (exact forward/saved/backward brackets). OOM is a recorded sweep
+  outcome, not a crash. `--variant vanilla|lik` toggles
+  `patch_colpali_engine()`. `summarize_colpali_e2e.py` renders the op-VRAM
+  table, the batch-size-ceiling table, and a log-log plot;
+  `scripts/sky_colpali_e2e.yaml` drives the sweep (fresh process per cell)
+  and is the new orchestration home for `bench_colpali_loss.py --sweep`.
+  Targets released colpali-engine 0.3.16 and shims its two
+  `ContrastiveTrainer` bugs under transformers 5.x (`_get_train_sampler`
+  signature; single-dataset loss prefixes), both fixed upstream in PR #412
+  but unreleased. Measured on 1×H100 80 GB, the harness reproduces the PR's
+  numbers to the MiB: the MaxSim op costs vanilla 7.81 GiB of VRAM at B=128
+  vs 61 MiB with LIK (~130×, ×4 vs ×2 per batch doubling), step time at
+  parity, and vanilla OOMs at B=128 (fragmentation: a 1.81 GiB request with
+  25 GiB reserved-but-unallocated) where LIK trains it — 2× batch headroom.
+  `docs/benchmarks.md`'s ColQwen2 section now carries these tables; the
+  v0.4.x per-loss-head step-time table they supersede is summarized there.
+
+- **`bench_pylate_e2e.py` — the PyLate sibling of the ColQwen2 harness.**
+  Same per-call instrumentation / isolated replay / OOM-as-outcome design,
+  on the real PyLate recipe: `SentenceTransformerTrainer` +
+  `GTE-ModernColBERT-v1` + `Contrastive` on MS MARCO triplets, vanilla vs
+  `patch_pylate()` per cell (`scripts/sky_pylate_e2e.yaml`,
+  `summarize_pylate_e2e.py`). Sweeps two regimes — the canonical recipe and
+  `--grad-checkpoint` (the regime matching the ColQwen2 bench, where the
+  encoder term shrinks enough for the B² score transient to bind) — plus
+  `--score-mini-batch-size` cells covering PyLate's own chunking mitigation.
+  Measured on 1×H100 80 GB (grad-ckpt regime): vanilla OOMs at B=1024 on a
+  single 56.25 GiB grid allocation where LIK trains it at 4.81 s/step; step
+  peak 54.1 → 29.7 GiB at B=512; LIK runs 1.07–1.12× faster per step than
+  vanilla and 1.25× faster than PyLate's `score_mini_batch_size` chunking
+  at matched B=1024. On the canonical no-ckpt recipe the encoder
+  activations cap the batch at B=128 before MaxSim matters — every variant
+  OOMs at B=256 alike. Tables in `docs/benchmarks.md`.
+
+### Fixed
+
+- **`patch_pylate()` works on PyLate 1.5 again.** 1.5 renamed the scoring
+  module (`pylate.scores.scores` → `pylate.scores.colbert`) and rerouted the
+  contrastive losses through `ColBERTScores`, which resolves
+  `colbert_scores` from module globals at call time; the patch now detects
+  the layout, patches the defining module (covering the loss path), and
+  rewrites only `Distillation`'s import-time capture on 1.5. The pylate
+  extra's `>=1.3.3,<2` range is accurate again — no more 1.3.3 pin.
+
+### Removed
+
+- The previous e2e training benches — `bench_colpali_training.py`,
+  `bench_colpali_realdata.py` (synthetic images / DocVQA *eval* subset,
+  hand-rolled step loops) and `bench_pylate_training.py`,
+  `bench_pylate_realdata.py`, `bench_pylate_lateon.py` — plus their shared
+  `_bench_common.py` and the `sky_colpali_benchmark.yaml` /
+  `sky_pylate_benchmark.yaml` jobs. The historical numbers they produced stay
+  in `docs/benchmarks.md`; `bench_colpali_loss.py` (loss-head isolation) is
+  kept.
+
 ## [0.4.1] - 2026-06-03
 
 ### Fixed
