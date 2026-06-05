@@ -26,13 +26,13 @@ stack above by the SkyPilot jobs in `scripts/` (see
 | `flash-maxsim`   | `0.2.1`       | forward head-to-head and the chunking "vs flash" column |
 | `pylate`         | `1.3.3`       | vanilla-PyLate end-to-end baselines (1.5+ broke `patch_pylate`'s `(queries_mask, documents_mask)` signature, so the sweep pins 1.3.3) |
 | `fast-plaid`     | `1.4.6.280`   | PLAID rerank vs `engine.search()` (the `.280` suffix is the torch-2.8 wheel) |
-| `colpali-engine` | `>=0.3.10`    | ColQwen2 / ColPali end-to-end (`ColbertLoss`, `ColbertPairwiseCE`) |
+| `colpali-engine` | `0.3.16`      | ColQwen2 / ColPali end-to-end (`ColbertPairwiseCE`) and loss isolation |
 
 The ColQwen2 / ColPali section is the one exception to the stack above: its
 SkyPilot job pins `torch==2.11.0+cu128` / `torchvision==0.26.0+cu128` to satisfy
-`colpali-engine`'s dependency floor, so treat its absolute step times as
-same-row vanilla-vs-LIK ratios rather than cross-comparable with the other
-tables.
+`colpali-engine`'s dependency floor (0.3.16 requires `transformers>=5.3`), so
+treat its absolute step times as same-row vanilla-vs-LIK ratios rather than
+cross-comparable with the other tables.
 
 ## Fair-comparison protocol
 
@@ -456,50 +456,74 @@ Reading: on a 17 M encoder the transformer forward already swallows
 most of the step, so LIK lands in the 1.00–1.06× band across all three
 shapes. `bs=16, Ld=256` buys ~6 %; the two larger batches sit flat at
 ~1×. Same bottleneck story as the LateOn 149 M numbers from v0.1.0
-(`bench_pylate_lateon.py`), just shifted up the batch axis because the
-encoder is 9× smaller. The `bs=64, Ld=300` shape used to be the
+(measured with the since-removed `bench_pylate_lateon.py` harness), just
+shifted up the batch axis because the encoder is 9× smaller. The `bs=64, Ld=300` shape used to be the
 headline win (1.15× in 0.3.0); it regressed to ~1.00× in this sweep
 and is queued for investigation in 0.3.1 (see CHANGELOG).
 
 ## End-to-end ColQwen2 / ColPali training
 
-Real `colpali_engine.models.ColQwen2("vidore/colqwen2-v1.0")` (Qwen2-VL
-2 B backbone + LoRA, `d=128`, multi-vector image / query embeddings),
-LoRA-only training (37 M of 2 246 M params trainable — the official
-ColPali recipe via `peft.get_peft_model`), AdamW + bf16 weights. We
-swap `patch_colpali_engine()` on/off and time full optimizer steps
-(vision tower + text encoder forward + ColbertLoss + backward + step).
-Synthetic shapes and real `vidore/docvqa_test_subsampled` are both covered.
+Real colpali-engine training recipe, instrumented at the MaxSim op
+(`bench_colpali_e2e.py`, adapted from the harness in
+[colpali PR #412](https://github.com/illuin-tech/colpali/pull/412)):
+`vidore/colqwen2-base` (Qwen2-VL 2 B backbone) + LoRA r=32 via the release's
+own `ColModelTrainingConfig`, `ColbertPairwiseCELoss`, grad-checkpointing,
+bf16, real `vidore/colpali_train_set` pages (≤768 visual tokens each),
+colpali-engine `0.3.16` / `torch 2.11.0+cu128`. Each (batch size, variant)
+cell runs 4 optimizer steps in a fresh process; `lik` is one
+`patch_colpali_engine()` call, no other change. The wrapped loss records
+every MaxSim call's shapes and in-train footprint, then each recorded shape
+is replayed on an isolated graph where the op's forward/saved/backward
+brackets are exact (the replayed "held" numbers match the in-train ones to
+within ~1 MiB).
 
+Step time is **parity** — steady-state steps agree within noise at every
+batch that fits both (B=16: 1.47 vs 1.48 s, B=32: 2.43 vs 2.48 s,
+B=64: 4.72 vs 4.47 s; LIK's first step pays the one-time Triton autotune,
+which amortizes over a run). A ColQwen2 step is dominated by the 2 B-param
+doc/query towers, so the op-level speedup dilutes to ~1×, same story as the
+per-loss-head step-time table this harness replaced (0.91–1.02× across five
+loss heads in v0.4.x). What does *not* dilute is memory:
 
-| loss head           | setup                              | vanilla colpali_engine | + LIK     | speedup   | peak (v → f)     |
-| ------------------- | ---------------------------------- | ---------------------- | --------- | --------- | ---------------- |
-| `ColbertLoss`       | synth bs=4, 448px                  |  379.8 ms              |  375.8 ms | 1.01×     |  9.10 → 9.10 GB  |
-| `ColbertLoss`       | synth bs=8, 448px, grad-ckpt       |  931.5 ms              |  911.3 ms | 1.02×     |  5.74 → 5.74 GB  |
-| `ColbertPairwiseCE` | synth bs=4, 448px                  |  373.3 ms              |  386.1 ms | 0.97×     |  9.10 → 9.10 GB  |
-| `ColbertLoss`       | real DocVQA bs=4                   |  794.3 ms              |  781.4 ms | 1.02×     | 16.20 → 16.20 GB |
-| `ColbertLoss`       | real DocVQA bs=8, grad-ckpt        | 2017.2 ms              | 1975.9 ms | 1.02×     |  8.05 → 8.05 GB  |
-| `ColbertNegativeCE` | synth bs=4, num_neg=4, 448px       |  638.9 ms              |  700.1 ms | 0.91×     | 24.08 → 24.08 GB |
-| `ColbertPairwiseNeg`| synth bs=4, num_neg=4, 448px       |  625.6 ms              |  672.0 ms | 0.93×     | 24.08 → 24.08 GB |
+### VRAM attributable to the MaxSim op (isolated replay)
 
+| batch size | vanilla: held | vanilla: bwd spike | vanilla: total | LIK: held | LIK: bwd spike | LIK: total |
+| --- | --- | --- | --- | --- | --- | --- |
+| 16 | 32 MiB | 73 MiB | 106 MiB | 1 MiB | 6 MiB | 7 MiB |
+| 32 | 151 MiB | 339 MiB | 489 MiB | 1 MiB | 13 MiB | 14 MiB |
+| 64 | 615 MiB | 1.35 GiB | 1.95 GiB | 3 MiB | 26 MiB | 29 MiB |
+| 128 | 2.40 GiB | 5.41 GiB | 7.81 GiB | 8 MiB | 53 MiB | 61 MiB |
 
-Reading: ColPali's Qwen2-VL-2B backbone has a much heavier
-forward+backward than a ModernBERT-149 M ColBERT, and the image
-modality blows up Ld (≈1 030 visual tokens at the default 448 px
-resolution). So even with LoRA-only training shrinking AdamW state
-by ~60×, the *encoder activation-grad backward* is what dominates
-the step — LIK lands in the 0.91–1.02× range here. The kernel is a
-drop-in — no other code changes between the two columns. Same
-takeaway as the PyLate `Contrastive` recipe on the 149 M encoder:
-when the transformer is the bottleneck, LIK doesn't move the needle.
-The two explicit-negative heads sit *below* 1× (0.91–0.93×): they
-encode 4 hard negatives per query (20 images/step), so the vision
-tower dominates even more, while the fused pos/neg path trades three
-tiny einsums for three Triton launches whose overhead doesn't amortise
-on `[4, 4, 24, 1030]`-scale slabs. The fusion's win is wall-clock on
-the scoring itself and only shows once `batch × num_neg` is large —
-which the encoder hides at the e2e level. The isolation table below
-measures where it actually lands.
+Reading: the embeddings reaching the loss are fp32 in practice (autocast
+computes the L2-norm in fp32 and the division promotes), so vanilla holds the
+fp32 `[B, B, Lq, Ld]` score grid from the op's forward until its backward —
+2.40 GiB at B=128 — and the backward spikes another ~2.25× that (the grid's
+gradient plus the `amax` scatter). LIK holds only the `[B, B]` output and its
+backward allocates only the input gradients (dominated by `grad_D`), so its
+footprint grows linearly in B instead of quadratically: **61 MiB total at
+B=128, a ~130× reduction**, ×2 per batch doubling vs vanilla's ×4.
+
+### Batch-size ceiling (whole-step peak alloc, 80 GB H100)
+
+| batch size | vanilla | LIK |
+| --- | --- | --- |
+| 16 | 10.87 GiB | 10.87 GiB |
+| 32 | 17.09 GiB | 17.09 GiB |
+| 64 | 29.54 GiB | 29.54 GiB |
+| 128 | **OOM** (53.95 GiB pre-OOM) | 54.38 GiB |
+
+Reading: the two columns are identical while both fit because the score
+tensors are freed before the step's peak (the op's backward runs first; the
+peak lives in the model backward). At B=128 vanilla dies not from peak usage
+but from fragmentation: the OOM is a 1.81 GiB contiguous request failing
+while 25.0 GiB sit reserved-but-unallocated — the multi-GiB score grid needs
+blocks the allocator can no longer produce, where LIK's 61 MiB fits in
+whatever scraps remain. Net: **vanilla maxes out at B=64, LIK trains B=128**
+(8.5 s/step) — 2× batch headroom from removing the op's B² term.
+
+Reproduce: `sky launch scripts/sky_colpali_e2e.yaml`, then
+`benchmarks/summarize_colpali_e2e.py` renders both tables and the log-log
+plot from the per-cell JSONs.
 
 ### Explicit-negative MaxSim isolation (no encoder)
 

@@ -7,7 +7,7 @@
 # the cu124 torch wheel CI uses), so the CUDA-marked forward/backward parity
 # cases can't run in gpu-ci.yml — they `importorskip` there and run here
 # instead, with colpali_engine installed out-of-band against cu128 wheels.
-# The install dance mirrors scripts/sky_colpali_benchmark.yaml.
+# The install dance mirrors scripts/sky_colpali_e2e.yaml.
 
 name: lik-colpali-compat-test
 
@@ -37,7 +37,7 @@ setup: |
   # colpali-engine can't share the cu124 sync (torchvision ABI), so install it
   # directly, pinning torch+torchvision to cu128 builds whose libcudart.so.12
   # the CUDA 12.9 container provides (PyPI torchvision needs CUDA 13). See
-  # scripts/sky_colpali_benchmark.yaml for the full rationale.
+  # scripts/sky_colpali_e2e.yaml for the full rationale.
   uv pip install "colpali-engine>=0.3.10" \
       "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
       --extra-index-url https://download.pytorch.org/whl/cu128

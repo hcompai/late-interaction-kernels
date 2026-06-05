@@ -4,8 +4,7 @@ Times a real ``colpali_engine`` explicit-negative loss head (``ColbertNegativeCE
 / ``ColbertPairwiseNegativeCELoss``) forward+backward on synthetic embeddings,
 with and without :func:`patch_colpali_engine`. The encoder is skipped (fake
 embeddings), so this isolates exactly the pos (``maxsim_pairs``) + per-query-neg
-(4-D ``maxsim``) path the patch fuses — the same reason
-``bench_pylate_training.py`` feeds fake embeddings.
+(4-D ``maxsim``) path the patch fuses.
 
 ``--in-batch-weight 0`` (default) isolates the explicit pos/neg fusion this adds.
 At the training default 0.5 the in-batch CE term materializes a ``[B, B, Lq, Ld]``
