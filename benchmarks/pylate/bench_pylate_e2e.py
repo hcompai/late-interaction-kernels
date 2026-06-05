@@ -14,7 +14,7 @@ mitigation knob, exposed here as ``--score-mini-batch-size``, so the sweep can c
 LIK against it.
 
 Usage:
-    python benchmarks/bench_pylate_e2e.py --variant vanilla \\
+    python benchmarks/pylate/bench_pylate_e2e.py --variant vanilla \\
         --batch-size 256 --max-steps 4 \\
         --output benchmarks/results/pylate_e2e_b256_vanilla.json
 """

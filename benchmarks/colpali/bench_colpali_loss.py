@@ -11,7 +11,7 @@ At the training default 0.5 the in-batch CE term materializes a ``[B, B, Lq, Ld]
 tensor that dominates (and OOMs vanilla on its own at large B) — a different,
 already-shipped fusion — so it's off here by default.
 
-    python benchmarks/bench_colpali_loss.py --sweep
+    python benchmarks/colpali/bench_colpali_loss.py --sweep
 
 Requires colpali_engine (CPU extra ``colpali``; on GPU install out-of-band — see
 scripts/sky_colpali_compat_test.yaml for the cu128 dance).

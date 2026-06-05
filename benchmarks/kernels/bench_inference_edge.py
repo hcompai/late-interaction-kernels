@@ -18,8 +18,8 @@ This complements ``bench_forward.py`` by focusing purely on
 ``inference_mode`` throughput + peak-memory, with OOM-tolerant naive
 fallbacks.
 
-    python benchmarks/bench_inference_edge.py
-    python benchmarks/bench_inference_edge.py --dtype fp16 --outdir /tmp/lik
+    python benchmarks/kernels/bench_inference_edge.py
+    python benchmarks/kernels/bench_inference_edge.py --dtype fp16 --outdir /tmp/lik
 
 Writes a Markdown + JSON report under ``benchmarks/results/``.
 """

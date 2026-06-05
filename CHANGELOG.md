@@ -49,6 +49,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   activations cap the batch at B=128 before MaxSim matters — every variant
   OOMs at B=256 alike. Tables in `docs/benchmarks.md`.
 
+### Changed
+
+- **`benchmarks/` is grouped per comparison stack.** The flat directory is now
+  `kernels/` (synthetic-tensor microbenches, incl. the platform-specific
+  `bench_mps.py`), `plaid/`, `colpali/`, and `pylate/` — each e2e bench sits
+  next to its summarizer. `bench_lateon.py` is renamed
+  `kernels/bench_longdoc.py`: its value is the long-document regime
+  (Ld up to 16 384), not the LateOn brand. Pure moves otherwise — `--only`
+  tags and JSON output names are unchanged, so existing results stay
+  comparable; the `sky_run_all_benchmarks.yaml` `RUN_ONLY` tag `lateon` is now
+  `longdoc`. SkyPilot jobs and docs point at the new paths.
+
 ### Fixed
 
 - **`patch_pylate()` works on PyLate 1.5 again.** 1.5 renamed the scoring
@@ -69,6 +81,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sky_pylate_benchmark.yaml` jobs. The historical numbers they produced stay
   in `docs/benchmarks.md`; `bench_colpali_loss.py` (loss-head isolation) is
   kept.
+
+- Four stale one-offs: `bench_backward_0_5.py` (v0.5.0 backward
+  investigation), `bench_fastplaid.py` (isolated rerank step, superseded by
+  `bench_fastplaid_e2e.py`), `bench_training.py` (synthetic train step,
+  superseded by the e2e harnesses + `bench_backward_method.py`), and the
+  orphaned autotune-persistence reproducer
+  (`scripts/_bench_autotune_persistence.py` +
+  `scripts/sky_bench_autotune_persistence.yaml`).
 
 ## [0.4.1] - 2026-06-03
 

@@ -1,4 +1,8 @@
-"""LateOn-scale benchmark: ModernBERT-base ColBERT across doc lengths.
+"""Long-document benchmark: ModernBERT-base ColBERT across doc lengths.
+
+Formerly ``bench_lateon.py`` — renamed because its value is the long-document
+regime (Ld up to 16 384), not the LateOn brand; the ``--only`` tags and the
+``lateon_*.json`` output name are unchanged so existing results stay valid.
 
 Covers the LateOn family (all ModernBERT-base, 149 M params, d=128):
 

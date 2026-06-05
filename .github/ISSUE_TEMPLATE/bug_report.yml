@@ -31,7 +31,7 @@ body:
       label: Minimal reproducer
       description: |
         < 30 lines of runnable Python. For PyLate issues, include `patch_pylate()`
-        and one loss / scoring call. For perf issues, adapt one of `benchmarks/bench_*.py`.
+        and one loss / scoring call. For perf issues, adapt one of `benchmarks/*/bench_*.py`.
       render: python
     validations:
       required: true

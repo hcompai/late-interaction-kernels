@@ -14,8 +14,8 @@ Usage
 -----
 ::
 
-    python benchmarks/bench_fp8.py
-    python benchmarks/bench_fp8.py --only pylate-rerank-1k long-docs-2k
+    python benchmarks/kernels/bench_fp8.py
+    python benchmarks/kernels/bench_fp8.py --only pylate-rerank-1k long-docs-2k
 """
 
 import argparse

@@ -7,7 +7,7 @@ flash-maxsim is shown only as an external reference point.
 
 Usage::
 
-    python benchmarks/bench_chunking.py
+    python benchmarks/kernels/bench_chunking.py
 """
 
 import statistics

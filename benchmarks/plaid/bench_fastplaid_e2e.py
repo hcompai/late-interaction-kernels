@@ -36,9 +36,9 @@ kernel is a viable drop-in for fast-plaid's internal scoring loop.
 Usage
 -----
 
-    python benchmarks/bench_fastplaid_e2e.py                # default: 10k docs
-    python benchmarks/bench_fastplaid_e2e.py --small        # 5k docs, fewer shapes
-    python benchmarks/bench_fastplaid_e2e.py --skip-fastplaid  # only our kernel
+    python benchmarks/plaid/bench_fastplaid_e2e.py                # default: 10k docs
+    python benchmarks/plaid/bench_fastplaid_e2e.py --small        # 5k docs, fewer shapes
+    python benchmarks/plaid/bench_fastplaid_e2e.py --skip-fastplaid  # only our kernel
 """
 
 import argparse

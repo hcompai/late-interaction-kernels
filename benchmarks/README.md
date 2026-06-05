@@ -6,6 +6,17 @@ replaces. The headline numbers and the analysis behind them live in
 software stack, and the pinned baseline versions every table was produced on.
 This file is the operator's guide: what each script measures and how to run it.
 
+Scripts are grouped by the stack they compare against:
+
+| folder | scope |
+| --- | --- |
+| `kernels/` | Kernel-level microbenches on synthetic tensors — eager / `torch.compile` / flash-maxsim references, no model, no trainer. |
+| `plaid/` | PLAID / FastPlaid retrieval pipeline. |
+| `colpali/` | ColQwen2 e2e training + loss isolation (colpali-engine), with its summarizer. |
+| `pylate/` | PyLate e2e training + `CachedContrastive` chunked MaxSim, with its summarizer. |
+
+Results land in the shared `results/` directory regardless of folder.
+
 ## Common CLI conventions
 
 All bench scripts share the same flag shape:
@@ -31,7 +42,7 @@ in `scripts/sky_colpali_e2e.yaml` / `scripts/sky_pylate_e2e.yaml`.
 
 ## What each script measures
 
-### Microbenchmarks (kernel-level)
+### `kernels/` — microbenchmarks on synthetic tensors
 
 | script | what it isolates |
 | --- | --- |
@@ -41,37 +52,35 @@ in `scripts/sky_colpali_e2e.yaml` / `scripts/sky_pylate_e2e.yaml`.
 | `bench_normalize.py` | Fused `normalize=True` vs explicit `F.normalize` + `maxsim`. |
 | `bench_backward_method.py` | grad_D paths: `auto` vs `unified` vs `lowmem` vs naive. |
 | `bench_backward_lowmem.py` | Backward time + peak memory: `lowmem` vs `unified` on PyLate/ColPali shapes, with flash-maxsim and a PyLate-naive einsum baseline. |
-| `bench_training.py` | Full training step (forward + backward) speed and peak memory, with flash as an external reference. |
-| `bench_backward_0_5.py` | Fused `maxsim_residual` / `maxsim_varlen` backward vs "unpack + autograd". |
-| `bench_lateon.py` | LateOn / LateOn-Code shapes (Ld up to 16 384, d=128). |
+| `bench_longdoc.py` | Long-document regime (Ld up to 16 384, d=128): LateOn / ModernColBERT shapes. Formerly `bench_lateon.py`; `--only` tags and output names are unchanged. |
 | `bench_compile_cache.py` | Cold-pass autotune cost across 18 distinct `Ld` values. |
 | `bench_flash_maxsim.py` | Head-to-head vs `flash-maxsim` (same Triton-MaxSim math). |
 | `bench_fp8.py` | FP8 inference on Hopper vs bf16 `maxsim`. |
 | `bench_fused_head_train.py` | Fused `maxsim_from_hidden` (head + L2-normalize + maxsim) vs unfused. |
+| `bench_mps.py` | Apple Silicon (MPS). Metal kernel vs `torch.compile` vs eager. |
 
-### PLAID / FastPlaid
+### `plaid/` — PLAID / FastPlaid
 
 | script | what it isolates |
 | --- | --- |
-| `bench_fastplaid.py` | Isolated rerank step (`bmm + mask + max + sum`) vs `maxsim` on the same shapes. |
 | `bench_fastplaid_e2e.py` | `fast_plaid.engine.search()` vs our scoring kernel on the same on-disk compressed index. |
 | `bench_decompress_maxsim.py` | Fast-plaid's decompress + rerank pipeline (PyTorch transliteration) vs `maxsim_residual` / `maxsim_residual_varlen`. |
-| `bench_cached_maxsim.py` | PyLate `CachedContrastive`'s chunked MaxSim vs vanilla vs `torch.compile` vs LIK. |
 
-### End-to-end (real model + loss)
+### `colpali/` — ColQwen2 / colpali-engine
 
 | script | what it drives |
 | --- | --- |
 | `bench_colpali_e2e.py` | Real ColQwen2 + LoRA training steps (`ColModelTraining` recipe) on a subset of `vidore/colpali_train_set`, with the loss head instrumented: per-MaxSim-call VRAM (in-train + exact isolated replay), step times, whole-run peak, OOM-as-outcome. `--variant vanilla\|lik` toggles `patch_colpali_engine()`. Adapted from the harness in [colpali PR #412](https://github.com/illuin-tech/colpali/pull/412). |
-| `bench_pylate_e2e.py` | The PyLate sibling: real `SentenceTransformerTrainer` steps (GTE-ModernColBERT-v1 + `Contrastive`) on MS MARCO triplets, same instrumentation/replay/OOM-as-outcome design. `--variant vanilla\|lik` toggles `patch_pylate()`; `--score-mini-batch-size` exercises PyLate's own chunking mitigation. |
 | `bench_colpali_loss.py` | MaxSim loss-head isolation on synthetic embeddings (no encoder) — the explicit-negative heads. |
-| `summarize_colpali_e2e.py` / `summarize_pylate_e2e.py` | Render the e2e sweep results: op-VRAM table, batch-ceiling table, log-log plot. |
+| `summarize_colpali_e2e.py` | Renders the e2e sweep results: op-VRAM table, batch-ceiling table, log-log plot. |
 
-### Platform-specific
+### `pylate/` — PyLate
 
-| script | platform |
+| script | what it drives |
 | --- | --- |
-| `bench_mps.py` | Apple Silicon (MPS). Metal kernel vs `torch.compile` vs eager. |
+| `bench_pylate_e2e.py` | The ColQwen2 harness's PyLate sibling: real `SentenceTransformerTrainer` steps (GTE-ModernColBERT-v1 + `Contrastive`) on MS MARCO triplets, same instrumentation/replay/OOM-as-outcome design. `--variant vanilla\|lik` toggles `patch_pylate()`; `--score-mini-batch-size` exercises PyLate's own chunking mitigation. |
+| `bench_cached_maxsim.py` | PyLate `CachedContrastive`'s chunked MaxSim vs vanilla vs `torch.compile` vs LIK. |
+| `summarize_pylate_e2e.py` | Renders the e2e sweep results: op-VRAM table, batch-ceiling table, log-log plot. |
 
 ## Running
 
@@ -81,17 +90,17 @@ versions are in [`../docs/benchmarks.md`](../docs/benchmarks.md#baseline-package
 
 | baseline | needed by |
 | --- | --- |
-| `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py`, `bench_training.py` |
-| `fast-plaid` | `bench_fastplaid.py`, `bench_fastplaid_e2e.py` |
+| `flash-maxsim` | `bench_flash_maxsim.py`, `bench_forward.py`, `bench_chunking.py` |
+| `fast-plaid` | `bench_fastplaid_e2e.py` |
 | `colpali-engine` (`==0.3.16`) | `bench_colpali_e2e.py`, `bench_colpali_loss.py` |
 | `pylate` (`==1.5.0`) | `bench_pylate_e2e.py`, `bench_cached_maxsim.py` (installed by the `pylate` extra) |
 
 ### One script
 
 ```bash
-python benchmarks/bench_forward.py
-python benchmarks/bench_forward.py --only text-short text-long      # subset of shapes
-python benchmarks/bench_cached_maxsim.py --variants flash           # skip vanilla pylate
+python benchmarks/kernels/bench_forward.py
+python benchmarks/kernels/bench_forward.py --only text-short text-long      # subset of shapes
+python benchmarks/pylate/bench_cached_maxsim.py --variants flash           # skip vanilla pylate
 ```
 
 ### All scripts locally
@@ -146,6 +155,12 @@ The directory is `.gitignore`d. **Do not commit anything under
 
 ## Conventions
 
+* **Standalone-by-design.** Every script reads top-to-bottom with no sibling
+  imports; the folders are plain directories, not packages (no `__init__.py`).
+  The overlap between the two e2e harnesses (VRAM recorder, isolated-replay
+  bracket, step timer) is deliberate duplication, not drift — extracting it
+  would force `sys.path` hacks across folders and re-introduce the shared
+  module that PR #102 removed on purpose.
 * **Numerics.** Baselines run their inner einsum / matmul with an fp32
   accumulator (matching the fused kernel) and read bf16 / fp16 inputs; parity is
   asserted before timing. See the fair-comparison protocol in

@@ -19,9 +19,9 @@ Only an H100/A100-class GPU is meaningful here; the kernel tunes for Hopper.
 Usage
 -----
 
-    python benchmarks/bench_decompress_maxsim.py
-    python benchmarks/bench_decompress_maxsim.py --nbits 4
-    python benchmarks/bench_decompress_maxsim.py --short  # quick smoke
+    python benchmarks/plaid/bench_decompress_maxsim.py
+    python benchmarks/plaid/bench_decompress_maxsim.py --nbits 4
+    python benchmarks/plaid/bench_decompress_maxsim.py --short  # quick smoke
 """
 
 import argparse

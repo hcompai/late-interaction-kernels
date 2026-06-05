@@ -8,7 +8,7 @@ Unlike the colpali table, the op-VRAM table leads with the *forward transient*: 
 small and the B² cost lives in the transients.
 
 Usage:
-    python benchmarks/summarize_pylate_e2e.py --results-dir benchmarks/results \\
+    python benchmarks/pylate/summarize_pylate_e2e.py --results-dir benchmarks/results \\
         --plot benchmarks/results/pylate_e2e_vram.png
 """
 

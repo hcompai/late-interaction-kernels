@@ -46,11 +46,11 @@ run: |
 
   uv run python -c "import torch; print('GPU:', torch.cuda.get_device_name()); print('torch:', torch.__version__)"
 
-  echo "=== bench_lateon (long-context Ld ∈ {300, 2k, 4k, 8k, 16k}) ==="
-  uv run python benchmarks/bench_lateon.py --outdir /tmp/bench 2>&1 | tee /tmp/bench/lateon.log
+  echo "=== bench_longdoc (long-context Ld ∈ {300, 2k, 4k, 8k, 16k}) ==="
+  uv run python benchmarks/kernels/bench_longdoc.py --outdir /tmp/bench 2>&1 | tee /tmp/bench/longdoc.log
 
   echo "=== bench_fastplaid_e2e (engine.search vs LIK varlen + top-k) ==="
-  uv run python benchmarks/bench_fastplaid_e2e.py --outdir /tmp/bench --small 2>&1 | tee /tmp/bench/plaid.log
+  uv run python benchmarks/plaid/bench_fastplaid_e2e.py --outdir /tmp/bench --small 2>&1 | tee /tmp/bench/plaid.log
 
   echo "=== artifacts ==="
   ls -la /tmp/bench

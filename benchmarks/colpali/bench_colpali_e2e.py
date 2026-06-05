@@ -28,7 +28,7 @@ A whole-run OOM is an expected sweep outcome: it is recorded in the JSON and the
 exits 0 so the sweep driver keeps going (see ``scripts/sky_colpali_e2e.yaml``).
 
 Usage:
-    python benchmarks/bench_colpali_e2e.py --variant vanilla \\
+    python benchmarks/colpali/bench_colpali_e2e.py --variant vanilla \\
         --batch-size 64 --max-steps 4 \\
         --output benchmarks/results/colpali_e2e_b64_vanilla.json
 """
