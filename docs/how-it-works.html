@@ -887,8 +887,8 @@
     Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
     tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, batch
     of 64 pairs) that tensor is 8 GB in fp16. Each element is written once
-    and read twice, so the GPU spends most of its time on HBM traffic, not
-    compute. The kernels in this library compute the same result without ever
+    and read back once, so the GPU spends most of its time on HBM traffic,
+    not compute. The kernels in this library compute the same result without ever
     materialising that tensor, by streaming $B_q \times B_d$ tiles through
     on-chip memory and folding the reductions into the same pass.
   </div>
@@ -1122,8 +1122,9 @@
 
   <div class="note">
     <strong>This is the entire optimisation.</strong> A naive implementation
-    writes the full $\Sm$ tensor to HBM and reads it back twice (once for the
-    max, once for the sum). The fused program reads $\Qm$ and $\Dm$ once, keeps
+    writes the full $\Sm$ tensor to HBM and reads it back for the max (the
+    much smaller max tensor makes a further round-trip for the sum). The
+    fused program reads $\Qm$ and $\Dm$ once, keeps
     every $\Sm$ slice on-chip, and writes one fp32 scalar per pair. The next
     section makes the cost difference concrete.
   </div>
@@ -1145,7 +1146,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     The full similarity tensor $\Sm$ is written to HBM, then read back to take
-    the row-wise max, then read again for the sum. Its memory footprint is
+    the row-wise max; only the much smaller $[N_q, N_d, L_q]$ max tensor is
+    read again for the sum. Its memory footprint is
   </p>
 
   <p>
@@ -1225,8 +1227,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Beyond the memory pressure, the naive version is bandwidth-bound: each
-    element of $\Sm$ is written to HBM once and read twice for a single
-    multiply-add per element. The arithmetic intensity is far below the H100
+    element of $\Sm$ is written to HBM once and read back once, all for a
+    single multiply-add per element. The arithmetic intensity is far below the H100
     ridge point, so the SMs spend most of their time waiting on memory.
     Appendix <a href="#intensity">B</a> works the FLOP-per-byte numbers out
     and places both implementations on the roofline.
@@ -1276,8 +1278,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     live in fp32 <em>registers</em>, never in SRAM: <code>tl.dot</code>
     returns its accumulator straight into the register file, and the
     row-reduction happens there. At typical block sizes
-    ($\text{BLOCK\_Q} = \text{BLOCK\_D} = 64$, $d = 128$), SMEM use is
-    around 32 KiB per program, comfortably below the H100's 228 KiB per
+    ($\text{BLOCK\_Q} = \text{BLOCK\_D} = 64$, $d = 128$), the operand
+    tiles cost 32 KiB per pipeline stage — 64–96 KiB per program at the
+    usual two to three stages — comfortably below the H100's 228 KiB per
     SM, leaving room for multiple concurrent programs and the autotuner
     to trade block size against occupancy.
   </p>
@@ -1316,9 +1319,11 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     cost of launching the extra programs. Below that crossover the inner loop
     is already short and the grid already full, so chunking would only add
     launch overhead, which is slower than not chunking at all. The split therefore
-    fires only when $L_q &gt; 512$; short queries (ColBERT $L_q \leq 32$,
-    long-document $L_q \leq 512$) take the un-chunked path, which is already
-    the faster one for them.
+    fires only when $L_q &gt; 512$, and only for the 3-D cross-product
+    layout — the 4-D KD layout already launches $N_q \cdot K$ programs,
+    enough to fill every SM, so chunking it just adds overhead. Short
+    queries (ColBERT $L_q \leq 32$, long-document $L_q \leq 512$) take the
+    un-chunked path, which is already the faster one for them.
   </p>
 
   <h3>Step through the algorithm</h3>
@@ -2227,7 +2232,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
          s.flags.scoreWritten = true;
        });
   step("done",
-       "Done. The naive baseline would have written S [Lq×Ld] = " + (Lq*Ld*ELEM) + " B and read it back twice.",
+       "Done. The naive baseline would have written S [Lq×Ld] = " + (Lq*Ld*ELEM) + " B and read it back.",
        null);
 
   // ---------------- rendering ----------------
@@ -2323,7 +2328,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     refs.score.textContent = state.score;
 
     var total = state.reads + state.writes;
-    var naive = Lq*Ld*ELEM * 3 + Lq*d*ELEM + Ld*d*ELEM;
+    var naive = Lq*Ld*ELEM * 2 + Lq*d*ELEM + Ld*d*ELEM;  // S written once + read once, plus Q and D
     refs.reads.textContent  = state.reads + " B";
     refs.writes.textContent = state.writes + " B";
     refs.total.textContent  = total + " B";
