@@ -1291,8 +1291,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     For ColPali-scale queries ($L_q \approx 1024$ visual patches), the outer
     loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
-    inside one program, leaving the rest of the SM grid idle. Because MaxSim
-    is a sum over query tokens of a per-token max, it decomposes exactly:
+    inside one program, leaving the rest of the SM grid idle. But MaxSim is
+    a sum over query tokens of a per-token max, so it decomposes exactly:
   </p>
 
   <p>
@@ -1300,31 +1300,21 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    <code>maxsim()</code> exploits this whenever $L_q &gt; 512$ by
-    reshaping $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ into
-    $\Qm_c \in \mathbb{R}^{N_q n_c \times 128 \times d}$ (128 tokens per
-    chunk, $n_c = \lceil L_q / 128 \rceil$), running the kernel over the
-    larger batch, and summing the chunk scores back per original query.
-    The reshape and sum are plain tensor ops, so autograd flows through them
-    unchanged and no custom backward is needed.
+    When $L_q &gt; 512$, <code>maxsim()</code> reshapes $\Qm$ into
+    $N_q n_c$ chunks of 128 tokens ($n_c = \lceil L_q / 128 \rceil$), runs
+    the kernel over the larger batch, and sums the chunk scores back per
+    query — plain tensor ops, so autograd flows through unchanged. Two
+    gains at once: more programs on the grid, and the kernel always sees
+    $L_q = 128$, pinning the autotune cache to one entry instead of one
+    per distinct query length.
   </p>
 
   <p>
-    Two gains at once: more programs on the grid (better SM utilisation)
-    and the kernel always sees $L_q = 128$, pinning the autotune cache to a
-    small constant rather than one entry per distinct query length.
-  </p>
-
-  <p>
-    Splitting only pays off once the per-program serial loop dominates the
-    cost of launching the extra programs. Below that crossover the inner loop
-    is already short and the grid already full, so chunking would only add
-    launch overhead, which is slower than not chunking at all. The split therefore
-    fires only when $L_q &gt; 512$, and only for the 3-D cross-product
-    layout — the 4-D KD layout already launches $N_q \cdot K$ programs,
-    enough to fill every SM, so chunking it just adds overhead. Short
-    queries (ColBERT $L_q \leq 32$, long-document $L_q \leq 512$) take the
-    un-chunked path, which is already the faster one for them.
+    Below the $L_q = 512$ crossover the serial loop is already short and
+    the grid already full, so the extra launches would only slow things
+    down — short ColBERT-style queries take the un-chunked path. The same
+    logic exempts the 4-D KD layout entirely: it already launches
+    $N_q \cdot K$ programs, enough to fill every SM.
   </p>
 
   <h3>Step through the algorithm</h3>
