@@ -1803,56 +1803,48 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     A <code>tl.constexpr</code> kernel argument is baked into the compiled
-    binary. The bargain: the compiler can specialise and unroll code for
-    that exact value, but every new value it meets compiles a brand-new
-    kernel — a multi-second stall — and adds an entry to the autotune
-    cache (the per-shape benchmark sweep that picks tile sizes and launch
-    parameters). The rule the library converged on: <strong>take the deal
-    only where the compiler actually uses the value; where you must take
-    it, shrink the domain.</strong>
+    binary. That is a bargain, not a feature: the compiler can specialise
+    and unroll code for that exact value, but every new value it meets
+    compiles a brand-new kernel — a multi-second stall — and adds an entry
+    to the autotune cache. So every shape-like argument poses the same
+    question: <em>does the compiler actually do anything with this
+    value?</em>
   </p>
 
   <p>
-    Both halves were learned on two loops of the forward kernel that look
-    almost identical in the source:
+    The forward kernel answers it twice, on two loops that look almost
+    identical:
   </p>
 
-<pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq must be constexpr</span>
+<pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq is constexpr</span>
     ...
     for d_start in range(0, Ld, BLOCK_D):        <span style="color:var(--ink-dim)"># plain runtime loop → Ld is a normal argument</span></code></pre>
 
   <p>
-    <strong>$L_d$: refuse the deal.</strong> The kernels originally
-    declared <code>Ld: tl.constexpr</code> and keyed the autotune cache on
-    it. But $L_d$ only bounds the long inner loop, which the compiler
-    pipelines rather than unrolls — it never specialises on the value. So
-    $L_d = 300$ and $L_d = 301$ were literally different binaries with
-    identical machine code, and every distinct document length in a ragged
-    corpus cost a recompile plus an autotune sweep — repeated mid-training
-    stalls. Making $L_d$ a plain runtime argument cut cold start
-    $9.3\times$ and changed nothing in the generated code.
+    For $L_d$ the answer is no. It bounds the long inner loop, which the
+    compiler pipelines rather than unrolls, so specialising on it would
+    make $L_d = 300$ and $L_d = 301$ different binaries with identical
+    machine code — one recompile per distinct document length in a ragged
+    corpus, for nothing. $L_d$ stays a plain runtime argument.
   </p>
 
   <p>
-    <strong>$L_q$: take the deal, shrink the domain.</strong> The outer
-    loop runs only a handful of iterations, so it uses
-    <code>tl.static_range</code>: the compiler stamps the body out $n$
-    times as straight-line code, which requires knowing $n$ — here
-    constexpr genuinely buys better instruction scheduling, so $L_q$ has
-    to stay one. But the per-batch max query length floats step to step,
-    and every novel value re-triggered the compile-and-sweep: measured
-    $3.1\times$ <em>slower</em> than plain einsum end-to-end. The fix
-    shrinks the set of values that can ever exist: round $L_q$ up to the
-    next power of two and zero-pad, with the query mask covering the fake
-    tokens exactly — at most nine buckets between 16 and 4096. Wall clock
-    on the offending run: $39.0$ s $\rightarrow$ $8.3$ s.
+    For $L_q$ the answer is yes. The outer loop runs only a handful of
+    iterations, so it is worth fully unrolling — and unrolling means the
+    compiler stamps the body out $n$ times as straight-line code, so it
+    must know $n$. The price would be one recompile per distinct query
+    length, and per-batch lengths float step to step. So the kernel
+    shrinks the domain instead of refusing the deal: $L_q$ is rounded up
+    to the next power of two and $\Qm$ zero-padded, with the query mask
+    covering the fake tokens exactly — at most nine values between 16 and
+    4096 can ever exist.
   </p>
 
   <div class="note">
     <strong>Same-looking loops, opposite decisions.</strong> Unroll the
     short outer loop, pipeline the long inner one. Constexpr trades
-    compilation count for code quality — a good trade exactly where the
-    compiler uses the value, and pure waste everywhere else.
+    compilation count for code quality — take the deal only where the
+    compiler uses the value, and where you take it, shrink the domain.
   </div>
 </section>
 
