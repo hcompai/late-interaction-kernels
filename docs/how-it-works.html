@@ -1829,16 +1829,68 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    For $L_q$ the answer is yes. The outer loop runs only a handful of
-    iterations, so it is worth fully unrolling — and unrolling means the
-    compiler stamps the body out $n$ times as straight-line code, so it
-    must know $n$. The price would be one recompile per distinct query
+    For $L_q$ the answer is yes. The outer loop runs only
+    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations — a handful of
+    query tiles — so it is worth <em>unrolling</em>: the compiler deletes
+    the loop and pastes $n$ consecutive copies of its body (the
+    load-tile / matmul / row-max sequence) as straight-line code, no
+    counter, no branch. It can only do that if it knows $n$ at compile
+    time, and $n$ comes from $L_q$ — that is what forces $L_q$ to be
+    constexpr. The price would be one recompile per distinct query
     length, and per-batch lengths float step to step. So the kernel
     shrinks the domain instead of refusing the deal: $L_q$ is rounded up
     to the next power of two and $\Qm$ zero-padded, with the query mask
     covering the fake tokens exactly — at most nine values between 16 and
     4096 can ever exist.
   </p>
+
+  <div class="panel">
+    <div class="chart-wrap">
+      <svg viewBox="0 0 760 290" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back; an unrolled loop pastes n copies as straight-line code">
+        <defs>
+          <marker id="uarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
+          </marker>
+        </defs>
+
+        <!-- ============ row 1: runtime loop (Ld) ============ -->
+        <text x="24" y="40" font-size="11" font-weight="600" fill="var(--ink)">range(0, Ld, BLOCK_D) — compiled as a loop</text>
+        <text x="24" y="60" font-size="10" fill="var(--ink-dim)">one copy of the body; a branch jumps back each iteration,</text>
+        <text x="24" y="76" font-size="10" fill="var(--ink-dim)">so the trip count can arrive at runtime — no recompiles</text>
+
+        <rect x="470" y="50" width="130" height="38" rx="5" fill="var(--d-idle)" stroke="var(--d-active)"/>
+        <text x="535" y="73" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">loop body</text>
+        <path d="M 604 58 C 646 20, 424 20, 466 58" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <text x="535" y="26" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">branch back · ⌈Ld / BLOCK_D⌉ times</text>
+
+        <line x1="24" y1="110" x2="736" y2="110" stroke="var(--line)"/>
+
+        <!-- ============ row 2: unrolled (Lq) ============ -->
+        <text x="24" y="138" font-size="11" font-weight="600" fill="var(--ink)">tl.static_range(0, Lq, BLOCK_Q) — unrolled</text>
+        <text x="24" y="158" font-size="10" fill="var(--ink-dim)">the compiler deletes the loop and pastes n = ⌈Lq / BLOCK_Q⌉ copies of the body back-to-back —</text>
+        <text x="24" y="174" font-size="10" fill="var(--ink-dim)">it must know n while compiling, so Lq has to be constexpr</text>
+
+        <rect x="60"  y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="125" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">body · copy 0</text>
+        <rect x="235" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="300" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 1</text>
+        <rect x="410" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="475" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 2</text>
+        <rect x="585" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="650" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 3</text>
+
+        <path d="M 194 215 L 231 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <path d="M 369 215 L 406 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <path d="M 544 215 L 581 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+
+        <text x="388" y="264" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">straight-line code · no counter, no branch · n is stamped in at compile time (here n = 4)</text>
+      </svg>
+      <div class="chart-legend">
+        <span>The same loop body, compiled two ways. The loop form never needs its trip count at compile time; the unrolled form <em>is</em> its trip count — change $L_q$ and you have a different binary.</span>
+      </div>
+    </div>
+  </div>
 
   <div class="note">
     <strong>Same-looking loops, opposite decisions.</strong> Unroll the
