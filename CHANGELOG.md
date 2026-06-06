@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`patch_pylate()` defers to PyLate's native LIK backend.** PyLate now ships
+  its own LIK dispatch ([pylate#222](https://github.com/lightonai/pylate/pull/222):
+  `pip install "pylate[lik]"`, selected via `auto` / `PYLATE_SCORES_BACKEND`).
+  On those versions `patch_pylate()` is a deprecated no-op — it detects the
+  native `backend` parameter and steps aside instead of shadowing the native
+  dispatch (and breaking `ColBERTScores`, which forwards `backend=`). Older
+  PyLate is unaffected. PyLate's backend calls `maxsim` / `maxsim_pairs` /
+  `maxsim_mps` by keyword, so those signatures are now pinned by a test.
+
 ### Added
 
 - **`bench_colpali_e2e.py` — a real-recipe ColQwen2 e2e training benchmark.**

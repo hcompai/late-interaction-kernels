@@ -106,15 +106,20 @@ scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
 
-### Patch PyLate (one line)
+### PyLate
 
-Monkey-patches PyLate's scoring + loss to route through the fused kernel. Existing PyLate training and rerank scripts run unchanged; set `LIK_DISABLE=1` to fall back to vanilla PyLate at runtime.
+Recent PyLate ships a native LIK backend — just install the extra and PyLate's `auto` dispatch picks it up, no code change:
+
+```bash
+pip install "pylate[lik]"   # or force it: PYLATE_SCORES_BACKEND=lik
+```
+
+For older PyLate without native support, monkey-patch scoring + loss to route through the fused kernel (`LIK_DISABLE=1` falls back at runtime). On native PyLate this is a deprecated no-op.
 
 ```python
 from late_interaction_kernels import patch_pylate
 
-patch_pylate()
-# PyLate training / rerank code is unchanged
+patch_pylate()   # PyLate training / rerank code is unchanged
 ```
 
 ## Benchmarks

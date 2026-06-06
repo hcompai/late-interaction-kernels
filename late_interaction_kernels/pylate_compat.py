@@ -1,5 +1,9 @@
 """PyLate drop-in: replace ``pylate.scores.colbert_scores`` with our kernel.
 
+For PyLate versions without native LIK support. Recent PyLate ships its own
+LIK backend (``pip install "pylate[lik]"``, selected via ``auto`` or
+``PYLATE_SCORES_BACKEND``); there ``patch_pylate()`` is a deprecated no-op.
+
 ::
 
     from late_interaction_kernels import patch_pylate, unpatch_pylate
@@ -31,6 +35,27 @@ import torch
 # replacements; ``unpatch_pylate()`` reads them back to restore PyLate.
 # The dict doubles as the "patched?" flag — non-empty == patched.
 _ORIGINAL = {}
+
+# One-time guard so the native-support notice isn't re-emitted on every
+# ``patch_pylate()`` call (e.g. per-process training setup).
+_NATIVE_NOTICE_SHOWN = False
+
+
+def _pylate_has_native_lik(scores_module) -> bool:
+    """True when this PyLate ships its own LIK backend dispatch.
+
+    Detected by capability, not version: native PyLate grows a ``backend``
+    parameter on ``colbert_scores`` (routing to its ``_lik_backend``). That
+    same kwarg is what our drop-in doesn't accept, so patching on top would
+    both shadow the native dispatch and break ``ColBERTScores`` (it forwards
+    ``backend=``).
+    """
+    import inspect
+
+    try:
+        return "backend" in inspect.signature(scores_module.colbert_scores).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _device_path(q: torch.Tensor, d: torch.Tensor) -> str | None:
@@ -216,10 +241,30 @@ def _loss_capture_targets(new_layout: bool) -> tuple[tuple[str, str], ...]:
 
 
 def patch_pylate():
-    """Install the fused kernel as the default MaxSim across ``pylate.scores`` and PyLate's loss modules."""
+    """Install the fused kernel as the default MaxSim across ``pylate.scores`` and PyLate's loss modules.
+
+    No-op on PyLate versions that ship native LIK support (deprecated there):
+    LIK is selected automatically when installed, so there is nothing to patch.
+    """
+    import warnings
+
     import pylate.scores as api  # type: ignore
 
     s, new_layout = _scores_defining_module()
+
+    if _pylate_has_native_lik(s):
+        global _NATIVE_NOTICE_SHOWN
+        if not _NATIVE_NOTICE_SHOWN:
+            _NATIVE_NOTICE_SHOWN = True
+            warnings.warn(
+                "late-interaction-kernels: this PyLate ships native LIK support, so "
+                "`patch_pylate()` is now a no-op. LIK is used automatically when "
+                'installed (`pip install "pylate[lik]"`); force it over flash/torch '
+                'with `PYLATE_SCORES_BACKEND=lik` (or `backend="lik"`).',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return  # leave PyLate's own dispatch alone; `_ORIGINAL` stays empty so unpatch is a no-op too
 
     if "colbert_scores" in _ORIGINAL:
         return  # already patched
@@ -244,7 +289,6 @@ def patch_pylate():
     # those references too. Warn if any are unreachable so users notice
     # silent fallbacks after a future PyLate refactor.
     import importlib
-    import warnings
 
     missed: list[str] = []
     for mod_name, attr in _loss_capture_targets(new_layout):
