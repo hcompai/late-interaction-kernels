@@ -1507,35 +1507,25 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </div>
 
   <p>
-    This scatter is a parallel reduction, and there are two classic ways to
-    organise one: parallelise over the <em>sources</em> and let the writers
-    collide, or parallelise over the <em>destinations</em> and let each
-    output row gather its own contributors. The library implements both,
-    one per backward method:
+    This scatter is a parallel reduction, and the library implements both
+    classic ways to organise one:
   </p>
 
   <ul>
     <li>
       <strong><code>unified</code> — source-owned (&ldquo;push&rdquo;).</strong>
-      One program per query block $(i, s)$. The program already holds
-      $\Qm_{i, s}$ to compute $\nabla_{\Qm}$, so it <em>pushes</em> its
-      $\nabla_{\Dm}$ contribution in the same pass — both gradients from a
-      single read of $\Qm$, roughly halving HBM read traffic. But several
-      programs may push into the same row, so every write must be an fp32
-      <code>atomic_add</code>: the hardware serialises colliding writes,
-      the accumulation buffer has to be full-size fp32 (thousands of tiny
-      additions in bf16 would destroy precision), and the addition order
-      varies run to run.
+      One program per query block $(i, s)$. It already holds $\Qm_{i, s}$
+      for $\nabla_{\Qm}$, so it <em>pushes</em> its $\nabla_{\Dm}$
+      contribution in the same pass — both gradients from a single read of
+      $\Qm$. Colliding writers are serialised with fp32
+      <code>atomic_add</code>, so the addition order varies run to run.
     </li>
     <li>
       <strong><code>lowmem</code> — destination-owned (&ldquo;pull&rdquo;).</strong>
-      Invert the loop: one program per output row $(j, t)$, which is now
-      that row's only writer. The program scans the saved argmax for the
-      $(i, s)$ pairs that picked $t$, <em>pulls</em> their contributions
-      through a one-hot matmul on the tensor cores, accumulates in fp32
-      registers, and stores exactly once, directly in the input dtype.
-      No atomics, no full-size fp32 buffer, no fp32→bf16 transient — and
-      a fixed reduction order, so the result is bitwise reproducible.
+      One program per output row $(j, t)$ — that row's only writer. It
+      <em>pulls</em> the contributing $(i, s)$ pairs from the saved argmax
+      through a one-hot matmul, accumulates in fp32 registers, and stores
+      once, directly in the input dtype. No atomics, fixed order.
     </li>
   </ul>
 
