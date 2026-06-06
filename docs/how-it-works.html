@@ -832,7 +832,7 @@
 
 <header>
   <div class="eyebrow">how it works</div>
-  <h1>Scoring every query–document token pair without materialising the table</h1>
+  <h1>LIK: Scoring every query–document token pair without materialising the table</h1>
   <p class="byline">
     by
     <a href="https://github.com/uminaty">Aurélien Lac</a>
@@ -843,7 +843,8 @@
     Late-interaction retrieval models compare every query token to every
     document token. A direct implementation builds a four-dimensional similarity
     tensor that overflows GPU memory at modern context lengths. The kernels in
-    this library compute the same result without ever storing that tensor, by
+    the late-interaction-kernels (LIK) library compute the same result
+    without ever storing that tensor, by
     streaming tiles through on-chip memory and folding the reductions into the
     same pass.
   </p>
