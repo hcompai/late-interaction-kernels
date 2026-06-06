@@ -823,6 +823,7 @@
   <ol id="toc-appendix" class="toc-appendix">
     <li><a href="#hierarchy">GPU memory hierarchy</a></li>
     <li><a href="#intensity">Arithmetic intensity</a></li>
+    <li><a href="#constexpr">The constexpr bargain</a></li>
     <li><a href="#derivation">Deriving the backward gradients</a></li>
   </ol>
 </aside>
@@ -1444,7 +1445,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $\max$ is sub-differentiable: only the argmax position carries a gradient,
     so the backward pass is simpler than for softmax. With
     $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score,
-    a short chain-rule walk (Appendix <a href="#derivation">C</a>) gives:
+    a short chain-rule walk (Appendix <a href="#derivation">D</a>) gives:
   </p>
 
   <p>
@@ -1807,8 +1808,67 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 </section>
 
 <!-- ============================================================ -->
+<section id="constexpr" class="appendix">
+  <h2><span class="num">C</span>The constexpr bargain</h2>
+
+  <p>
+    A <code>tl.constexpr</code> kernel argument is baked into the compiled
+    binary. The bargain: the compiler can specialise and unroll code for
+    that exact value, but every new value it meets compiles a brand-new
+    kernel — a multi-second stall — and adds an entry to the autotune
+    cache (the per-shape benchmark sweep that picks tile sizes and launch
+    parameters). The rule the library converged on: <strong>take the deal
+    only where the compiler actually uses the value; where you must take
+    it, shrink the domain.</strong>
+  </p>
+
+  <p>
+    Both halves were learned on two loops of the forward kernel that look
+    almost identical in the source:
+  </p>
+
+<pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq must be constexpr</span>
+    ...
+    for d_start in range(0, Ld, BLOCK_D):        <span style="color:var(--ink-dim)"># plain runtime loop → Ld is a normal argument</span></code></pre>
+
+  <p>
+    <strong>$L_d$: refuse the deal.</strong> The kernels originally
+    declared <code>Ld: tl.constexpr</code> and keyed the autotune cache on
+    it. But $L_d$ only bounds the long inner loop, which the compiler
+    pipelines rather than unrolls — it never specialises on the value. So
+    $L_d = 300$ and $L_d = 301$ were literally different binaries with
+    identical machine code, and every distinct document length in a ragged
+    corpus cost a recompile plus an autotune sweep — repeated mid-training
+    stalls. Making $L_d$ a plain runtime argument cut cold start
+    $9.3\times$ and changed nothing in the generated code.
+  </p>
+
+  <p>
+    <strong>$L_q$: take the deal, shrink the domain.</strong> The outer
+    loop runs only a handful of iterations, so it uses
+    <code>tl.static_range</code>: the compiler stamps the body out $n$
+    times as straight-line code, which requires knowing $n$ — here
+    constexpr genuinely buys better instruction scheduling, so $L_q$ has
+    to stay one. But the per-batch max query length floats step to step,
+    and every novel value re-triggered the compile-and-sweep: measured
+    $3.1\times$ <em>slower</em> than plain einsum end-to-end. The fix
+    shrinks the set of values that can ever exist: round $L_q$ up to the
+    next power of two and zero-pad, with the query mask covering the fake
+    tokens exactly — at most nine buckets between 16 and 4096. Wall clock
+    on the offending run: $39.0$ s $\rightarrow$ $8.3$ s.
+  </p>
+
+  <div class="note">
+    <strong>Same-looking loops, opposite decisions.</strong> Unroll the
+    short outer loop, pipeline the long inner one. Constexpr trades
+    compilation count for code quality — a good trade exactly where the
+    compiler uses the value, and pure waste everywhere else.
+  </div>
+</section>
+
+<!-- ============================================================ -->
 <section id="derivation" class="appendix">
-  <h2><span class="num">C</span>Deriving the backward gradients</h2>
+  <h2><span class="num">D</span>Deriving the backward gradients</h2>
 
   <p>
     Section <a href="#backward">7</a> quotes the closed forms for
