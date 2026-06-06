@@ -818,7 +818,6 @@
     <li><a href="#fused">Fused forward: tile, stream, accumulate</a></li>
     <li><a href="#online-max">The online-max recurrence</a></li>
     <li><a href="#backward">Backward: argmax-only gradients</a></li>
-    <li><a href="#variants">Variants in the library</a></li>
   </ol>
   <div class="toc-appendix-label">Appendix</div>
   <ol id="toc-appendix" class="toc-appendix">
@@ -1549,54 +1548,6 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     Triton program per output row streaming a single embedding vector, so they
     are autotuned over <code>num_warps</code> and <code>num_stages</code> only,
     keyed like the forward so the cache holds one entry per training regime.
-  </p>
-</section>
-
-<!-- ============================================================ -->
-<section id="variants">
-  <h2><span class="num">8</span>Variants in the library</h2>
-
-  <p>
-    The streaming-and-never-storing structure is the entire optimisation. The
-    rest of the library applies the same idea to a few adjacent workloads:
-  </p>
-
-  <ul>
-    <li>
-      <strong>Variable-length / packed input</strong>
-      (<code>maxsim_varlen</code>). Real corpora have ragged lengths; padding
-      to $L_d^{\max}$ wastes roughly half the FLOPs. The packed kernel
-      consumes $[\text{total\_tokens}, d]$ tensors with FlashAttention-style
-      <code>cu_seqlens</code> offsets and runs the same tiling.
-    </li>
-    <li>
-      <strong>Fused $D$-side projection</strong>
-      (<code>maxsim_from_hidden</code>). For corpora stored as ModernBERT
-      hidden states, the kernel folds
-      $\texttt{Linear} \rightarrow \texttt{L2-normalize} \rightarrow \texttt{MaxSim}$
-      into a single pass. The projected embedding tensor is never written to
-      HBM. The training backward gathers only the winning positions and
-      recomputes the projection locally.
-    </li>
-    <li>
-      <strong>PLAID / ColBERTv2</strong>
-      (<code>maxsim_residual</code>, <code>maxsim_residual_varlen</code>).
-      The doc embeddings live on disk as
-      $(\text{centroid index}, \text{quantised residual})$. The kernel
-      decompresses on the fly in SRAM, optionally L2-normalises, and runs
-      MaxSim, all in one program with no dense decompressed tensor ever
-      materialised.
-    </li>
-    <li>
-      <strong>FP8 MaxSim</strong> (<code>maxsim_inference_fp8</code>). On
-      Hopper, the GEMM uses the FP8 tensor cores at twice the bf16 throughput;
-      the reduction stays in fp32 to preserve range.
-    </li>
-  </ul>
-
-  <p class="note">
-    Different inputs, same recipe: keep large intermediates on-chip, run the
-    reductions in registers, and ship only the final scores to HBM.
   </p>
 </section>
 
