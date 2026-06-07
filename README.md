@@ -24,8 +24,24 @@
 
 </div>
 
-> [!NOTE]
-> Full algorithmic walkthrough, animations and benchmark plots live on the docs site: **[hcompai.github.io/late-interaction-kernels](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)**.
+<table>
+<tr>
+<td width="55%" valign="middle">
+
+The full algorithmic walkthrough (tiling, online max, the backward pass) with step-through animations and benchmark plots lives on the docs site:
+
+**👉 [hcompai.github.io/late-interaction-kernels](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)**
+
+</td>
+<td width="45%" valign="middle" align="center">
+
+<a href="https://hcompai.github.io/late-interaction-kernels/how-it-works.html">
+  <img src="assets/how_it_works_preview.webp" alt="How it works · design walkthrough preview" width="420">
+</a>
+
+</td>
+</tr>
+</table>
 
 ## Introduction
 
