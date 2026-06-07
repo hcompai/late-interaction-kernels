@@ -767,7 +767,36 @@
     /* The collapsed-state selector has higher specificity and would keep the 44px
        sidebar column at narrow widths, leaving a dead strip. Override it here. */
     html[data-toc="collapsed"] .layout { grid-template-columns: 1fr; }
-    aside.toc { display: none; }
+    /* Narrow windows: the sidebar becomes a bar pinned flush under the topbar,
+       so the TOC stays reachable mid-page. Collapsed it is a slim "Contents"
+       button; expanded it drops down as a scrollable panel over the content
+       (opaque background, capped height). z-index sits below the topbar's 30. */
+    aside.toc {
+      position: sticky;
+      top: 57px;
+      z-index: 20;
+      height: auto;
+      max-height: calc(100vh - 70px);
+      overflow-y: auto;
+      background: var(--bg);
+      padding: 10px 0 6px;
+      border-bottom: 1px solid var(--line);
+    }
+    aside.toc .toc-toggle { margin-bottom: 10px; }
+    /* Anchor jumps must clear the topbar plus the pinned Contents bar. */
+    section { scroll-margin-top: 120px; }
+    /* Inline, a visibility:hidden list would keep its tall layout box and
+       leave a dead gap — drop it from flow entirely (no animation here). */
+    html[data-toc="collapsed"] aside.toc ol,
+    html[data-toc="collapsed"] aside.toc .toc-appendix-label { display: none; }
+    /* Keep the "Contents" label on the collapsed button: inline, a glyph-only
+       square is too cryptic as the sole way back to the TOC. */
+    html[data-toc="collapsed"] aside.toc .toc-toggle { padding: 6px 12px 6px 13px; gap: 10px; }
+    html[data-toc="collapsed"] aside.toc .toc-toggle .lbl {
+      opacity: 1;
+      max-width: 100px;
+      pointer-events: auto;
+    }
     .anim-grid { grid-template-columns: 1fr; }
     body { font-size: 16.5px; }
     h1 { font-size: clamp(1.85rem, 7vw, 2.4rem); }
@@ -2067,7 +2096,11 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   var saved = null;
   try { saved = localStorage.getItem(KEY); } catch (e) {}
-  var state = saved === "collapsed" ? "collapsed" : "expanded";
+  // No saved preference on a narrow window → start collapsed, so the inline
+  // TOC doesn't push the title below the fold on first visit.
+  var narrow = window.matchMedia && window.matchMedia("(max-width: 880px)").matches;
+  var state = saved ? (saved === "collapsed" ? "collapsed" : "expanded")
+                    : (narrow ? "collapsed" : "expanded");
 
   function apply(s) {
     if (s === "collapsed") html.setAttribute("data-toc", "collapsed");
@@ -2092,6 +2125,20 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     }
     apply(state);
   });
+
+  // On narrow layouts the expanded TOC is a pinned panel over the content —
+  // collapse it after a section is picked so it doesn't cover the destination.
+  // Visual only: the saved preference is left untouched.
+  var tocLinks = document.querySelectorAll("aside.toc a");
+  for (var i = 0; i < tocLinks.length; i++) {
+    tocLinks[i].addEventListener("click", function() {
+      var narrowNow = window.matchMedia && window.matchMedia("(max-width: 880px)").matches;
+      if (narrowNow && state === "expanded") {
+        state = "collapsed";
+        apply(state);
+      }
+    });
+  }
 })();
 </script>
 
