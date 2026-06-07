@@ -767,7 +767,36 @@
     /* The collapsed-state selector has higher specificity and would keep the 44px
        sidebar column at narrow widths, leaving a dead strip. Override it here. */
     html[data-toc="collapsed"] .layout { grid-template-columns: 1fr; }
-    aside.toc { display: none; }
+    /* Narrow windows: the sidebar becomes a bar pinned flush under the topbar,
+       so the TOC stays reachable mid-page. Collapsed it is a slim "Contents"
+       button; expanded it drops down as a scrollable panel over the content
+       (opaque background, capped height). z-index sits below the topbar's 30. */
+    aside.toc {
+      position: sticky;
+      top: 57px;
+      z-index: 20;
+      height: auto;
+      max-height: calc(100vh - 70px);
+      overflow-y: auto;
+      background: var(--bg);
+      padding: 10px 0 6px;
+      border-bottom: 1px solid var(--line);
+    }
+    aside.toc .toc-toggle { margin-bottom: 10px; }
+    /* Anchor jumps must clear the topbar plus the pinned Contents bar. */
+    section { scroll-margin-top: 120px; }
+    /* Inline, a visibility:hidden list would keep its tall layout box and
+       leave a dead gap — drop it from flow entirely (no animation here). */
+    html[data-toc="collapsed"] aside.toc ol,
+    html[data-toc="collapsed"] aside.toc .toc-appendix-label { display: none; }
+    /* Keep the "Contents" label on the collapsed button: inline, a glyph-only
+       square is too cryptic as the sole way back to the TOC. */
+    html[data-toc="collapsed"] aside.toc .toc-toggle { padding: 6px 12px 6px 13px; gap: 10px; }
+    html[data-toc="collapsed"] aside.toc .toc-toggle .lbl {
+      opacity: 1;
+      max-width: 100px;
+      pointer-events: auto;
+    }
     .anim-grid { grid-template-columns: 1fr; }
     body { font-size: 16.5px; }
     h1 { font-size: clamp(1.85rem, 7vw, 2.4rem); }
@@ -818,12 +847,12 @@
     <li><a href="#fused">Fused forward: tile, stream, accumulate</a></li>
     <li><a href="#online-max">The online-max recurrence</a></li>
     <li><a href="#backward">Backward: argmax-only gradients</a></li>
-    <li><a href="#variants">Variants in the library</a></li>
   </ol>
   <div class="toc-appendix-label">Appendix</div>
   <ol id="toc-appendix" class="toc-appendix">
     <li><a href="#hierarchy">GPU memory hierarchy</a></li>
     <li><a href="#intensity">Arithmetic intensity</a></li>
+    <li><a href="#constexpr">The constexpr bargain</a></li>
     <li><a href="#derivation">Deriving the backward gradients</a></li>
   </ol>
 </aside>
@@ -832,7 +861,7 @@
 
 <header>
   <div class="eyebrow">how it works</div>
-  <h1>Scoring every query–document token pair without materialising the table</h1>
+  <h1>LIK: Scoring every query–document token pair without materialising the table</h1>
   <p class="byline">
     by
     <a href="https://github.com/uminaty">Aurélien Lac</a>
@@ -843,7 +872,8 @@
     Late-interaction retrieval models compare every query token to every
     document token. A direct implementation builds a four-dimensional similarity
     tensor that overflows GPU memory at modern context lengths. The kernels in
-    this library compute the same result without ever storing that tensor, by
+    the late-interaction-kernels (LIK) library compute the same result
+    without ever storing that tensor, by
     streaming tiles through on-chip memory and folding the reductions into the
     same pass.
   </p>
@@ -888,8 +918,8 @@
     Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
     tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, batch
     of 64 pairs) that tensor is 8 GB in fp16. Each element is written once
-    and read twice, so the GPU spends most of its time on HBM traffic, not
-    compute. The kernels in this library compute the same result without ever
+    and read back once, so the GPU spends most of its time on HBM traffic,
+    not compute. The kernels in this library compute the same result without ever
     materialising that tensor, by streaming $B_q \times B_d$ tiles through
     on-chip memory and folding the reductions into the same pass.
   </div>
@@ -1123,8 +1153,9 @@
 
   <div class="note">
     <strong>This is the entire optimisation.</strong> A naive implementation
-    writes the full $\Sm$ tensor to HBM and reads it back twice (once for the
-    max, once for the sum). The fused program reads $\Qm$ and $\Dm$ once, keeps
+    writes the full $\Sm$ tensor to HBM and reads it back for the max (the
+    much smaller max tensor makes a further round-trip for the sum). The
+    fused program reads $\Qm$ and $\Dm$ once, keeps
     every $\Sm$ slice on-chip, and writes one fp32 scalar per pair. The next
     section makes the cost difference concrete.
   </div>
@@ -1146,7 +1177,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     The full similarity tensor $\Sm$ is written to HBM, then read back to take
-    the row-wise max, then read again for the sum. Its memory footprint is
+    the row-wise max; only the much smaller $[N_q, N_d, L_q]$ max tensor is
+    read again for the sum. Its memory footprint is
   </p>
 
   <p>
@@ -1226,8 +1258,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Beyond the memory pressure, the naive version is bandwidth-bound: each
-    element of $\Sm$ is written to HBM once and read twice for a single
-    multiply-add per element. The arithmetic intensity is far below the H100
+    element of $\Sm$ is written to HBM once and read back once, all for a
+    single multiply-add per element. The arithmetic intensity is far below the H100
     ridge point, so the SMs spend most of their time waiting on memory.
     Appendix <a href="#intensity">B</a> works the FLOP-per-byte numbers out
     and places both implementations on the roofline.
@@ -1277,8 +1309,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     live in fp32 <em>registers</em>, never in SRAM: <code>tl.dot</code>
     returns its accumulator straight into the register file, and the
     row-reduction happens there. At typical block sizes
-    ($\text{BLOCK\_Q} = \text{BLOCK\_D} = 64$, $d = 128$), SMEM use is
-    around 32 KiB per program, comfortably below the H100's 228 KiB per
+    ($\text{BLOCK\_Q} = \text{BLOCK\_D} = 64$, $d = 128$), the operand
+    tiles cost 32 KiB per pipeline stage — 64–96 KiB per program at the
+    usual two to three stages — comfortably below the H100's 228 KiB per
     SM, leaving room for multiple concurrent programs and the autotuner
     to trade block size against occupancy.
   </p>
@@ -1288,8 +1321,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <p>
     For ColPali-scale queries ($L_q \approx 1024$ visual patches), the outer
     loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
-    inside one program, leaving the rest of the SM grid idle. Because MaxSim
-    is a sum over query tokens of a per-token max, it decomposes exactly:
+    inside one program, leaving the rest of the SM grid idle. But MaxSim is
+    a sum over query tokens of a per-token max, so it decomposes exactly:
   </p>
 
   <p>
@@ -1297,29 +1330,21 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    <code>maxsim()</code> exploits this whenever $L_q &gt; 512$ by
-    reshaping $\Qm \in \mathbb{R}^{N_q \times L_q \times d}$ into
-    $\Qm_c \in \mathbb{R}^{N_q n_c \times 128 \times d}$ (128 tokens per
-    chunk, $n_c = \lceil L_q / 128 \rceil$), running the kernel over the
-    larger batch, and summing the chunk scores back per original query.
-    The reshape and sum are plain tensor ops, so autograd flows through them
-    unchanged and no custom backward is needed.
+    When $L_q &gt; 512$, <code>maxsim()</code> reshapes $\Qm$ into
+    $N_q n_c$ chunks of 128 tokens ($n_c = \lceil L_q / 128 \rceil$), runs
+    the kernel over the larger batch, and sums the chunk scores back per
+    query — plain tensor ops, so autograd flows through unchanged. Two
+    gains at once: more programs on the grid, and the kernel always sees
+    $L_q = 128$, pinning the autotune cache to one entry instead of one
+    per distinct query length.
   </p>
 
   <p>
-    Two gains at once: more programs on the grid (better SM utilisation)
-    and the kernel always sees $L_q = 128$, pinning the autotune cache to a
-    small constant rather than one entry per distinct query length.
-  </p>
-
-  <p>
-    Splitting only pays off once the per-program serial loop dominates the
-    cost of launching the extra programs. Below that crossover the inner loop
-    is already short and the grid already full, so chunking would only add
-    launch overhead, which is slower than not chunking at all. The split therefore
-    fires only when $L_q &gt; 512$; short queries (ColBERT $L_q \leq 32$,
-    long-document $L_q \leq 512$) take the un-chunked path, which is already
-    the faster one for them.
+    Below the $L_q = 512$ crossover the serial loop is already short and
+    the grid already full, so the extra launches would only slow things
+    down — short ColBERT-style queries take the un-chunked path. The same
+    logic exempts the 4-D KD layout entirely: it already launches
+    $N_q \cdot K$ programs, enough to fill every SM.
   </p>
 
   <h3>Step through the algorithm</h3>
@@ -1440,7 +1465,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     $\max$ is sub-differentiable: only the argmax position carries a gradient,
     so the backward pass is simpler than for softmax. With
     $g \in \mathbb{R}^{N_q \times N_d}$ the upstream gradient on the score,
-    a short chain-rule walk (Appendix <a href="#derivation">C</a>) gives:
+    a short chain-rule walk (Appendix <a href="#derivation">D</a>) gives:
   </p>
 
   <p>
@@ -1503,38 +1528,153 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </div>
 
   <p>
-    The library offers two reduction strategies to handle this
-    contention; <code>auto</code> (the default) chooses between them:
+    This scatter is a parallel reduction, and the library implements both
+    classic ways to organise one:
   </p>
 
+  <ul>
+    <li>
+      <strong><code>unified</code> — source-owned (&ldquo;push&rdquo;).</strong>
+      One program per query block $(i, s)$. It already holds $\Qm_{i, s}$
+      for $\nabla_{\Qm}$, so it <em>pushes</em> its $\nabla_{\Dm}$
+      contribution in the same pass — both gradients from a single read of
+      $\Qm$. Colliding writers are serialised with fp32
+      <code>atomic_add</code>, so the addition order varies run to run.
+    </li>
+    <li>
+      <strong><code>lowmem</code> — destination-owned (&ldquo;pull&rdquo;).</strong>
+      One program per output row $(j, t)$ — that row's only writer. It
+      <em>pulls</em> the contributing $(i, s)$ pairs from the saved argmax
+      through a one-hot matmul, accumulates in fp32 registers, and stores
+      once, directly in the input dtype. No atomics, fixed order.
+    </li>
+  </ul>
+
+  <div class="panel">
+    <div class="chart-wrap">
+      <svg viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="Two reduction strategies side by side: unified pushes contributions with atomic adds into an fp32 buffer; lowmem pulls contributions into registers and stores once">
+        <defs>
+          <marker id="bwarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
+          </marker>
+          <marker id="bwarr-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent-3)"/>
+          </marker>
+          <marker id="bwarr-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent-2)"/>
+          </marker>
+        </defs>
+
+        <!-- divider -->
+        <line x1="380" y1="34" x2="380" y2="262" stroke="var(--line)"/>
+
+        <!-- ============ left: unified (push) ============ -->
+        <text x="190" y="24" font-size="12" text-anchor="middle"
+              fill="var(--ink)" font-family="var(--font-display)" font-weight="600">unified · source-owned (push)</text>
+
+        <!-- source programs -->
+        <text x="76" y="52" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">1 program per (i, s)</text>
+        <rect x="28" y="62"  width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="76" y="79"  font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">(i=0, s=0)</text>
+        <rect x="28" y="112" width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="76" y="129" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">(i=1, s=4)</text>
+        <rect x="28" y="162" width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="76" y="179" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">(i=2, s=2)</text>
+
+        <!-- destination rows -->
+        <text x="294" y="52" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">fp32 buffer in HBM</text>
+        <rect x="236" y="86" width="116" height="26" rx="4"
+              fill="color-mix(in oklch, var(--o-active) 14%, var(--panel))" stroke="var(--o-active)"/>
+        <text x="294" y="103" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">grad_D[j, 5]</text>
+        <rect x="236" y="162" width="116" height="26" rx="4" fill="var(--d-idle)" stroke="var(--d-active)"/>
+        <text x="294" y="179" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">grad_D[j, 12]</text>
+
+        <!-- push arrows: two collide on row 5 -->
+        <path d="M 124 75 L 232 97"  stroke="var(--accent-3)" stroke-width="1.3" fill="none" marker-end="url(#bwarr-hot)"/>
+        <path d="M 124 125 L 232 101" stroke="var(--accent-3)" stroke-width="1.3" fill="none" marker-end="url(#bwarr-hot)"/>
+        <path d="M 124 175 L 232 175" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#bwarr)"/>
+
+        <text x="178" y="70" font-size="9.5" text-anchor="middle" fill="var(--accent-3)" font-weight="600">atomic_add ×2</text>
+        <text x="178" y="166" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">atomic_add</text>
+
+        <text x="190" y="226" font-size="10" text-anchor="middle" fill="var(--ink-dim)">colliding writes serialised by hardware</text>
+        <text x="190" y="244" font-size="10" text-anchor="middle" fill="var(--ink-dim)">addition order varies → not reproducible</text>
+        <text x="190" y="262" font-size="10" text-anchor="middle" fill="var(--ink-dim)">fp32 buffer + cast to bf16 afterwards</text>
+
+        <!-- ============ right: lowmem (pull) ============ -->
+        <text x="570" y="24" font-size="12" text-anchor="middle"
+              fill="var(--ink)" font-family="var(--font-display)" font-weight="600">lowmem · destination-owned (pull)</text>
+
+        <!-- contributing pairs (read-only) -->
+        <text x="408" y="52" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">saved argmax → contributors</text>
+        <rect x="408" y="62"  width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="456" y="79"  font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">(i=0, s=0)</text>
+        <rect x="408" y="112" width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="456" y="129" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">(i=1, s=4)</text>
+        <rect x="408" y="162" width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"
+              fill-opacity="0.45" stroke-opacity="0.45"/>
+        <text x="456" y="179" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)" fill-opacity="0.55">(i=2, s=2)</text>
+        <text x="408" y="203" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">→ pulled by the (j, t=12) owner</text>
+
+        <!-- owner program -->
+        <rect x="566" y="66" width="170" height="62" rx="6"
+              fill="color-mix(in oklch, var(--accent-2) 8%, var(--panel))" stroke="var(--accent-2)" stroke-width="1.3"/>
+        <text x="651" y="86"  font-size="10.5" text-anchor="middle" fill="var(--ink)">program owns (j, t=5)</text>
+        <text x="651" y="103" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">Σ in fp32 registers</text>
+        <text x="651" y="118" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">via one-hot matmul</text>
+
+        <!-- pull arrows (gather) -->
+        <path d="M 562 84 L 508 76"  stroke="var(--accent-2)" stroke-width="1.3" fill="none" stroke-dasharray="4,3" marker-end="url(#bwarr-good)"/>
+        <path d="M 562 104 L 508 122" stroke="var(--accent-2)" stroke-width="1.3" fill="none" stroke-dasharray="4,3" marker-end="url(#bwarr-good)"/>
+        <text x="538" y="99" font-size="9.5" text-anchor="middle" fill="var(--accent-2)">gather</text>
+
+        <!-- single store -->
+        <rect x="566" y="160" width="170" height="26" rx="4" fill="var(--d-idle)" stroke="var(--d-active)"/>
+        <text x="651" y="177" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">grad_D[j, 5] · bf16</text>
+        <path d="M 651 132 L 651 156" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#bwarr)"/>
+        <text x="662" y="148" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">store ×1</text>
+
+        <text x="570" y="226" font-size="10" text-anchor="middle" fill="var(--ink-dim)">exactly one writer per row → no atomics</text>
+        <text x="570" y="244" font-size="10" text-anchor="middle" fill="var(--ink-dim)">fixed order → bitwise reproducible</text>
+        <text x="570" y="262" font-size="10" text-anchor="middle" fill="var(--ink-dim)">written once, directly in the input dtype</text>
+      </svg>
+      <div class="chart-legend">
+        <span>The same three contributions, resolved two ways: <code>unified</code> lets writers collide and pays in atomics and an fp32 buffer; <code>lowmem</code> gives each row one owner and pays in wasted FLOPs (the one-hot is mostly zeros).</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Where you accumulate decides what you allocate.</strong>
+    Accumulate <em>in memory</em> and the buffer must be fp32 — 4 bytes per
+    element, plus a transient peak while the fp32 buffer and its bf16 cast
+    coexist. Accumulate <em>in registers</em> and HBM only ever receives
+    each final value once, so the kernel can write the input dtype directly.
+    That one move is why <code>lowmem</code> roughly halves backward peak
+    memory.
+  </div>
+
   <table class="tbl">
-    <thead><tr><th>Method</th><th>Bitwise reproducible</th><th>When it is picked</th></tr></thead>
+    <thead><tr><th></th><th><code>unified</code> · push</th><th><code>lowmem</code> · pull</th></tr></thead>
     <tbody>
-      <tr>
-        <td><code>unified</code></td>
-        <td>no <span class="mono" style="color:var(--ink-dim)">(atomic, ≤1e-6 rel)</span></td>
-        <td>Default for cross-products. Single-pass fused $\nabla_{\Qm} + \nabla_{\Dm}$. Hoists $\Qm_{i, s}$ out of the doc-batch loop, roughly halving HBM read traffic; $\nabla_{\Dm}$ writes use fp32 atomic add.</td>
-      </tr>
-      <tr>
-        <td><code>lowmem</code></td>
-        <td>yes</td>
-        <td>Picked for gradient-heavy shapes — KD / hard-negative layouts and high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$). Destination-owned: accumulates in fp32 registers and writes $\nabla_{\Qm} / \nabla_{\Dm}$ directly in the input dtype, so no full-size fp32 buffer, no fp32→bf16 transient, no atomics. Roughly halves backward peak memory and is the deterministic path.</td>
-      </tr>
+      <tr><td>Who writes $\nabla_{\Dm}[j, t]$</td><td>every program whose argmax hit it</td><td>exactly one program</td></tr>
+      <tr><td>Write primitive</td><td>fp32 <code>atomic_add</code></td><td>one plain store, input dtype</td></tr>
+      <tr><td>Accumulates in</td><td>HBM (full-size fp32 buffer + cast)</td><td>fp32 registers</td></tr>
+      <tr><td>Bitwise reproducible</td><td>no (atomic order varies)</td><td>yes (fixed matmul order)</td></tr>
+      <tr><td>Weak spot</td><td>contention on hot rows</td><td>wasted FLOPs $\propto L_q$ (one-hot mostly zeros)</td></tr>
     </tbody>
   </table>
 
-  <div class="note">
-    <strong>How <code>lowmem</code> avoids atomics.</strong>
-    The <code>unified</code> path lives with the scatter pattern at runtime
-    and uses fp32 atomic adds into a full-size buffer. <code>lowmem</code>
-    <em>inverts</em> it: each Triton program owns one $(j, t)$ output row
-    and reduces the contributing $(i, s)$ pairs from the saved argmax in
-    fp32 registers via a one-hot matmul, then writes once in the input
-    dtype — no atomics, bitwise-stable across launches, and no fp32→bf16
-    transient. That is why <code>auto</code> routes the high-contention
-    $N_q, N_d \geq 256 \wedge L_q \leq 64$ regime (and every KD /
-    hard-negative layout) there.
-  </div>
+  <p>
+    That last row is the entire routing logic of <code>auto</code> (the
+    default). On long-query × long-doc cross-products the one-hot waste
+    outweighs the atomic pain, so those go to <code>unified</code>.
+    Everything gradient-heavy — KD / hard-negative layouts and
+    high-contention squares ($N_q, N_d \geq 256$, $L_q \leq 64$) — goes to
+    <code>lowmem</code>, which is also the path to force when
+    bitwise-reproducible training matters.
+  </p>
 
   <p>
     All paths use Triton's stable <code>argmax</code> (lowest-index
@@ -1549,54 +1689,6 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     Triton program per output row streaming a single embedding vector, so they
     are autotuned over <code>num_warps</code> and <code>num_stages</code> only,
     keyed like the forward so the cache holds one entry per training regime.
-  </p>
-</section>
-
-<!-- ============================================================ -->
-<section id="variants">
-  <h2><span class="num">8</span>Variants in the library</h2>
-
-  <p>
-    The streaming-and-never-storing structure is the entire optimisation. The
-    rest of the library applies the same idea to a few adjacent workloads:
-  </p>
-
-  <ul>
-    <li>
-      <strong>Variable-length / packed input</strong>
-      (<code>maxsim_varlen</code>). Real corpora have ragged lengths; padding
-      to $L_d^{\max}$ wastes roughly half the FLOPs. The packed kernel
-      consumes $[\text{total\_tokens}, d]$ tensors with FlashAttention-style
-      <code>cu_seqlens</code> offsets and runs the same tiling.
-    </li>
-    <li>
-      <strong>Fused $D$-side projection</strong>
-      (<code>maxsim_from_hidden</code>). For corpora stored as ModernBERT
-      hidden states, the kernel folds
-      $\texttt{Linear} \rightarrow \texttt{L2-normalize} \rightarrow \texttt{MaxSim}$
-      into a single pass. The projected embedding tensor is never written to
-      HBM. The training backward gathers only the winning positions and
-      recomputes the projection locally.
-    </li>
-    <li>
-      <strong>PLAID / ColBERTv2</strong>
-      (<code>maxsim_residual</code>, <code>maxsim_residual_varlen</code>).
-      The doc embeddings live on disk as
-      $(\text{centroid index}, \text{quantised residual})$. The kernel
-      decompresses on the fly in SRAM, optionally L2-normalises, and runs
-      MaxSim, all in one program with no dense decompressed tensor ever
-      materialised.
-    </li>
-    <li>
-      <strong>FP8 MaxSim</strong> (<code>maxsim_inference_fp8</code>). On
-      Hopper, the GEMM uses the FP8 tensor cores at twice the bf16 throughput;
-      the reduction stays in fp32 to preserve range.
-    </li>
-  </ul>
-
-  <p class="note">
-    Different inputs, same recipe: keep large intermediates on-chip, run the
-    reductions in registers, and ship only the final scores to HBM.
   </p>
 </section>
 
@@ -1736,8 +1828,111 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 </section>
 
 <!-- ============================================================ -->
+<section id="constexpr" class="appendix">
+  <h2><span class="num">C</span>The constexpr bargain</h2>
+
+  <p>
+    A <code>tl.constexpr</code> kernel argument is baked into the compiled
+    binary. That is a bargain, not a feature: the compiler can specialise
+    and unroll code for that exact value, but every new value it meets
+    compiles a brand-new kernel — a multi-second stall — and adds an entry
+    to the autotune cache. So every shape-like argument poses the same
+    question: <em>does the compiler actually do anything with this
+    value?</em>
+  </p>
+
+  <p>
+    The forward kernel answers it twice, on two loops that look almost
+    identical:
+  </p>
+
+<pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq is constexpr</span>
+    ...
+    for d_start in range(0, Ld, BLOCK_D):        <span style="color:var(--ink-dim)"># plain runtime loop → Ld is a normal argument</span></code></pre>
+
+  <p>
+    For $L_d$ the answer is no. It bounds the long inner loop, which the
+    compiler pipelines rather than unrolls, so specialising on it would
+    make $L_d = 300$ and $L_d = 301$ different binaries with identical
+    machine code — one recompile per distinct document length in a ragged
+    corpus, for nothing. $L_d$ stays a plain runtime argument.
+  </p>
+
+  <p>
+    For $L_q$ the answer is yes. The outer loop runs only
+    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations — a handful of
+    query tiles — so it is worth <em>unrolling</em>: the compiler deletes
+    the loop and pastes $n$ consecutive copies of its body (the
+    load-tile / matmul / row-max sequence) as straight-line code, no
+    counter, no branch. It can only do that if it knows $n$ at compile
+    time, and $n$ comes from $L_q$ — that is what forces $L_q$ to be
+    constexpr. The price would be one recompile per distinct query
+    length, and per-batch lengths float step to step. So the kernel
+    shrinks the domain instead of refusing the deal: $L_q$ is rounded up
+    to the next power of two and $\Qm$ zero-padded, with the query mask
+    covering the fake tokens exactly — at most nine values between 16 and
+    4096 can ever exist.
+  </p>
+
+  <div class="panel">
+    <div class="chart-wrap">
+      <svg viewBox="0 0 760 290" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back; an unrolled loop pastes n copies as straight-line code">
+        <defs>
+          <marker id="uarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
+          </marker>
+        </defs>
+
+        <!-- ============ row 1: runtime loop (Ld) ============ -->
+        <text x="24" y="40" font-size="11" font-weight="600" fill="var(--ink)">range(0, Ld, BLOCK_D) — compiled as a loop</text>
+        <text x="24" y="60" font-size="10" fill="var(--ink-dim)">one copy of the body; a branch jumps back each iteration,</text>
+        <text x="24" y="76" font-size="10" fill="var(--ink-dim)">so the trip count can arrive at runtime — no recompiles</text>
+
+        <rect x="470" y="50" width="130" height="38" rx="5" fill="var(--d-idle)" stroke="var(--d-active)"/>
+        <text x="535" y="73" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">loop body</text>
+        <path d="M 604 58 C 646 20, 424 20, 466 58" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <text x="535" y="26" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">branch back · ⌈Ld / BLOCK_D⌉ times</text>
+
+        <line x1="24" y1="110" x2="736" y2="110" stroke="var(--line)"/>
+
+        <!-- ============ row 2: unrolled (Lq) ============ -->
+        <text x="24" y="138" font-size="11" font-weight="600" fill="var(--ink)">tl.static_range(0, Lq, BLOCK_Q) — unrolled</text>
+        <text x="24" y="158" font-size="10" fill="var(--ink-dim)">the compiler deletes the loop and pastes n = ⌈Lq / BLOCK_Q⌉ copies of the body back-to-back —</text>
+        <text x="24" y="174" font-size="10" fill="var(--ink-dim)">it must know n while compiling, so Lq has to be constexpr</text>
+
+        <rect x="60"  y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="125" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">body · copy 0</text>
+        <rect x="235" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="300" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 1</text>
+        <rect x="410" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="475" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 2</text>
+        <rect x="585" y="196" width="130" height="38" rx="5" fill="var(--q-idle)" stroke="var(--q-active)"/>
+        <text x="650" y="219" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">copy 3</text>
+
+        <path d="M 194 215 L 231 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <path d="M 369 215 L 406 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+        <path d="M 544 215 L 581 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
+
+        <text x="388" y="264" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">straight-line code · no counter, no branch · n is stamped in at compile time (here n = 4)</text>
+      </svg>
+      <div class="chart-legend">
+        <span>The same loop body, compiled two ways. The loop form never needs its trip count at compile time; the unrolled form <em>is</em> its trip count — change $L_q$ and you have a different binary.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Same-looking loops, opposite decisions.</strong> Unroll the
+    short outer loop, pipeline the long inner one. Constexpr trades
+    compilation count for code quality — take the deal only where the
+    compiler uses the value, and where you take it, shrink the domain.
+  </div>
+</section>
+
+<!-- ============================================================ -->
 <section id="derivation" class="appendix">
-  <h2><span class="num">C</span>Deriving the backward gradients</h2>
+  <h2><span class="num">D</span>Deriving the backward gradients</h2>
 
   <p>
     Section <a href="#backward">7</a> quotes the closed forms for
@@ -1901,7 +2096,11 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   var saved = null;
   try { saved = localStorage.getItem(KEY); } catch (e) {}
-  var state = saved === "collapsed" ? "collapsed" : "expanded";
+  // No saved preference on a narrow window → start collapsed, so the inline
+  // TOC doesn't push the title below the fold on first visit.
+  var narrow = window.matchMedia && window.matchMedia("(max-width: 880px)").matches;
+  var state = saved ? (saved === "collapsed" ? "collapsed" : "expanded")
+                    : (narrow ? "collapsed" : "expanded");
 
   function apply(s) {
     if (s === "collapsed") html.setAttribute("data-toc", "collapsed");
@@ -1926,6 +2125,20 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     }
     apply(state);
   });
+
+  // On narrow layouts the expanded TOC is a pinned panel over the content —
+  // collapse it after a section is picked so it doesn't cover the destination.
+  // Visual only: the saved preference is left untouched.
+  var tocLinks = document.querySelectorAll("aside.toc a");
+  for (var i = 0; i < tocLinks.length; i++) {
+    tocLinks[i].addEventListener("click", function() {
+      var narrowNow = window.matchMedia && window.matchMedia("(max-width: 880px)").matches;
+      if (narrowNow && state === "expanded") {
+        state = "collapsed";
+        apply(state);
+      }
+    });
+  }
 })();
 </script>
 
@@ -2156,7 +2369,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
          s.flags.scoreWritten = true;
        });
   step("done",
-       "Done. The naive baseline would have written S [Lq×Ld] = " + (Lq*Ld*ELEM) + " B and read it back twice.",
+       "Done. The naive baseline would have written S [Lq×Ld] = " + (Lq*Ld*ELEM) + " B and read it back.",
        null);
 
   // ---------------- rendering ----------------
@@ -2252,7 +2465,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     refs.score.textContent = state.score;
 
     var total = state.reads + state.writes;
-    var naive = Lq*Ld*ELEM * 3 + Lq*d*ELEM + Ld*d*ELEM;
+    var naive = Lq*Ld*ELEM * 2 + Lq*d*ELEM + Ld*d*ELEM;  // S written once + read once, plus Q and D
     refs.reads.textContent  = state.reads + " B";
     refs.writes.textContent = state.writes + " B";
     refs.total.textContent  = total + " B";
