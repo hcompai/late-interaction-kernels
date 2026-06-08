@@ -122,16 +122,31 @@ scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
 
-### Patch PyLate (one line)
+### PyLate
 
-Monkey-patches PyLate's scoring + loss to route through the fused kernel. Existing PyLate training and rerank scripts run unchanged; set `LIK_DISABLE=1` to fall back to vanilla PyLate at runtime.
+PyLate ≥ 1.5.1 ships a native LIK backend ([pylate#222](https://github.com/lightonai/pylate/pull/222)) — install the extra and PyLate's `auto` dispatch picks it up, no code change:
+
+```bash
+pip install "pylate[lik]"   # or force it: PYLATE_SCORES_BACKEND=lik
+```
+
+For PyLate < 1.5.1, monkey-patch scoring + loss to route through the fused kernel (`LIK_DISABLE=1` falls back at runtime). On PyLate ≥ 1.5.1 this is a deprecated no-op.
 
 ```python
 from late_interaction_kernels import patch_pylate
 
-patch_pylate()
-# PyLate training / rerank code is unchanged
+patch_pylate()   # PyLate training / rerank code is unchanged
 ```
+
+### ColPali / colpali-engine
+
+colpali-engine ≥ 0.3.17 ships the same native LIK backend ([colpali#412](https://github.com/illuin-tech/colpali/pull/412)):
+
+```bash
+pip install "colpali-engine[lik]"   # or force it: COLPALI_SCORES_BACKEND=lik
+```
+
+For colpali-engine < 0.3.17, `patch_colpali_engine()` is the drop-in (deprecated no-op on ≥ 0.3.17).
 
 ## Benchmarks
 

@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import json
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -281,6 +282,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.variant == "lik":
+        # Native-LIK PyLate routes through this env var (ignored by older PyLate);
+        # patch_pylate() covers older PyLate and is a no-op on the native build.
+        os.environ.setdefault("PYLATE_SCORES_BACKEND", "lik")
         from late_interaction_kernels import patch_pylate
 
         patch_pylate()

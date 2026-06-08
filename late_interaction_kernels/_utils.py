@@ -12,6 +12,34 @@ def next_pow2(x: int) -> int:
     return 1 << (x - 1).bit_length()
 
 
+def package_at_least(name: str, minimum: str) -> bool:
+    """True when installed distribution ``name`` is >= ``minimum`` (absent → False).
+
+    Compares leading numeric release parts (``"1.5.1"`` → ``(1, 5, 1)``), so
+    dev/rc/post suffixes don't matter for a floor check.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _dist_version
+
+    def _release(v: str) -> tuple[int, ...]:
+        parts: list[int] = []
+        for chunk in v.split("."):
+            head = ""
+            for ch in chunk:
+                if not ch.isdigit():
+                    break
+                head += ch
+            if not head:
+                break
+            parts.append(int(head))
+        return tuple(parts)
+
+    try:
+        return _release(_dist_version(name)) >= _release(minimum)
+    except PackageNotFoundError:
+        return False
+
+
 @functools.lru_cache(maxsize=1)
 def detect_gpu() -> str:
     """Return a short GPU family string: 'hopper' | 'a100' | 'ada' | 'ampere' | 'generic'."""

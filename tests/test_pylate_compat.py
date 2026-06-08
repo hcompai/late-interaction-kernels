@@ -281,3 +281,24 @@ def test_lik_disable_env_falls_back(monkeypatch):
         assert torch.allclose(out, ref, atol=1e-5)
     finally:
         unpatch_pylate()
+
+
+def test_patch_pylate_is_noop_on_native_pylate(monkeypatch):
+    """On PyLate >= 1.5.1 (native LIK), `patch_pylate()` must detect it by
+    version, leave PyLate's own dispatch untouched, and warn — never swap in our
+    drop-in (which would shadow native routing and break `ColBERTScores`)."""
+    import warnings
+
+    import late_interaction_kernels.pylate_compat as compat
+
+    monkeypatch.setattr(compat, "package_at_least", lambda name, minimum: True)
+    monkeypatch.setattr(compat, "_NATIVE_NOTICE_SHOWN", False)
+    compat._ORIGINAL.clear()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        compat.patch_pylate()
+
+    assert compat._ORIGINAL == {}, "native PyLate must not be patched"
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    compat.unpatch_pylate()  # must be a safe no-op

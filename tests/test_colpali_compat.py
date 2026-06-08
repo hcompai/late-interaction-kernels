@@ -392,3 +392,24 @@ def test_patched_colbert_loss_backward_matches_original():
     # flagging real regressions.
     assert _rel(Q_fused.grad, Q_ref.grad) < 3e-2
     assert _rel(D_fused.grad, D_ref.grad) < 3e-2
+
+
+def test_patch_colpali_engine_is_noop_on_native_colpali(monkeypatch):
+    """On colpali-engine >= 0.3.17 (native LIK), `patch_colpali_engine()` must
+    detect it by version, leave colpali-engine's own dispatch untouched, and
+    warn — never swap class methods that the native build already routes."""
+    import warnings
+
+    import late_interaction_kernels.colpali_compat as compat
+
+    monkeypatch.setattr(compat, "package_at_least", lambda name, minimum: True)
+    monkeypatch.setattr(compat, "_NATIVE_NOTICE_SHOWN", False)
+    compat._ORIGINAL.clear()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        compat.patch_colpali_engine()
+
+    assert compat._ORIGINAL == {}, "native colpali-engine must not be patched"
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+    compat.unpatch_colpali_engine()  # must be a safe no-op

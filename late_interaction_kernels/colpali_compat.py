@@ -29,11 +29,25 @@ Dispatch rules match :func:`patch_pylate`: CUDA (Ampere+) → fused Triton
 kernel; MPS → ``torch.compile``-fused reference; CPU / sub-Ampere /
 ``LIK_DISABLE=1`` / ``use_smooth_max=True`` / shape edge cases fall
 through to colpali_engine's original implementation.
+
+For colpali-engine without a native LIK backend. Recent colpali-engine ships
+its own (``pip install "colpali-engine[lik]"``, selected via ``auto`` or
+``COLPALI_SCORES_BACKEND``); there ``patch_colpali_engine()`` is a deprecated
+no-op (see ``_COLPALI_NATIVE_MIN`` for the cutoff).
 """
 
 import os
 
 import torch
+
+from late_interaction_kernels._utils import package_at_least
+
+# First colpali-engine with native LIK support (illuin-tech/colpali#412): it
+# routes MaxSim through its own dispatcher, so our patches become redundant.
+_COLPALI_NATIVE_MIN = "0.3.17"
+
+# One-time guard so the native-support notice isn't re-emitted on every call.
+_NATIVE_NOTICE_SHOWN = False
 
 # Bookkeeping: ``patch_colpali_engine()`` stashes the original callables
 # here before swapping in ours; ``unpatch_colpali_engine()`` reads them
@@ -274,8 +288,27 @@ def patched_colbert_pairwise_negative_ce_forward(
 
 
 def patch_colpali_engine():
-    """Install the fused kernel across colpali_engine's MaxSim entry points."""
+    """Install the fused kernel across colpali_engine's MaxSim entry points.
+
+    Deprecated no-op on colpali-engine versions that ship native LIK support
+    (see ``_COLPALI_NATIVE_MIN``): LIK is selected automatically when installed,
+    so there is nothing to patch.
+    """
     import warnings
+
+    if package_at_least("colpali-engine", _COLPALI_NATIVE_MIN):
+        global _NATIVE_NOTICE_SHOWN
+        if not _NATIVE_NOTICE_SHOWN:
+            _NATIVE_NOTICE_SHOWN = True
+            warnings.warn(
+                f"late-interaction-kernels: colpali-engine >= {_COLPALI_NATIVE_MIN} ships "
+                "native LIK support, so `patch_colpali_engine()` is now a no-op. LIK is used "
+                'automatically when installed (`pip install "colpali-engine[lik]"`); force it '
+                "over torch with `COLPALI_SCORES_BACKEND=lik`.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return  # leave colpali-engine's own dispatch alone; `_ORIGINAL` stays empty
 
     if _ORIGINAL:
         return  # already patched
