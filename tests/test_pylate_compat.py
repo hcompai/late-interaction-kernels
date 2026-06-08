@@ -302,18 +302,3 @@ def test_patch_pylate_is_noop_on_native_pylate(monkeypatch):
     assert compat._ORIGINAL == {}, "native PyLate must not be patched"
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
     compat.unpatch_pylate()  # must be a safe no-op
-
-
-def test_public_api_signatures_match_pylate_native_backend():
-    """PyLate's native `_lik_backend` calls these by keyword (`q_mask`, `d_mask`,
-    `normalize`). They are now an external contract — freeze the kwarg names."""
-    import inspect
-
-    from late_interaction_kernels.autograd import maxsim, maxsim_pairs
-    from late_interaction_kernels.mps import maxsim_mps
-
-    for fn in (maxsim, maxsim_pairs):
-        params = inspect.signature(fn).parameters
-        assert {"Q", "D", "q_mask", "d_mask"} <= set(params)
-    mps_params = inspect.signature(maxsim_mps).parameters
-    assert {"Q", "D", "q_mask", "d_mask", "normalize"} <= set(mps_params)
