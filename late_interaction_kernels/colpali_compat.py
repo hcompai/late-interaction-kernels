@@ -30,10 +30,10 @@ kernel; MPS → ``torch.compile``-fused reference; CPU / sub-Ampere /
 ``LIK_DISABLE=1`` / ``use_smooth_max=True`` / shape edge cases fall
 through to colpali_engine's original implementation.
 
-For colpali-engine < 0.3.17. colpali-engine >= 0.3.17 ships its own LIK
-backend (``pip install "colpali-engine[lik]"``, selected via ``auto`` or
+For colpali-engine without a native LIK backend. Recent colpali-engine ships
+its own (``pip install "colpali-engine[lik]"``, selected via ``auto`` or
 ``COLPALI_SCORES_BACKEND``); there ``patch_colpali_engine()`` is a deprecated
-no-op.
+no-op (see ``_COLPALI_NATIVE_MIN`` for the cutoff).
 """
 
 import os
@@ -290,9 +290,9 @@ def patched_colbert_pairwise_negative_ce_forward(
 def patch_colpali_engine():
     """Install the fused kernel across colpali_engine's MaxSim entry points.
 
-    Deprecated no-op on colpali-engine >= 0.3.17, which ships native LIK
-    support: LIK is selected automatically when installed, so there is nothing
-    to patch.
+    Deprecated no-op on colpali-engine versions that ship native LIK support
+    (see ``_COLPALI_NATIVE_MIN``): LIK is selected automatically when installed,
+    so there is nothing to patch.
     """
     import warnings
 

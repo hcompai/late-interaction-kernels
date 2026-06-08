@@ -1,8 +1,9 @@
 """PyLate drop-in: replace ``pylate.scores.colbert_scores`` with our kernel.
 
-For PyLate < 1.5.1. PyLate >= 1.5.1 ships its own LIK backend
+For PyLate without a native LIK backend. Recent PyLate ships its own
 (``pip install "pylate[lik]"``, selected via ``auto`` or
-``PYLATE_SCORES_BACKEND``); there ``patch_pylate()`` is a deprecated no-op.
+``PYLATE_SCORES_BACKEND``); there ``patch_pylate()`` is a deprecated no-op
+(see ``_PYLATE_NATIVE_MIN`` for the cutoff).
 
 ::
 
@@ -232,8 +233,9 @@ def _loss_capture_targets(new_layout: bool) -> tuple[tuple[str, str], ...]:
 def patch_pylate():
     """Install the fused kernel as the default MaxSim across ``pylate.scores`` and PyLate's loss modules.
 
-    Deprecated no-op on PyLate >= 1.5.1, which ships native LIK support: LIK is
-    selected automatically when installed, so there is nothing to patch.
+    Deprecated no-op on PyLate versions that ship native LIK support (see
+    ``_PYLATE_NATIVE_MIN``): LIK is selected automatically when installed, so
+    there is nothing to patch.
     """
     import warnings
 
