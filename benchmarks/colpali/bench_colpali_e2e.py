@@ -1,11 +1,12 @@
 """Run a few real ColQwen2 training steps and record the VRAM used by every MaxSim call.
 
 Adapted from the harness in colpali PR #412 (`bench_lik/bench_train.py` at commit
-``0f289e4``), ported to released ``colpali-engine`` v0.3.16: the PR's
-``COLPALI_SCORES_BACKEND`` dispatcher does not exist in any release, so vanilla vs LIK
-is toggled with ``--variant`` (``lik`` calls :func:`patch_colpali_engine` first) and the
-instrumentation wraps the loss head's ``forward`` instead of a ``maxsim_inbatch``
-dispatcher. Each wrapped call records:
+``0f289e4``). The PR's native ``COLPALI_SCORES_BACKEND`` dispatcher shipped in
+``colpali-engine`` 0.3.17; here vanilla vs LIK is toggled with ``--variant``
+(``lik`` sets ``COLPALI_SCORES_BACKEND=lik`` and calls :func:`patch_colpali_engine`,
+which covers pre-0.3.17 and is a no-op on the native build) and the instrumentation
+wraps the loss head's ``forward`` instead of a ``maxsim_inbatch`` dispatcher. Each
+wrapped call records:
 
 - ``forward_transient_peak_mib``: extra memory while the loss forward runs, freed after.
 - ``saved_for_backward_mib``: memory held from forward until backward (vanilla keeps the
@@ -36,6 +37,7 @@ Usage:
 import argparse
 import json
 import math
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -149,10 +151,9 @@ def _build_training_config(model_name: str, batch_size: int, max_steps: int, n_s
 def _make_fixed_trainer_cls():
     """A ``ContrastiveTrainer`` subclass fixing two v0.3.16 bugs under transformers 5.x.
 
-    TODO(colpali#412): once the PR merges and a colpali-engine release ships it,
-    drop this shim and toggle variants via ``COLPALI_SCORES_BACKEND`` instead of
-    ``patch_colpali_engine()`` (the LIK-side patches retire in favor of the
-    native integration).
+    Kept for the pinned 0.3.16 bench env; on colpali-engine >= 0.3.17 the native
+    ``COLPALI_SCORES_BACKEND`` dispatch supersedes the LIK-side patches (which
+    retire to a deprecated no-op).
     """
     from colpali_engine.trainer.contrastive_trainer import ContrastiveTrainer
     from transformers import Trainer
@@ -309,6 +310,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.variant == "lik":
+        # Native-LIK colpali-engine (>=0.3.17) routes through this env var (ignored
+        # by older releases); patch_colpali_engine() covers older releases and is a
+        # no-op on the native build.
+        os.environ.setdefault("COLPALI_SCORES_BACKEND", "lik")
         from late_interaction_kernels import patch_colpali_engine
 
         patch_colpali_engine()

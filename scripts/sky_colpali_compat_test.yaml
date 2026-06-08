@@ -38,7 +38,9 @@ setup: |
   # directly, pinning torch+torchvision to cu128 builds whose libcudart.so.12
   # the CUDA 12.9 container provides (PyPI torchvision needs CUDA 13). See
   # scripts/sky_colpali_e2e.yaml for the full rationale.
-  uv pip install "colpali-engine>=0.3.10" \
+  # Pin below 0.3.17: that release ships native LIK, where patch_colpali_engine()
+  # is a deprecated no-op — these tests exercise the patch itself.
+  uv pip install "colpali-engine>=0.3.10,<0.3.17" \
       "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" \
       --extra-index-url https://download.pytorch.org/whl/cu128
   # torchvision +cu128's _C.so is compiled against a different torch ABI, so it

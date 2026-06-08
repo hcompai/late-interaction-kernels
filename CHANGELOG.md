@@ -8,14 +8,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **`patch_pylate()` defers to PyLate's native LIK backend.** PyLate now ships
-  its own LIK dispatch ([pylate#222](https://github.com/lightonai/pylate/pull/222):
-  `pip install "pylate[lik]"`, selected via `auto` / `PYLATE_SCORES_BACKEND`).
-  On those versions `patch_pylate()` is a deprecated no-op — it detects the
-  native `backend` parameter and steps aside instead of shadowing the native
-  dispatch (and breaking `ColBERTScores`, which forwards `backend=`). Older
-  PyLate is unaffected. PyLate's backend calls `maxsim` / `maxsim_pairs` /
-  `maxsim_mps` by keyword, so those signatures are now pinned by a test.
+- **`patch_pylate()` / `patch_colpali_engine()` defer to the native LIK
+  backends.** PyLate ≥ 1.5.1 ([pylate#222](https://github.com/lightonai/pylate/pull/222))
+  and colpali-engine ≥ 0.3.17 ([colpali#412](https://github.com/illuin-tech/colpali/pull/412))
+  now ship their own LIK dispatch (`pip install "pylate[lik]"` /
+  `"colpali-engine[lik]"`, selected via `auto` / `PYLATE_SCORES_BACKEND` /
+  `COLPALI_SCORES_BACKEND`). On those versions our patches are deprecated
+  no-ops: they detect native support by package version and step aside instead
+  of shadowing it (patching PyLate would also break `ColBERTScores`, which
+  forwards `backend=`). Older versions are unaffected. The native backends call
+  `maxsim` / `maxsim_pairs` / `maxsim_mps` by keyword, so those signatures are
+  now pinned by a test.
 
 ### Added
 

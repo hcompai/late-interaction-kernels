@@ -283,21 +283,15 @@ def test_lik_disable_env_falls_back(monkeypatch):
         unpatch_pylate()
 
 
-def test_patch_pylate_is_noop_when_pylate_has_native_lik(monkeypatch):
-    """On PyLate with native LIK (a `backend` param), `patch_pylate()` must
-    detect it, leave PyLate's own dispatch untouched, and warn — never swap in
-    our drop-in (which would shadow native routing and break `ColBERTScores`)."""
+def test_patch_pylate_is_noop_on_native_pylate(monkeypatch):
+    """On PyLate >= 1.5.1 (native LIK), `patch_pylate()` must detect it by
+    version, leave PyLate's own dispatch untouched, and warn — never swap in our
+    drop-in (which would shadow native routing and break `ColBERTScores`)."""
     import warnings
 
     import late_interaction_kernels.pylate_compat as compat
 
-    defining, _ = compat._scores_defining_module()
-    real = defining.colbert_scores
-
-    def native_colbert_scores(q, d, queries_mask=None, documents_mask=None, backend=None):
-        return real(q, d, queries_mask=queries_mask, documents_mask=documents_mask)
-
-    monkeypatch.setattr(defining, "colbert_scores", native_colbert_scores)
+    monkeypatch.setattr(compat, "package_at_least", lambda name, minimum: True)
     monkeypatch.setattr(compat, "_NATIVE_NOTICE_SHOWN", False)
     compat._ORIGINAL.clear()
 
@@ -306,7 +300,6 @@ def test_patch_pylate_is_noop_when_pylate_has_native_lik(monkeypatch):
         compat.patch_pylate()
 
     assert compat._ORIGINAL == {}, "native PyLate must not be patched"
-    assert defining.colbert_scores is native_colbert_scores, "native function left untouched"
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
     compat.unpatch_pylate()  # must be a safe no-op
 
