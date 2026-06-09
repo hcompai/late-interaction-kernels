@@ -1845,18 +1845,18 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h2><span class="num">C</span>The constexpr bargain</h2>
 
   <p>
-    A <code>tl.constexpr</code> kernel argument is baked into the compiled
-    binary. That is a bargain, not a feature: the compiler can specialise
-    and unroll code for that exact value, but every new value it meets
-    compiles a brand-new kernel — a multi-second stall — and adds an entry
-    to the autotune cache. So every shape-like argument poses the same
-    question: <em>does the compiler actually do anything with this
-    value?</em>
+    A <code>tl.constexpr</code> kernel argument is a value the compiler
+    sees at compile time, so it can generate code tailored to exactly
+    that value. The catch: every <em>new</em> value triggers a fresh
+    compile (a multi-second stall) and adds another autotune-cache entry.
+    That is the bargain, and it is only worth taking when the answer to
+    one question is yes: <em>does knowing the value let the compiler
+    generate better code?</em>
   </p>
 
   <p>
-    The forward kernel answers it twice, on two loops that look almost
-    identical:
+    The forward kernel answers it both ways, on two loops that look
+    almost identical:
   </p>
 
 <pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq is constexpr</span>
@@ -1864,29 +1864,31 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     for d_start in range(0, Ld, BLOCK_D):        <span style="color:var(--ink-dim)"># plain runtime loop → Ld is a normal argument</span></code></pre>
 
   <p>
-    For $L_d$ the answer is no. It bounds the long inner loop, which the
-    compiler pipelines rather than unrolls, so specialising on it would
-    make $L_d = 300$ and $L_d = 301$ different binaries with identical
-    machine code — one recompile per distinct document length in a ragged
-    corpus, for nothing. $L_d$ stays a plain runtime argument.
+    For $L_d$: no. The inner loop is long, so the compiler keeps it as a
+    loop and pipelines it, loading the next $\Dm$ tile while the current
+    one is being multiplied. The machine code is identical whether
+    $L_d$ is 300 or 301; specialising would just recompile once per
+    distinct document length in a ragged corpus, for nothing. $L_d$ stays
+    a plain runtime argument.
   </p>
 
   <p>
-    For $L_q$ the answer is yes. The outer loop runs only
-    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations — a handful of
-    query tiles — so it is worth <em>unrolling</em>: the compiler deletes
-    the loop and pastes $n$ consecutive copies of its body (the
-    load-tile / matmul / row-max sequence) as straight-line code, no
-    counter, no branch. It can only do that if it knows $n$ at compile
-    time, and $n$ comes from $L_q$ — that is what forces $L_q$ to be
-    constexpr. The price would be one recompile per distinct query
-    length, and per-batch lengths float step to step. So the kernel
-    shrinks the domain instead of refusing the deal: $L_q$ is rounded up
-    to the next power of two and $\Qm$ zero-padded, with the query mask
-    covering the fake tokens exactly — at most nine values between 16 and
-    4096 in normal use. (Past the 4096 ceiling, $L_q$ is passed through
-    unbucketed with a one-shot warning pointing long-context callers at
-    <code>maxsim_varlen</code>.)
+    For $L_q$: yes. The outer loop runs just
+    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations, so the compiler
+    <em>unrolls</em> it: it deletes the loop and pastes $n$ copies of the
+    body back-to-back — straight-line code, no counter, no branch. It can
+    only do that if it knows $n$ at compile time, and $n$ comes from
+    $L_q$. That is what makes $L_q$ constexpr.
+  </p>
+
+  <p>
+    One problem remains: query lengths float from batch to batch, and
+    each distinct $L_q$ would be its own compile. So the kernel shrinks
+    the domain. $L_q$ is rounded up to the next power of two, $\Qm$ is
+    zero-padded, and the query mask hides the padding — at most nine
+    compiled values between 16 and 4096 in normal use. (Past 4096, $L_q$
+    passes through unbucketed, with a one-shot warning pointing
+    long-context callers at <code>maxsim_varlen</code>.)
   </p>
 
   <div class="panel">
