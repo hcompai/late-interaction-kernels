@@ -4,8 +4,6 @@ check the feature-detect logic for Triton's persistent on-disk autotune
 cache (``cache_results``, added in Triton 3.4).
 """
 
-from __future__ import annotations
-
 import inspect
 
 import pytest

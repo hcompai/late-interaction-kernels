@@ -77,8 +77,6 @@ def test_reference_with_d_mask_on_cpu():
 # CUDA parity tests                                                           #
 # --------------------------------------------------------------------------- #
 
-pytestmark_cuda = pytest.mark.cuda
-
 
 @pytest.mark.cuda
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)

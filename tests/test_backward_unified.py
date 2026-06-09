@@ -90,9 +90,6 @@ def test_unified_reference_dtype_roundtrip():
 # CUDA parity: unified Triton kernel == pure-PyTorch reference                #
 # --------------------------------------------------------------------------- #
 
-pytestmark_cuda = pytest.mark.cuda
-
-
 PARITY_SHAPES = [
     # (Nq, Nd, Lq, Ld, d)
     (1, 4, 32, 64, 128),

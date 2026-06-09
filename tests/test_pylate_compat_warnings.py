@@ -71,7 +71,7 @@ def _uninstall(modules: list[str]) -> None:
     sys.modules.pop("late_interaction_kernels.pylate_compat", None)
 
 
-def test_patch_pylate_warns_when_loss_submodule_symbol_missing():
+def test_patch_pylate_warns_when_loss_submodule_symbol_missing(monkeypatch):
     """Missing ``colbert_scores`` attr on a loss submodule ⇒ RuntimeWarning.
 
     The patch must not silently leave a loss module un-patched: the user
@@ -82,6 +82,11 @@ def test_patch_pylate_warns_when_loss_submodule_symbol_missing():
         # Reload so `patch_pylate()` sees our fakes (not any cached pylate).
         sys.modules.pop("late_interaction_kernels.pylate_compat", None)
         pc = importlib.import_module("late_interaction_kernels.pylate_compat")
+
+        # The native-LIK guard reads installed-dist metadata, not our fake
+        # sys.modules entry — pin it off so the patch path actually runs
+        # (test_pylate_compat.py pins the inverse).
+        monkeypatch.setattr(pc, "package_at_least", lambda name, minimum: False)
 
         # Keep the test hermetic — reset the internal "already patched" flag.
         pc._ORIGINAL.clear()
@@ -103,12 +108,13 @@ def test_patch_pylate_warns_when_loss_submodule_symbol_missing():
         _uninstall(installed)
 
 
-def test_patch_pylate_silent_when_all_loss_symbols_present():
+def test_patch_pylate_silent_when_all_loss_symbols_present(monkeypatch):
     """Happy path: all loss submodules expose the expected symbol ⇒ no warning."""
     installed = _install_fake_pylate(include_attr=True)
     try:
         sys.modules.pop("late_interaction_kernels.pylate_compat", None)
         pc = importlib.import_module("late_interaction_kernels.pylate_compat")
+        monkeypatch.setattr(pc, "package_at_least", lambda name, minimum: False)
         pc._ORIGINAL.clear()
 
         with warnings.catch_warnings(record=True) as w:
@@ -126,7 +132,7 @@ def test_patch_pylate_silent_when_all_loss_symbols_present():
         _uninstall(installed)
 
 
-def test_patch_pylate_is_idempotent():
+def test_patch_pylate_is_idempotent(monkeypatch):
     """Calling ``patch_pylate()`` twice must be a no-op on the second call.
 
     Previously the second call could double-patch (the installed hook
@@ -137,6 +143,7 @@ def test_patch_pylate_is_idempotent():
     try:
         sys.modules.pop("late_interaction_kernels.pylate_compat", None)
         pc = importlib.import_module("late_interaction_kernels.pylate_compat")
+        monkeypatch.setattr(pc, "package_at_least", lambda name, minimum: False)
         pc._ORIGINAL.clear()
 
         pc.patch_pylate()
@@ -148,12 +155,13 @@ def test_patch_pylate_is_idempotent():
         _uninstall(installed)
 
 
-def test_patch_pylate_unpatch_restores_originals():
+def test_patch_pylate_unpatch_restores_originals(monkeypatch):
     """``unpatch_pylate()`` must leave the module state byte-identical to pre-patch."""
     installed = _install_fake_pylate(include_attr=True)
     try:
         sys.modules.pop("late_interaction_kernels.pylate_compat", None)
         pc = importlib.import_module("late_interaction_kernels.pylate_compat")
+        monkeypatch.setattr(pc, "package_at_least", lambda name, minimum: False)
         pc._ORIGINAL.clear()
 
         scores_mod = sys.modules["pylate.scores.scores"]
