@@ -19,7 +19,6 @@
 [[Kernel picker]](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html)
 [[Benchmarks]](docs/benchmarks.md)
 [[Design]](docs/design.md)
-[[Supported models]](docs/supported_models.md)
 [[Changelog]](CHANGELOG.md)
 
 </div>
