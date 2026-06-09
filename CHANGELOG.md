@@ -57,9 +57,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   autotune keys with no bucketing, so — contrary to the previous docs —
   every distinct `(max_lq, max_ld)` pair re-triggered the full autotune
   sweep. The kernel masks on the actual `cu_seqlens` bounds, so results are
-  unchanged; the argmax buffer is sized on the bucketed `max_lq` (up to 2×
-  larger, rows `-1`-padded). The same bucketing now applies to the `max_Ld`
-  loop bound of `maxsim_residual` / `maxsim_residual_varlen`.
+  unchanged; the trade-off (mirroring the dense path's `Lq` bucketing) is
+  up to one power-of-two of fully-masked tile iterations per program, and
+  the argmax buffer is sized on the bucketed `max_lq` (up to 2× larger,
+  rows `-1`-padded). The PLAID kernels (`maxsim_residual` /
+  `maxsim_residual_varlen`) deliberately keep their exact `max_Ld`: it is a
+  property of the compressed index, stable across calls, so the sweep
+  amortizes to one — bucketing there measured 30-50% steady-state
+  throughput loss on `Ld=300` corpora for no benefit.
 - **`max_seqlen_*` arguments are documented as hard loop bounds, not
   hints**, in `maxsim_varlen`, `score_pairs_packed`, and
   `maxsim_residual_varlen`: a too-small value silently truncated tokens and

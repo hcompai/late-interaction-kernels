@@ -17,7 +17,7 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import assert_max_seqlen_covers, bucket_seqlen, next_pow2
+from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2
 
 # -----------------------------------------------------------------------------
 # C1. plaid_approx_score
@@ -447,9 +447,11 @@ def _maxsim_residual_forward(
         raise ValueError(
             f"residuals last dim {packed_dim} != expected {expected_pd} for d={d}, nbits={nbits}"
         )
-    # max_Ld is constexpr + autotune key; bucket it so distinct padded widths
-    # share the cache entry (the kernel masks on the real per-doc length).
-    max_Ld = bucket_seqlen(max_Ld)
+    # max_Ld stays exact (no power-of-two bucketing, unlike maxsim_varlen):
+    # it is a property of the compressed index, stable across calls, so the
+    # per-value autotune sweep amortizes to one — while a bucketed loop bound
+    # costs masked decompress+dot iterations on every call (measured -30-50%
+    # throughput on Ld=300 corpora, where 300 would bucket to 512).
 
     d_pad = next_pow2(d)
     codes_per_byte = 8 // nbits
@@ -896,9 +898,8 @@ def maxsim_residual_varlen(
         max_seqlen_d = int((ends - starts).max().item()) if Nd > 0 else 0
     else:
         assert_max_seqlen_covers(cu_seqlens_d, int(max_seqlen_d), "max_seqlen_d")
-    # max_seqlen_d is constexpr + autotune key; bucket it so distinct batch
-    # maxima share the cache entry (the kernel masks on the real doc length).
-    max_seqlen_d = bucket_seqlen(max(int(max_seqlen_d), 1))
+    # Exact, not bucketed — see the matching note in _maxsim_residual_forward.
+    max_seqlen_d = max(int(max_seqlen_d), 1)
 
     d_pad = next_pow2(d)
     codes_per_byte = 8 // nbits
