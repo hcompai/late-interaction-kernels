@@ -283,9 +283,27 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow, includin
 
 ## Related projects
 
+<details>
+<summary><strong>MaxSim implementations</strong></summary>
+
+<br>
+
 - [roipony/flash-maxsim](https://github.com/roipony/flash-maxsim) — fused Triton kernel that tiles the similarity matrix in SRAM instead of materialising it in HBM.
 - [erikkaum/maxsim](https://github.com/erikkaum/maxsim) — exact MaxSim with hand-written CUDA (NVIDIA) and Metal (Apple Silicon) kernels; avoids materialising the similarity matrix on either backend.
 - [mixedbread-ai/maxsim-cpu](https://github.com/mixedbread-ai/maxsim-cpu) — Rust + SIMD CPU implementation (libxsmm on x86, Accelerate on ARM) for environments without a GPU.
+
+</details>
+
+<details>
+<summary><strong>Late interaction training libraries</strong></summary>
+
+<br>
+
+- [lightonai/pylate](https://github.com/lightonai/pylate) — ColBERT-style training and retrieval on top of Sentence Transformers; the primary `patch_pylate()` target.
+- [illuin-tech/colpali](https://github.com/illuin-tech/colpali) — training and inference for ColPali / ColQwen2 visual late-interaction retrievers; the `patch_colpali_engine()` target.
+- [stanford-futuredata/ColBERT](https://github.com/stanford-futuredata/ColBERT) — the original late-interaction retriever, with ColBERTv2 training and PLAID indexing.
+
+</details>
 
 ## Citation
 
