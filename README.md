@@ -44,13 +44,12 @@ The full algorithmic walkthrough (tiling, online max, the backward pass) with st
 
 ## Introduction
 
-`late-interaction-kernels` provides fused Triton kernels for **MaxSim**, the late-interaction scoring used by ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and come with three APIs:
+`late-interaction-kernels` provides fused Triton kernels for **MaxSim**, the late-interaction scoring used by ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and are natively supported in [PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) — install the extra and their `auto` dispatch picks them up, no code change. They're also available directly:
 
-- a one-line PyLate drop-in (`patch_pylate()`),
 - a stateless `nn.Module` (`MaxSimScorer`) for custom training loops,
 - function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
 
-This is **not** a search engine. For end-to-end training or retrieval use [PyLate](https://github.com/lightonai/pylate), [FastPlaid](https://github.com/lightonai/fast-plaid) or [NextPlaid](https://github.com/lightonai/next-plaid). This library is the MaxSim math they compile down to.
+This is **not** a search engine — it's the MaxSim math that late-interaction training and retrieval stacks compile down to. See [Related projects](#related-projects) for those.
 
 ## Install
 
