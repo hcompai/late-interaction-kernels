@@ -20,6 +20,15 @@ Pick exactly one of `torch-cuda` (CUDA index, `cu124`) or `torch-cpu` (CPU-only
 wheel, what CI uses) — the two are declared conflicting in `pyproject.toml`. On
 macOS, `torch-cpu` falls back to PyPI's default MPS-capable wheel.
 
+## GPU tests
+
+GPU tests run on AWS CodeBuild (A10G). They do not fire on pushes to `main`
+(CodeBuild spend); they run automatically on `v*` tag pushes and on PRs
+carrying the `run-gpu-tests` label (applying the label requires triage+, so
+ping a maintainer if your PR needs it). Maintainers can also trigger an
+on-demand run via the [GPU CI workflow](https://github.com/hcompai/late-interaction-kernels/actions/workflows/gpu-ci.yml)
+`workflow_dispatch`.
+
 ## Style
 
 - Python 3.10+; type hints on public APIs.
