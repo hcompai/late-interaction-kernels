@@ -68,7 +68,7 @@ pip install late-interaction-kernels
 
 ### Score directly (`maxsim` / `maxsim_pairs`)
 
-`maxsim` is the lowest-level public entry point — autograd-aware, mask-aware, and dispatches on `D.dim()` so the same call covers in-batch and knowledge-distillation layouts in one fused launch. The argmax buffer for the backward is skipped automatically when neither input has `requires_grad=True`, so the same function is the inference path too.
+`maxsim` is the lowest-level public entry point — autograd-aware, mask-aware, and dispatches on `D.dim()`, so one call covers in-batch and knowledge-distillation layouts in a single fused launch. The argmax buffer for the backward is skipped automatically when neither input requires grad, so this is the inference path too.
 
 ```python
 from late_interaction_kernels import maxsim, maxsim_pairs
@@ -76,13 +76,53 @@ from late_interaction_kernels import maxsim, maxsim_pairs
 # in-batch:  Q[Nq, Lq, d] × D[Nd, Ld, d]    → [Nq, Nd]
 scores = maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=True)
 
-# KD / hard-negative:  D is 4D [Nq, K, Ld, d]  → [Nq, K]
-# Single launch, no Python loop, no [Nq, Nq] cross product.
+# KD / hard-negative:  D is 4D [Nq, K, Ld, d]  → [Nq, K]   (one launch, no Python loop)
 scores = maxsim(Q, D_kd, q_mask=q_mask, d_mask=d_mask_kd)
 
 # pairwise (diagonal):  Q[B, Lq, d] × D[B, Ld, d]  → [B]
 scores = maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 ```
+
+### PyLate & colpali-engine
+
+Both ship a native LIK backend — install the extra and their `auto` dispatch picks it up, no code change. On older versions the `patch_*` drop-ins route scoring + loss through the fused kernel (`LIK_DISABLE=1` falls back at runtime; deprecated no-ops once native support is present).
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**PyLate ≥ 1.5.1** ([pylate#222](https://github.com/lightonai/pylate/pull/222))
+
+```bash
+pip install "pylate[lik]"   # or PYLATE_SCORES_BACKEND=lik
+```
+
+PyLate < 1.5.1:
+
+```python
+from late_interaction_kernels import patch_pylate
+patch_pylate()   # training / rerank code unchanged
+```
+
+</td>
+<td width="50%" valign="top">
+
+**colpali-engine ≥ 0.3.17** ([colpali#412](https://github.com/illuin-tech/colpali/pull/412))
+
+```bash
+pip install "colpali-engine[lik]"   # or COLPALI_SCORES_BACKEND=lik
+```
+
+colpali-engine < 0.3.17:
+
+```python
+from late_interaction_kernels import patch_colpali_engine
+patch_colpali_engine()   # loss + scoring fused
+```
+
+</td>
+</tr>
+</table>
 
 ### Top-k retrieval
 
@@ -95,7 +135,10 @@ scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
 # both [Nq, 100]; chunk= bounds peak HBM at Nq * (chunk + top_k)
 ```
 
-### PLAID / ColBERTv2 on compressed, ragged docs
+<details>
+<summary><strong>PLAID</strong> — compressed, ragged ColBERTv2 indexes</summary>
+
+<br>
 
 For PLAID-style indexes where documents are stored as centroid codes + residuals at variable lengths. A single kernel fuses decompression, L2-normalisation and MaxSim — no decoded tensor is ever written back to HBM.
 
@@ -109,7 +152,12 @@ scores = maxsim_residual_varlen(
 )  # [Nd] fp32; one kernel does decompress + L2-normalize + MaxSim
 ```
 
-### Custom training loop
+</details>
+
+<details>
+<summary><strong>Custom training loop</strong> — stateless <code>MaxSimScorer</code> module</summary>
+
+<br>
 
 A stateless `nn.Module` wrapper around `maxsim` — drop it into any training loop that needs autograd-aware late-interaction scoring without touching PyLate.
 
@@ -121,31 +169,7 @@ scores = scorer(Q, D, q_mask=q_mask, d_mask=d_mask)  # [Nq, Nd] fp32
 scores.mean().backward()
 ```
 
-### PyLate
-
-PyLate ≥ 1.5.1 ships a native LIK backend ([pylate#222](https://github.com/lightonai/pylate/pull/222)) — install the extra and PyLate's `auto` dispatch picks it up, no code change:
-
-```bash
-pip install "pylate[lik]"   # or force it: PYLATE_SCORES_BACKEND=lik
-```
-
-For PyLate < 1.5.1, monkey-patch scoring + loss to route through the fused kernel (`LIK_DISABLE=1` falls back at runtime). On PyLate ≥ 1.5.1 this is a deprecated no-op.
-
-```python
-from late_interaction_kernels import patch_pylate
-
-patch_pylate()   # PyLate training / rerank code is unchanged
-```
-
-### ColPali / colpali-engine
-
-colpali-engine ≥ 0.3.17 ships the same native LIK backend ([colpali#412](https://github.com/illuin-tech/colpali/pull/412)):
-
-```bash
-pip install "colpali-engine[lik]"   # or force it: COLPALI_SCORES_BACKEND=lik
-```
-
-For colpali-engine < 0.3.17, `patch_colpali_engine()` is the drop-in (deprecated no-op on ≥ 0.3.17).
+</details>
 
 ## Benchmarks
 
