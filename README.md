@@ -44,12 +44,9 @@ The full algorithmic walkthrough (tiling, online max, the backward pass) with st
 
 ## Introduction
 
-`late-interaction-kernels` provides fused Triton kernels for **MaxSim**, the late-interaction scoring used by ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. The kernels are numerically identical to plain PyTorch and are natively supported in [PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) — install the extra and their `auto` dispatch picks them up, no code change. They're also available directly:
+`late-interaction-kernels` provides fused Triton and Metal kernels for **MaxSim**, the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. They're numerically identical to plain PyTorch, but fuse the similarity matrix, max-reduction and (optional) L2-normalisation into a single launch — so the full `[Nq, Nd, Lq, Ld]` score tensor never lands in HBM.
 
-- a stateless `nn.Module` (`MaxSimScorer`) for custom training loops,
-- function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
-
-This is **not** a search engine — it's the MaxSim math that late-interaction training and retrieval stacks compile down to. See [Related projects](#related-projects) for those.
+[PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) support them natively: install the extra and their `auto` dispatch picks the kernels up, no code change. You can also call them directly — a stateless `MaxSimScorer` module for custom training loops, or function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
 
 ## Install
 
@@ -90,7 +87,7 @@ Both ship a native LIK backend — install the extra and their `auto` dispatch p
 <tr>
 <td width="50%" valign="top">
 
-**PyLate ≥ 1.5.1** ([pylate#222](https://github.com/lightonai/pylate/pull/222))
+**PyLate ≥ 1.5.1**
 
 ```bash
 pip install "pylate[lik]"
@@ -106,7 +103,7 @@ lik.patch_pylate()
 </td>
 <td width="50%" valign="top">
 
-**colpali-engine ≥ 0.3.17** ([colpali#412](https://github.com/illuin-tech/colpali/pull/412))
+**colpali-engine ≥ 0.3.17**
 
 ```bash
 pip install "colpali-engine[lik]"
@@ -283,7 +280,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow, includin
 ## Related projects
 
 <details>
-<summary><strong>MaxSim implementations</strong></summary>
+<summary><strong>⚡ MaxSim implementations</strong></summary>
 
 <br>
 
@@ -294,18 +291,18 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow, includin
 </details>
 
 <details>
-<summary><strong>Late interaction training libraries</strong></summary>
+<summary><strong>🏋️ Late interaction training libraries</strong></summary>
 
 <br>
 
-- [lightonai/pylate](https://github.com/lightonai/pylate) — ColBERT-style training and retrieval on top of Sentence Transformers; the primary `patch_pylate()` target.
-- [illuin-tech/colpali](https://github.com/illuin-tech/colpali) — training and inference for ColPali / ColQwen2 visual late-interaction retrievers; the `patch_colpali_engine()` target.
+- [lightonai/pylate](https://github.com/lightonai/pylate) — ColBERT-style training and retrieval on top of Sentence Transformers; native LIK backend since [pylate#222](https://github.com/lightonai/pylate/pull/222).
+- [illuin-tech/colpali](https://github.com/illuin-tech/colpali) — training and inference for ColPali / ColQwen2 visual late-interaction retrievers; native LIK backend since [colpali#412](https://github.com/illuin-tech/colpali/pull/412).
 - [stanford-futuredata/ColBERT](https://github.com/stanford-futuredata/ColBERT) — the original late-interaction retriever, with ColBERTv2 training and PLAID indexing.
 
 </details>
 
 <details>
-<summary><strong>Late interaction retrieval engines</strong></summary>
+<summary><strong>🔍 Late interaction retrieval engines</strong></summary>
 
 <br>
 
