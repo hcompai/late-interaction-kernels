@@ -178,26 +178,22 @@ speedups are measured at **matched numerics** — every baseline runs the
 einsum with an fp32 accumulator (same as the fused kernel), and parity
 is asserted at `atol=1e-2` before timing.
 
-| Workload                                                    | Speedup            |
-| ----------------------------------------------------------- | ------------------ |
-| Reranking / inference (vs eager fp32-acc *and* `torch.compile`) | 1.7-16×        |
-| Long-context (`Ld ≥ 8k`) MaxSim fwd+bwd                     | runs; naive OOMs   |
-| PyLate cached-contrastive MaxSim + backward (vs vanilla)    | 5.0-6.9×           |
-| PLAID rerank vs `fast_plaid.engine.search()` (incl. top-k)  | 8-23× full / 18-51× partial |
-| Fused D-side head (training)                                | 1.5-4.5× on `Nd · Ld` large |
-| FP8 MaxSim inference vs same kernel in bf16 (Hopper)        | 1.1-1.3× on `Ld ≥ 256` |
-| LateOn-Code-edge training (real MS MARCO triplets)          | 1.00-1.06× e2e     |
-| ColQwen2 training, MaxSim-op VRAM at B=128 (real `colpali_train_set`) | 7.8 GiB → 61 MiB (**~130×**); 2× max batch |
-| PyLate `Contrastive` training, grad-ckpt (real MS MARCO)    | step peak 54 → 30 GiB at B=512; 2× max batch, 1.07-1.12× e2e |
+### Speed
 
-Full tables and reproduction commands
-live in [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench
-scripts themselves are organised — CLI conventions (`--only`,
-`--variants`), per-script summaries, and how to run one bench, the
-whole sweep, or a `RUN_ONLY`-filtered subset on a SkyPilot cluster —
-see [`benchmarks/README.md`](benchmarks/README.md).
+|             | Rerank /<br>inference | PyLate<br>cached-contrastive | PLAID rerank<br>vs `fast_plaid` | Fused D-head<br>(training) | FP8 vs bf16<br>(Hopper) | LateOn-Code-edge<br>e2e |
+| ----------- | --------------------- | ---------------------------- | ------------------------------- | -------------------------- | ----------------------- | ----------------------- |
+| **Speedup** | 1.7-16×               | 5.0-6.9×                     | 8-23× full<br>18-51× partial    | 1.5-4.5×                   | 1.1-1.3×                | 1.00-1.06×              |
 
-## Memory
+Rerank is vs both the eager fp32-accumulator path *and* `torch.compile`;
+PLAID rerank includes top-k; the fused D-head win grows with `Nd · Ld`;
+FP8 is at `Ld ≥ 256`. Full tables and reproduction commands live in
+[`docs/benchmarks.md`](docs/benchmarks.md); for how the bench scripts
+themselves are organised — CLI conventions (`--only`, `--variants`),
+per-script summaries, and how to run one bench, the whole sweep, or a
+`RUN_ONLY`-filtered subset on a SkyPilot cluster — see
+[`benchmarks/README.md`](benchmarks/README.md).
+
+### Memory
 
 The speedups are only half the story. The naive einsum allocates the full
 `[Nq · Nd · Lq · Ld]` similarity tensor as fp32 scratch before the
