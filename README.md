@@ -85,7 +85,7 @@ scores = maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 
 ### PyLate & colpali-engine
 
-Both ship a native LIK backend — install the extra and their `auto` dispatch picks it up, no code change. On older versions the `patch_*` drop-ins route scoring + loss through the fused kernel (`LIK_DISABLE=1` falls back at runtime; deprecated no-ops once native support is present).
+Both ship a native LIK backend — install the extra and their `auto` dispatch picks it up, no code change (force it with `PYLATE_SCORES_BACKEND=lik` / `COLPALI_SCORES_BACKEND=lik`). On older versions the `patch_*` drop-ins route scoring + loss through the fused kernel at import time (`LIK_DISABLE=1` falls back; deprecated no-ops once native support is present).
 
 <table>
 <tr>
@@ -94,14 +94,14 @@ Both ship a native LIK backend — install the extra and their `auto` dispatch p
 **PyLate ≥ 1.5.1** ([pylate#222](https://github.com/lightonai/pylate/pull/222))
 
 ```bash
-pip install "pylate[lik]"   # or PYLATE_SCORES_BACKEND=lik
+pip install "pylate[lik]"
 ```
 
 PyLate < 1.5.1:
 
 ```python
-from late_interaction_kernels import patch_pylate
-patch_pylate()   # training / rerank code unchanged
+import late_interaction_kernels as lik
+lik.patch_pylate()
 ```
 
 </td>
@@ -110,14 +110,14 @@ patch_pylate()   # training / rerank code unchanged
 **colpali-engine ≥ 0.3.17** ([colpali#412](https://github.com/illuin-tech/colpali/pull/412))
 
 ```bash
-pip install "colpali-engine[lik]"   # or COLPALI_SCORES_BACKEND=lik
+pip install "colpali-engine[lik]"
 ```
 
 colpali-engine < 0.3.17:
 
 ```python
-from late_interaction_kernels import patch_colpali_engine
-patch_colpali_engine()   # loss + scoring fused
+import late_interaction_kernels as lik
+lik.patch_colpali_engine()
 ```
 
 </td>
