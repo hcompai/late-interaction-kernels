@@ -304,6 +304,16 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow, includin
 
 </details>
 
+<details>
+<summary><strong>Late interaction retrieval engines</strong></summary>
+
+<br>
+
+- [lightonai/fast-plaid](https://github.com/lightonai/fast-plaid) — fast PLAID index + search engine for ColBERT-style multi-vector retrieval.
+- [lightonai/next-plaid](https://github.com/lightonai/next-plaid) — LightOn's next-generation PLAID engine (home of the Rust ColGrep runtime).
+
+</details>
+
 ## Citation
 
 ```bibtex
