@@ -1,77 +1,35 @@
 # AGENTS.md
 
-Notes for AI coding agents (Claude, Codex, Cursor, etc.) working in this repo.
-Humans should read [`CONTRIBUTING.md`](CONTRIBUTING.md) first — this file
-strictly extends it for non-human contributors.
+Notes for AI coding agents. Humans: read [`CONTRIBUTING.md`](CONTRIBUTING.md)
+first — this extends it. The repo is uv-managed: always `uv run <tool>`,
+never bare `ruff`/`pytest`.
 
-## Per-task checklist
+## Before committing
 
-After **every** task that touches Python — code, tests, comments,
-docstrings — and **before** committing, every agent MUST:
+1. `uv run ruff check . && uv run ruff format --check .` (format + stage if
+   needed); `uv run ty check late_interaction_kernels/` if types changed.
+2. `uv run pytest -q` — no regressions. CUDA tests auto-skip without a GPU,
+   so local green does **not** validate kernel changes.
 
-1. Run `uv run ruff check . && uv run ruff format --check .` from the
-   repo root, and `uv run ty check late_interaction_kernels/` if types
-   changed. Both must be clean (no new diagnostics). If
-   `ruff format --check` reports a reformat, run `uv run ruff format`
-   and stage the result. (The repo is uv-managed — bare `ruff`/`pytest`
-   hit whatever environment happens to be active, or nothing.)
-2. Run `uv run pytest -q` (or the targeted test file when iterating)
-   and confirm no regressions vs the pre-change baseline. Pre-existing
-   flaky/skipped tests are fine.
-3. Know what a green local run proves: CUDA/Triton tests auto-skip on
-   machines without a GPU — the common case for agents — so local green
-   does **not** validate kernel behaviour. Kernel changes are covered by
-   the GPU-gated tests and GPU CI; if your change touches kernel or
-   dispatch code, say so in the PR and rely on those, not on the local
-   skip-heavy run.
+## Before opening a PR
 
-These steps run **after every task**, not just at PR time — CI runs the
-same checks and a failure caught locally is a free fix. Do not commit
-without the linter being clean.
+1. Update `CHANGELOG.md` under `## [Unreleased]`
+   ([Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)): one
+   concrete bullet per user-visible change, API names in backticks.
+2. Sweep `docs/how-it-works.html`, `docs/design.md`, and the README tables
+   for claims your change invalidates — most doc drift comes from skipping this.
+3. Kernel or dispatch change? Validate perf on an H100
+   (`sky launch scripts/sky_run_all_benchmarks.yaml`, then `sky down`) and
+   request GPU CI (`run-gpu-tests` label, triage+, or `workflow_dispatch`).
+   Post numbers as a PR comment; only edit `docs/benchmarks.md` beyond run noise.
+4. Never commit `benchmarks/results/` (gitignored).
 
-## Pre-merge checklist
+## Style, commits, PRs
 
-Before opening a PR for review or merging an existing one, every agent
-MUST (in addition to the per-task checklist above):
-
-1. **Update [`CHANGELOG.md`](CHANGELOG.md)** under the `## [Unreleased]`
-   section, following [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
-   - Group entries under `### Added`, `### Changed`, `### Deprecated`,
-     `### Removed`, `### Fixed`, or `### Security` (omit empty groups).
-   - One bullet per user-visible change. Reference public API names
-     in backticks. Keep the tone of existing entries — concrete, no marketing.
-   - If the `## [Unreleased]` heading does not exist (because the previous
-     release just shipped), insert it directly above the latest version.
-2. **Sweep the docs for claims your change invalidates.** The prose
-   docs make precise, quantitative claims about the kernels —
-   [`docs/how-it-works.html`](docs/how-it-works.html),
-   [`docs/design.md`](docs/design.md), the README tables and headline
-   numbers. If you changed kernels, dispatch/routing, autotune configs,
-   or memory behaviour, grep those files for the affected names and
-   numbers and update them in the same PR. Most documentation drift in
-   this repo has come from skipping this step.
-3. Never commit anything in `benchmarks/results/` — it is `.gitignore`d.
-
-## Style
-
-- Python 3.10+; type hints on public APIs. Use the native PEP 604 / PEP
-  585 syntax (`X | Y`, `list[X]`, `dict[K, V]`) directly — no
-  `from __future__ import annotations` and no `typing.List` /
-  `typing.Optional`.
-- Comments explain *why*, never narrate *what* the code does.
-- No emoji in code, comments, or commit messages unless the user explicitly
-  asks for them.
-- Match existing docstring tone — short, concrete, no marketing.
-- Keep diffs tight: no drive-by style sweeps in unrelated PRs.
-
-## Commits
-
-- Conventional-style prefixes are used loosely (`bench(mps): …`, `mps: …`,
-  `fix: …`). Match the surrounding history; don't invent a new convention.
-- Each commit message body should explain *why* the change is needed, not
-  restate the diff.
-
-## When in doubt
-
-Read `CONTRIBUTING.md` for kernel-authoring conventions, the autotune
-workflow, and the release process.
+- Python 3.10+, native `X | Y` / `list[X]` typing — no
+  `from __future__ import annotations`, no `typing.List`.
+- Comments explain *why*, never *what*. Docstrings short, no marketing.
+  No emoji. No drive-by style sweeps.
+- Commits follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
+  (`type(scope): subject`, e.g. `fix(plaid): …`, `bench(mps): …`); bodies say why.
+- No AI attribution in commits, PR descriptions, or PR comments.
