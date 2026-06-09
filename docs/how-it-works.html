@@ -1319,7 +1319,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h3 id="chunking">Long-query chunking</h3>
 
   <p>
-    For ColPali-scale queries ($L_q \approx 1024$ visual patches), the outer
+    For long query sequences ($L_q > 512$, e.g. image or document queries used
+    on the query side), the outer
     loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
     inside one program, leaving the rest of the SM grid idle. But MaxSim is
     a sum over query tokens of a per-token max, so it decomposes exactly:

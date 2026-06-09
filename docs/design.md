@@ -14,9 +14,12 @@ with optional per-batch boolean masks (`q_mask` drops rows from the sum,
 `d_mask` hides doc tokens from the inner max). Output: `[Nq, Nd]`.
 
 PyLate's reference implementation materializes the full similarity tensor
-`S ∈ ℝ^{Nq · Nd · Lq · Ld}` before reducing. At ColPali scale
-(`Lq = Ld = 1024`) that's 4.5 GB per tensor, and training loops allocate
-3-4 such tensors per step. The fused kernel never puts `S` in HBM.
+`S ∈ ℝ^{Nq · Nd · Lq · Ld}` before reducing. ColPali documents are full
+pages (`Ld ≈ 1024` image patches) and queries are short text expanded to a
+fixed `Lq ≈ 128` (ColBERT-style query augmentation), so a contrastive batch
+with in-batch negatives (`Nq = Nd = 128`) makes `S` a `128 · 128 · 128 · 1024`
+fp32 tensor of 8.6 GB, and training loops allocate 3-4 such tensors per step.
+The fused kernel never puts `S` in HBM.
 
 ## Forward
 
@@ -55,7 +58,7 @@ fits 4× per H100 SM.
 
 ### Long-query chunking
 
-For long queries (`Lq > 512`, ColPali-scale visual patches), `maxsim()` splits
+For long queries (`Lq > 512`, e.g. image or document sequences used on the query side), `maxsim()` splits
 `Q` into fixed 128-token chunks and scores each as an independent batch through
 the same kernel, then sums the per-chunk scores back per original query:
 
@@ -72,7 +75,7 @@ Two benefits:
   `static_range(Lq / BLOCK_Q)` loop inside each program. Chunking launches
   more, shorter programs that fill the SM array concurrently.
 * **Autotune cache collapse.** The kernel always sees `Lq == 128`, so
-  all ColPali-scale queries share one autotune entry (two with tail-padding)
+  all long queries share one autotune entry (two with tail-padding)
   instead of one per `Lq` bucket.
 
 The split fires only when `Lq > 512`; shorter queries fall through to the
@@ -208,7 +211,7 @@ pruned by:
 Hopper shortlist enables `num_consumer_groups` warp specialization
 (Triton ≥ 3.2, FA-3 style); fallback is transparent on older Triton.
 
-With long-query chunking (see `## Forward → Long-query chunking`) ColPali-scale
+With long-query chunking (see `## Forward → Long-query chunking`) long
 queries always present `Lq = 128` to the kernel, collapsing the forward
 autotune cache onto a small constant regardless of the original query length.
 

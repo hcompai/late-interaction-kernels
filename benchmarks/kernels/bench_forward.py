@@ -51,8 +51,7 @@ SHAPES = [
     # name, Nq, Nd, Lq, Ld, d
     ("text-short", 1, 1000, 32, 300, 128),
     ("text-long", 1, 1000, 32, 1024, 128),
-    ("text-medium", 1, 1000, 128, 1024, 128),
-    ("visual", 1, 1000, 1024, 1024, 128),
+    ("colpali", 1, 1000, 128, 1024, 128),  # short text query expanded to Lq=128 vs ~1k-patch page
     ("corpus-5k", 1, 5000, 32, 300, 128),
     ("corpus-10k", 1, 10000, 32, 300, 128),
     ("train-batch", 32, 32, 32, 300, 128),

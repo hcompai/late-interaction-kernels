@@ -3,9 +3,6 @@ contact_links:
   - name: API reference
     url: https://github.com/hcompai/late-interaction-kernels/blob/main/README.md#api
     about: Public surface — patch_pylate(), MaxSimScorer, retrieve, maxsim_varlen, etc.
-  - name: Supported models
-    url: https://github.com/hcompai/late-interaction-kernels/blob/main/docs/supported_models.md
-    about: Which ColBERT / ColPali / ModernColBERT / LateOn-Code / mxbai-edge models we accelerate today.
   - name: Packed / varlen training
     url: https://github.com/hcompai/late-interaction-kernels/blob/main/docs/packed_training.md
     about: Cookbook for wiring maxsim_varlen into a heterogeneous-length training loop.
