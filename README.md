@@ -177,10 +177,12 @@ is asserted at `atol=1e-2` before timing.
 
 |             | Rerank /<br>inference | PyLate<br>cached-contrastive | PLAID rerank<br>vs `fast_plaid` | Fused D-head<br>(training) | FP8 vs bf16<br>(Hopper) | LateOn-Code-edge<br>e2e |
 | ----------- | --------------------- | ---------------------------- | ------------------------------- | -------------------------- | ----------------------- | ----------------------- |
-| **Speedup** | 1.7-16×               | 5.0-6.9×                     | 8-23× full<br>18-51× partial    | 1.5-4.5×                   | 1.1-1.3×                | 1.00-1.06×              |
+| **Speedup** | 1.7-16×               | 5.0-6.9×                     | 8-23× full<br>18-51× partial    | 0.94-4.5×                  | 1.1-1.3×                | 1.00-1.06×              |
 
 Rerank is vs both the eager fp32-accumulator path *and* `torch.compile`;
-PLAID rerank includes top-k; the fused D-head win grows with `Nd · Ld`;
+PLAID rerank includes top-k; the fused D-head win grows with `Nd · Ld`
+(the two smallest LateOn shapes are 0.94-0.95×, i.e. slightly slower;
+≥1.4× from `Nd=128, Ld=1024` up — every ColBERT/ColPali-scale shape);
 FP8 is at `Ld ≥ 256`. Full tables and reproduction commands live in
 [`docs/benchmarks.md`](docs/benchmarks.md); for how the bench scripts
 themselves are organised — CLI conventions (`--only`, `--variants`),
@@ -190,16 +192,18 @@ per-script summaries, and how to run one bench, the whole sweep, or a
 
 ### Memory
 
-The naive einsum allocates the full `[Nq · Nd · Lq · Ld]` similarity tensor as
-fp32 scratch before `max(-1)`. The fused kernel never writes it: document
-tiles stream through SRAM and only `[Nq, Nd]` scores come back, plus a
-`[Nq · Nd, Lq]` int32 argmax buffer when training.
+The naive einsum materialises the full `[Nq · Nd · Lq · Ld]` similarity
+tensor in fp32 before `max(-1)`; its column reports the measured allocator
+peak, which runs above the similarity tensor alone because the fp32-cast
+operand copies coexist with it. The fused kernel never writes any of that:
+document tiles stream through SRAM and only `[Nq, Nd]` scores come back,
+plus a `[Nq · Nd, Lq]` int32 argmax buffer when training.
 
 | shape                                     | naive scratch | fused fwd | fused fwd + bwd |
 | ----------------------------------------- | ------------- | --------- | --------------- |
 | `Nq=1, Nd=1k, Lq=32, Ld=300`              | 183 MB        | 4 KB      | 128 KB          |
 | `Nq=1, Nd=1k, Lq=128, Ld=1024` (ColPali)  | 1.0 GB        | 4 KB      | 512 KB          |
-| `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 64 KB     | 64 KB           |
+| `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 2 KB      | 64 KB           |
 
 The ColPali row assumes a short text query expanded to `Lq = 128`
 (ColBERT-style query augmentation) against a `Ld ≈ 1024`-patch page.

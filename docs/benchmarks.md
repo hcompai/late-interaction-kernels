@@ -662,9 +662,12 @@ step time, same VRAM, same numerics, one `patch_pylate()` call.
 
 ## Memory
 
-Naive allocates `Nq · Nd · Lq · Ld · 4` bytes of fp32 scratch. Fused
-keeps the `Nq · Nd` result plus — only if autograd is on — a
-`Nq · Nd · Lq` int32 argmax buffer.
+The naive column is the measured allocator peak. Its floor is the
+`Nq · Nd · Lq · Ld · 4`-byte fp32 similarity tensor, but the measured
+peak runs above that formula because the fp32 casts and broadcasts of
+the operands coexist with the tensor at the peak. Fused keeps the
+`Nq · Nd` result plus — only if autograd is on — a `Nq · Nd · Lq` int32
+argmax buffer.
 
 
 | scenario                          | naive scratch | fused fwd | fused fwd + argmax |
@@ -672,7 +675,7 @@ keeps the `Nq · Nd` result plus — only if autograd is on — a
 | `Nq=1, Nd=1000, Lq=32, Ld=300`    | 183 MB        | 4 KB      | 128 KB             |
 | `Nq=128, Nd=128, Lq=32, Ld=300`   | 621 MB        | 64 KB     | 2 MB               |
 | `Nq=1, Nd=1000, Lq=128, Ld=1024`  | 1.0 GB        | 4 KB      | 512 KB             |
-| `Nq=16, Nd=32, Lq=32, Ld=8192`    | 2.1 GB        | 64 KB     | 64 KB              |
+| `Nq=16, Nd=32, Lq=32, Ld=8192`    | 2.1 GB        | 2 KB      | 64 KB              |
 
 
 This is what unlocks large in-batch negatives: at the same HBM budget
