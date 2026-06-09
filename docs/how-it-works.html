@@ -1893,8 +1893,8 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <div class="panel">
     <div class="chart-wrap">
-      <svg viewBox="0 0 760 290" preserveAspectRatio="xMidYMid meet" role="img"
-           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back; an unrolled loop pastes n copies as straight-line code">
+      <svg viewBox="0 0 760 304" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back and serves every Ld with one binary; an unrolled loop pastes n copies with their q_start constants baked in, so a new Lq compiles a new binary">
         <defs>
           <marker id="uarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
@@ -1910,6 +1910,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <text x="535" y="73" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">loop body</text>
         <path d="M 604 58 C 646 20, 424 20, 466 58" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
         <text x="535" y="26" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">branch back · ⌈Ld / BLOCK_D⌉ times</text>
+
+        <rect x="646" y="50" width="94" height="38" rx="5"
+              fill="color-mix(in oklch, var(--accent-2) 8%, var(--panel))"
+              stroke="color-mix(in oklch, var(--accent-2) 45%, var(--line))"/>
+        <text x="693" y="66" font-size="9" text-anchor="middle" fill="var(--accent-2)">Ld = 300 or 301</text>
+        <text x="693" y="80" font-size="9" text-anchor="middle" fill="var(--accent-2)">→ same binary</text>
 
         <line x1="24" y1="110" x2="736" y2="110" stroke="var(--line)"/>
 
@@ -1931,7 +1937,16 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <path d="M 369 215 L 406 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
         <path d="M 544 215 L 581 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
 
-        <text x="388" y="264" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">straight-line code · no counter, no branch · n is stamped in at compile time (here n = 4)</text>
+        <!-- each copy carries its q_start as a literal — the counter the loop no longer needs -->
+        <g font-size="9" text-anchor="middle" fill="var(--ink-dim)">
+          <text x="125" y="250">q_start = 0</text>
+          <text x="300" y="250">= BLOCK_Q</text>
+          <text x="475" y="250">= 2·BLOCK_Q</text>
+          <text x="650" y="250">= 3·BLOCK_Q</text>
+        </g>
+
+        <text x="388" y="272" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">no counter, no branch · each copy gets its q_start baked in as a constant (here n = 4)</text>
+        <text x="388" y="290" font-size="9.5" text-anchor="middle" fill="var(--accent-3)">the price: a new Lq means a new n, hence a brand-new binary (one recompile + one autotune entry)</text>
       </svg>
       <div class="chart-legend">
         <span>The same loop body, compiled two ways. The loop form never needs its trip count at compile time; the unrolled form <em>is</em> its trip count — change $L_q$ and you have a different binary.</span>
