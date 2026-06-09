@@ -195,10 +195,9 @@ per-script summaries, and how to run one bench, the whole sweep, or a
 
 ### Memory
 
-The speedups are only half the story. The naive einsum allocates the full
-`[Nq · Nd · Lq · Ld]` similarity tensor as fp32 scratch before the
-`max(-1)` reduction. The fused kernel never writes it: document tiles
-stream through SRAM and only the `[Nq, Nd]` scores come back, plus a
+The naive einsum allocates the full `[Nq · Nd · Lq · Ld]` similarity tensor as
+fp32 scratch before `max(-1)`. The fused kernel never writes it — document
+tiles stream through SRAM and only `[Nq, Nd]` scores come back, plus a
 `[Nq · Nd, Lq]` int32 argmax buffer when training.
 
 | shape                                     | naive scratch | fused fwd | fused fwd + bwd |
@@ -207,27 +206,16 @@ stream through SRAM and only the `[Nq, Nd]` scores come back, plus a
 | `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali) | 4.5 GB        | 4 KB      | 4 MB            |
 | `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 64 KB     | 64 KB           |
 
-Two things this buys you: long-context shapes (`Ld ≥ 8k`) that OOM the
-naive path at sane batch sizes run fine here, and at a fixed HBM budget
-you fit roughly 5–10× more in-batch negatives than vanilla PyLate. Full
-table in [`docs/benchmarks.md`](docs/benchmarks.md#memory).
-
-In real ColQwen2 training that B²-growing score grid is exactly what caps
-the trainable batch: on an 80 GB H100 (LoRA + grad-checkpointing, real
-`vidore/colpali_train_set` pages) vanilla colpali-engine OOMs at
-`per_device_train_batch_size=128` — a 1.81 GiB contiguous request failing
-while 25 GiB sit reserved-but-unallocated, fragmentation caused by the
-7.8 GiB the MaxSim op holds and spikes — where the fused kernel's 61 MiB
-trains B=128 at full speed, doubling the batch ceiling at identical
-steady-state step time. Tables and harness in
-[`docs/benchmarks.md`](docs/benchmarks.md#end-to-end-colqwen2--colpali-training).
-
-The backward keeps the same discipline. `auto` routes the gradient-heavy
-shapes — knowledge-distillation / hard-negative layouts and large in-batch
-squares — to the `lowmem` path, which writes `grad_Q` / `grad_D` straight in
-the input dtype (fp32 accumulation in registers, no full-size fp32 buffer, no
-atomics). That roughly halves backward peak memory and is deterministic, e.g.
-a `B256 × 16-neg` ColPali step drops from 4.3 GB to 2.2 GB.
+This runs long-context shapes (`Ld ≥ 8k`) that OOM the naive path, and fits
+~5–10× more in-batch negatives at a fixed HBM budget. In real ColQwen2
+training (80 GB H100, LoRA + grad-ckpt, `vidore/colpali_train_set`) vanilla
+colpali-engine OOMs at `batch=128` where the MaxSim op holds 7.8 GiB; the
+fused kernel holds 61 MiB and doubles the batch ceiling at the same step time.
+The backward keeps the discipline — `auto` routes gradient-heavy shapes to
+`lowmem`, writing `grad_Q` / `grad_D` in the input dtype (no full-size fp32
+buffer, no atomics, deterministic) for roughly half the backward peak, e.g. a
+`B256 × 16-neg` ColPali step from 4.3 GB to 2.2 GB. Full tables in
+[`docs/benchmarks.md`](docs/benchmarks.md#memory).
 
 ## Choose a kernel
 
