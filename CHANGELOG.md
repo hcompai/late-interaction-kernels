@@ -4,7 +4,79 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## 0.4.3 (unreleased)
+
+### Fixed
+
+- **Chunked top-k no longer crashes when `top_k` exceeds the merge width.**
+  `retrieve(Q, D, top_k=10, chunk=4)` (and the CUDA `maxsim_topk` it wraps)
+  raised "selected index k out of range": each chunk contributes at most
+  `chunk` columns, but the running merge always asked `torch.topk` for `k`.
+  The merge now clamps `k` to the merged width; the final output still
+  honors the documented `min(top_k, Nd)` contract on both paths.
+- **`MaxSimScorer.forward()` respects a caller's `torch.no_grad()`.** The
+  non-inference branch of `_score` forced `torch.enable_grad()`, so
+  `MaxSimScorer()(Q, D)` inside `torch.no_grad()` returned a tensor with
+  `requires_grad=True`. It now uses a null context and leaves the caller's
+  grad mode untouched.
+- **`maxsim_residual_varlen` handles an empty corpus (`Nd == 0`).** The
+  launcher used grid `Nq * max(Nd, 1)` while the kernel computed
+  `pid // Nd` with a constexpr `Nd=0`. The empty `[Nq, 0]` result is now
+  returned before any launch.
+- **`pack_padded` handles an empty batch (`B == 0`).** It crashed on
+  `qlen.max()` of a zero-element tensor; it now returns the trivially-empty
+  `PackedBatch` up front, so `maxsim_padded` agrees with the CPU reference
+  (`[0, C]`).
+- **PyLate legacy `mask=` is forwarded on the fallback path.** The patched
+  `colbert_scores` / `colbert_kd_scores` / `colbert_scores_pairwise` mapped
+  a legacy `mask=` into the fused path but called the original function
+  with a still-`None` `documents_mask` when deferring to PyLate (CPU,
+  sub-Ampere, `LIK_DISABLE=1`), silently dropping the doc mask.
+- **`maxsim_backward_lowmem` raises a clean `RuntimeError` without
+  Triton/CUDA** instead of failing inside the launch — same guard as
+  `maxsim_backward_unified`, so `backward/__init__`'s import-anywhere
+  promise holds.
+- **`prune_forward` falls back to the smallest-footprint configs.** When
+  every autotune config overflowed the shared-memory budget, the fallback
+  returned the first two list entries — configs just pruned for exceeding
+  the budget. It now returns the two with the smallest estimated SMEM
+  footprint.
+- **The KD path (`maxsim` with 4-D `D`) validates device agreement** for
+  `Q` / `D` / masks like the 3-D path, instead of surfacing an internal
+  kernel error on mixed devices.
+- **FP8 fallback really works without Triton.** `maxsim_inference_fp8`'s
+  documented "transparent fallback" imported the Triton-backed `maxsim`
+  unconditionally; it now dispatches like `retrieve` (Triton on CUDA,
+  compiled reference on MPS, eager reference elsewhere), so the dequantized
+  bf16 fallback runs on CPU-only installs.
+
+### Changed
+
+- **`maxsim_varlen` now buckets `max_lq` / `max_ld` to the next power of
+  two** (floor 16) before they reach the kernel. Both were constexpr
+  autotune keys with no bucketing, so — contrary to the previous docs —
+  every distinct `(max_lq, max_ld)` pair re-triggered the full autotune
+  sweep. The kernel masks on the actual `cu_seqlens` bounds, so results are
+  unchanged; the argmax buffer is sized on the bucketed `max_lq` (up to 2×
+  larger, rows `-1`-padded). The same bucketing now applies to the `max_Ld`
+  loop bound of `maxsim_residual` / `maxsim_residual_varlen`.
+- **`max_seqlen_*` arguments are documented as hard loop bounds, not
+  hints**, in `maxsim_varlen`, `score_pairs_packed`, and
+  `maxsim_residual_varlen`: a too-small value silently truncated tokens and
+  returned wrong scores. Caller-supplied values are now checked against the
+  `cu_seqlens` maxima with an on-device `torch._assert_async` (no D2H sync,
+  same trade-off as `pack_padded`'s length checks).
+- **`maxsim_residual` squeezes a 2-D `Q` back to `[Nd]`** instead of
+  returning `[1, Nd]`, matching `maxsim_residual_varlen` and the `maxsim`
+  wrapper's convention. Behavior change for callers that relied on the
+  un-squeezed shape.
+- Removed the dead `B` constexpr from `_plaid_approx_score_kernel` (it
+  forced a recompile per batch size) and the unused `Lq` / `Ld` placeholder
+  params from the varlen forward kernel.
+- Docstring corrections: `maxsim_inference_fp8` no longer mentions argmax
+  ties (the inference kernel never computes an argmax), and the `lowmem`
+  backward docs say grads are written in the *input* dtype (fp16 / bf16 /
+  fp32), not "bf16 grads".
 
 ### Removed
 

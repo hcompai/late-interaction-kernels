@@ -122,9 +122,21 @@ def forward_configs():
     return base  # minimal safe shortlist for unknown GPUs
 
 
+def _smem_bytes(cfg, d_pad: int) -> int:
+    """Estimated shared-memory footprint of a config.
+
+    Triton allocates num_stages copies of Q/D in SMEM for the async-copy
+    pipeline. tl.dot accumulates S in fp32 registers (no SMEM copy), but
+    the estimate adds one bq×bd×4-byte slot as a conservative upper bound.
+    """
+    bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
+    return (bq * d_pad + bd * d_pad) * 2 * cfg.num_stages + bq * bd * 4
+
+
 def prune_forward(configs, named_args, **kwargs):
     """Drop configs that overflow shared memory or are oversized for the problem."""
-    Lq = named_args.get("Lq", 32)
+    # The varlen kernels spell their query loop bound `max_lq` instead of `Lq`.
+    Lq = named_args.get("Lq") or named_args.get("max_lq") or 32
     # The kernel tiles on the padded embedding dim (`d_pad = next_pow2(d)`), so
     # the SMEM estimate must use d_pad too — keying on raw d underestimates by
     # up to ~2x for non-power-of-2 d and admits configs that OOM at launch.
@@ -135,15 +147,15 @@ def prune_forward(configs, named_args, **kwargs):
 
     keep = []
     for cfg in configs:
-        bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
-        # Triton allocates num_stages copies of Q/D in SMEM for the async-copy
-        # pipeline. tl.dot accumulates S in fp32 registers (no SMEM copy), but
-        # the budget adds one bq×bd×4-byte slot as a conservative upper bound.
-        need = (bq * d_pad + bd * d_pad) * 2 * cfg.num_stages + bq * bd * 4
-        if need > sram_budget:
+        if _smem_bytes(cfg, d_pad) > sram_budget:
             continue
-        if bq > 2 * Lq:
+        if cfg.kwargs["BLOCK_Q"] > 2 * Lq:
             continue
         keep.append(cfg)
-    # Always return at least two configs so autotune has something to compare.
-    return keep or configs[:2]
+    if keep:
+        return keep
+    # Nothing survived the budget (huge d_pad on a small-SRAM GPU): fall back
+    # to the two smallest-footprint candidates — they were pruned too, but
+    # they are the least likely to overflow at launch. The first two list
+    # entries would be arbitrary.
+    return sorted(configs, key=lambda cfg: _smem_bytes(cfg, d_pad))[:2]

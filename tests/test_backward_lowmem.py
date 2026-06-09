@@ -1,13 +1,27 @@
-"""Parity + memory for the low-memory (bf16, atomic-free) backward.
+"""Parity + memory for the low-memory (input-dtype, atomic-free) backward.
 
 The lowmem path produces grads directly in the input dtype via fp32-register
 accumulation in destination-owned kernels (one-hot matmul for both layouts).
-It must match the unified (saved-argmax, fp32-then-cast) backend to bf16
+It must match the unified (saved-argmax, fp32-then-cast) backend to input-dtype
 rounding, and use strictly less training memory on the n_neg-inflated KD case.
 """
 
 import pytest
 import torch
+
+
+def test_lowmem_rejects_non_cuda_tensors():
+    """Same clean RuntimeError contract as ``maxsim_backward_unified`` —
+    CPU tensors must not reach the kernel launch. Runs everywhere: without
+    Triton the guard raises on the missing dependency instead."""
+    from late_interaction_kernels.backward import maxsim_backward_lowmem
+
+    Q = torch.randn(1, 4, 8)
+    D = torch.randn(2, 4, 8)
+    grad_s = torch.randn(1, 2)
+    argmax = torch.zeros(2, 4, dtype=torch.int32)
+    with pytest.raises(RuntimeError, match="maxsim_backward_lowmem requires"):
+        maxsim_backward_lowmem(grad_s, Q, D, argmax, None)
 
 
 @pytest.mark.cuda

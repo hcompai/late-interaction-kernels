@@ -42,6 +42,35 @@ def test_topk_chunked_matches_unchunked(chunk):
     assert torch.equal(i_full, i_chunk)
 
 
+def test_topk_chunked_k_larger_than_chunk():
+    """Regression: chunk_size < k means the running merge starts narrower
+    than k; the merge used to call torch.topk with an out-of-range k."""
+    from late_interaction_kernels.topk import maxsim_topk
+
+    Q = torch.randn(2, 16, 64, device="cuda", dtype=torch.bfloat16)
+    D = torch.randn(20, 24, 64, device="cuda", dtype=torch.bfloat16)
+
+    s_full, i_full = maxsim_topk(Q, D, 10)
+    s_chunk, i_chunk = maxsim_topk(Q, D, 10, chunk_size=4)
+    assert s_chunk.shape == (2, 10)
+    assert torch.allclose(s_full, s_chunk)
+    assert torch.equal(i_full, i_chunk)
+
+
+def test_topk_chunked_k_larger_than_nd():
+    """k > Nd with chunking still clamps the output width to Nd."""
+    from late_interaction_kernels.topk import maxsim_topk
+
+    Q = torch.randn(2, 16, 64, device="cuda", dtype=torch.bfloat16)
+    D = torch.randn(6, 24, 64, device="cuda", dtype=torch.bfloat16)
+
+    s_full, i_full = maxsim_topk(Q, D, 10)
+    s_chunk, i_chunk = maxsim_topk(Q, D, 10, chunk_size=4)
+    assert s_chunk.shape == (2, 6)
+    assert torch.allclose(s_full, s_chunk)
+    assert torch.equal(i_full, i_chunk)
+
+
 def test_topk_with_masks():
     from late_interaction_kernels import maxsim
     from late_interaction_kernels.topk import maxsim_topk

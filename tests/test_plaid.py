@@ -367,6 +367,40 @@ def test_residual_varlen_handles_empty_docs():
     assert scores[0, 2].item() == 0.0
 
 
+def test_residual_2d_query_squeezes():
+    """A 2-D Q must return [Nd], matching ``maxsim_residual_varlen`` and the
+    ``maxsim`` wrapper's squeeze convention."""
+    from late_interaction_kernels.plaid import maxsim_residual
+
+    idx = _make_quant_index(Nd=3, max_Ld=16, d=128, n_centroids=32, nbits=4)
+    Q3 = torch.randn(1, 32, 128, device="cuda", dtype=torch.bfloat16)
+
+    args = (idx["codes"], idx["residuals"], idx["doc_lengths"], idx["centroids"], idx["bucket_weights"])
+    out3 = maxsim_residual(Q3, *args, nbits=4, normalize=True)
+    out2 = maxsim_residual(Q3[0], *args, nbits=4, normalize=True)
+    assert out2.shape == (3,)
+    torch.testing.assert_close(out2, out3[0])
+
+
+def test_residual_varlen_empty_corpus():
+    """Nd == 0 must return an empty [Nq, 0] result instead of launching the
+    kernel with a constexpr Nd=0 divisor."""
+    from late_interaction_kernels.plaid import maxsim_residual_varlen
+
+    centroids = torch.randn(32, 128, device="cuda", dtype=torch.float32)
+    buckets = torch.linspace(-0.1, 0.1, 16, device="cuda", dtype=torch.float32)
+    codes = torch.zeros(0, device="cuda", dtype=torch.int64)
+    res = torch.zeros(0, 64, device="cuda", dtype=torch.uint8)  # nbits=4, d=128
+    cu = torch.zeros(1, device="cuda", dtype=torch.int32)  # Nd = 0
+    Q = torch.randn(2, 32, 128, device="cuda", dtype=torch.bfloat16)
+
+    scores = maxsim_residual_varlen(Q, codes, res, cu, centroids, buckets, nbits=4, normalize=True)
+    assert scores.shape == (2, 0)
+
+    scores_2d = maxsim_residual_varlen(Q[0], codes, res, cu, centroids, buckets, nbits=4, normalize=True)
+    assert scores_2d.shape == (0,)
+
+
 def test_residual_matches_dense_maxsim():
     """With nbits=8 and identity bucket weights, residual scoring should
     recover exact dense MaxSim up to rounding."""

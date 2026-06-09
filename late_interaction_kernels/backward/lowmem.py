@@ -1,4 +1,5 @@
-"""Low-memory backward: bf16 grads, no full-size fp32 buffers, no atomics.
+"""Low-memory backward: grads written in the input dtype, no full-size fp32
+buffers, no atomics.
 
 The other backends accumulate grads into full-size fp32 buffers and cast to
 the input dtype at the end, so the cast briefly holds both copies. For the 4-D
@@ -6,10 +7,11 @@ hard-negative layout grad_D is n_neg-inflated, making that fp32 buffer + its
 transient the largest training allocation.
 
 This path accumulates in an fp32 register inside destination-owned kernels and
-stores the input dtype on the single write — same result as ``fp32 →
-.to(dtype)`` but with no fp32 buffer, no transient, and deterministic.
+stores the input dtype (fp16 / bf16 / fp32) on the single write — same result
+as ``fp32 → .to(dtype)`` but with no fp32 buffer, no transient, and
+deterministic.
 
-* grad_Q: the row-owned ``_bwd_dQ_kernel`` pointed at a bf16 buffer.
+* grad_Q: the row-owned ``_bwd_dQ_kernel`` pointed at an input-dtype buffer.
 * grad_D: one destination-owned kernel for both layouts — each
   ``(slab, doc-tile)`` reduces ``onehot^T @ (g·Q)`` from the saved argmax.
 """
@@ -209,9 +211,9 @@ def maxsim_backward_lowmem(
     *,
     kd_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Backward producing bf16/fp16 grads directly (no fp32 buffers, no atomics).
+    """Backward producing grads directly in the input dtype (no fp32 buffers, no atomics).
 
-    Same gradients as the unified backend to bf16 rounding; deterministic.
+    Same gradients as the unified backend to input-dtype rounding; deterministic.
     The ``grad_D`` one-hot reduction runs at ``pick_compute_dtype`` matmul
     precision, so fp32 inputs get fp16-precision ``grad_D`` (``grad_Q`` is a
     gather and stays fp32-accurate); use ``unified`` for fp32 accumulation.
@@ -229,6 +231,11 @@ def maxsim_backward_lowmem(
 
     Returns ``(grad_Q, grad_D)`` already in ``Q`` / ``D`` dtypes.
     """
+    if not _HAS_TRITON:  # pragma: no cover
+        raise RuntimeError("maxsim_backward_lowmem requires Triton; install a CUDA-enabled Triton build.")
+    if not (Q.is_cuda and D.is_cuda):
+        raise RuntimeError("maxsim_backward_lowmem requires CUDA tensors.")
+
     Nq, Lq, d = Q.shape
     Nd_total, Ld, _ = D.shape
     Nd = Nd_total // Nq if kd_layout else Nd_total

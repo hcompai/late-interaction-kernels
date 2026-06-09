@@ -250,11 +250,10 @@ def maxsim_inference_fp8(
         ``scores [Nq, Nd]`` fp32, squeezed for 2-D inputs.
 
     Notes:
-        - Hopper SM90+ or Blackwell required. On older GPUs (or old
-          Triton) the function transparently falls back to a dequantized
-          bf16 path with a one-time warning.
-        - Ties with argmax are not tie-broken — the first fp8-equal
-          doc token wins. Use the bf16 rerank path if ties matter.
+        Hopper SM90+ or Blackwell required for the FP8 tensor-core path.
+        Anywhere else (older GPUs, old Triton, no Triton at all — CPU /
+        MPS) the function transparently falls back to a dequantized bf16
+        path with a one-time warning.
     """
     global _WARNED_FP8_FALLBACK
 
@@ -313,11 +312,6 @@ def maxsim_inference_fp8(
                 stacklevel=2,
             )
             _WARNED_FP8_FALLBACK = True
-        # Dequantize and fall back to the regular kernel. ``Q.to(...)``
-        # detaches from autograd so the requires_grad-aware dispatch in
-        # ``maxsim`` lands on the cheap forward-only path.
-        from late_interaction_kernels.autograd import maxsim
-
         if scale_q_per_token:
             Qd = Q.to(torch.bfloat16) * scale_Q.unsqueeze(-1).to(torch.bfloat16)
         else:
@@ -326,7 +320,24 @@ def maxsim_inference_fp8(
             Dd = D.to(torch.bfloat16) * scale_D.unsqueeze(-1).to(torch.bfloat16)
         else:
             Dd = D.to(torch.bfloat16) * scale_D.to(torch.bfloat16)
-        scores = maxsim(Qd, Dd, q_mask=q_mask, d_mask=d_mask)
+        # Dequantize and dispatch by device, like ``retrieve``: the Triton
+        # bf16 kernel on CUDA, the compiled reference on MPS, the eager
+        # reference elsewhere — so the documented fallback really works
+        # without Triton. ``Q.to(...)`` detaches from autograd, so the
+        # CUDA path lands on ``maxsim``'s cheap forward-only branch.
+        if _HAS_TRITON and Qd.is_cuda:
+            from late_interaction_kernels.autograd import maxsim
+
+            scores = maxsim(Qd, Dd, q_mask=q_mask, d_mask=d_mask)
+        elif Qd.device.type == "mps":
+            from late_interaction_kernels.mps import maxsim_inference_mps
+
+            scores = maxsim_inference_mps(Qd, Dd, q_mask=q_mask, d_mask=d_mask, normalize=False)
+        else:
+            from late_interaction_kernels.reference import maxsim_reference
+
+            with torch.no_grad():
+                scores = maxsim_reference(Qd, Dd, q_mask=q_mask, d_mask=d_mask, normalize=False)
         if q_was_2d and d_was_2d:
             return scores.reshape(())
         if q_was_2d:

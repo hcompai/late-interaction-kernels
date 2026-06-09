@@ -107,11 +107,14 @@ def _resolve_masks(queries_mask, documents_mask, legacy_mask):
     * legacy (< 1.1):    ``mask=`` (document mask only)
     * positional legacy: 3rd positional == document mask
 
-    Whichever arrived, hand back ``(q_mask, d_mask)`` as bool tensors.
+    Whichever arrived, hand back ``(q_mask, d_mask, documents_mask)`` — the
+    first two as bool tensors for the fused path, the last as the resolved
+    raw document mask so the fallback path forwards a legacy ``mask=``
+    instead of dropping it.
     """
     if documents_mask is None and legacy_mask is not None:
         documents_mask = legacy_mask
-    return _mask_as_bool(queries_mask), _mask_as_bool(documents_mask)
+    return _mask_as_bool(queries_mask), _mask_as_bool(documents_mask), documents_mask
 
 
 def patched_colbert_scores(
@@ -127,7 +130,7 @@ def patched_colbert_scores(
 
     Q = convert_to_tensor(queries_embeddings)
     D = convert_to_tensor(documents_embeddings)
-    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
+    q_mask, d_mask, documents_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
     path = _device_path(Q, D)
     if path is None:
@@ -153,7 +156,7 @@ def patched_colbert_kd_scores(
 
     Q = convert_to_tensor(queries_embeddings)
     D = convert_to_tensor(documents_embeddings)
-    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
+    q_mask, d_mask, documents_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
     path = _device_path(Q, D)
     if path is None:
@@ -188,7 +191,7 @@ def patched_colbert_scores_pairwise(
 
     Q = convert_to_tensor(queries_embeddings)
     D = convert_to_tensor(documents_embeddings)
-    q_mask, d_mask = _resolve_masks(queries_mask, documents_mask, mask)
+    q_mask, d_mask, documents_mask = _resolve_masks(queries_mask, documents_mask, mask)
 
     path = _device_path(Q, D)
     # CUDA gets the fused K=1 KD launch; everything else defers to PyLate's

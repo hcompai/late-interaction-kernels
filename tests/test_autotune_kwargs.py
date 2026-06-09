@@ -29,6 +29,22 @@ def test_autotune_kwargs_matches_triton_signature():
     )
 
 
+def test_prune_forward_fallback_returns_smallest_footprint():
+    """When every config overflows the SMEM budget, the fallback must hand
+    back the smallest-footprint candidates, not the first two list entries."""
+    from late_interaction_kernels._autotune import _smem_bytes, forward_configs, prune_forward
+
+    configs = forward_configs()
+    # d_pad large enough that no config fits any family's budget.
+    named_args = {"Lq": 32, "d_pad": 1 << 20}
+    kept = prune_forward(configs, named_args)
+
+    assert len(kept) == 2
+    d_pad: int = named_args["d_pad"]
+    smallest = sorted(_smem_bytes(cfg, d_pad) for cfg in configs)[:2]
+    assert sorted(_smem_bytes(cfg, d_pad) for cfg in kept) == smallest
+
+
 def test_autotune_kwargs_safe_to_unpack_into_decorator():
     """Whatever ``autotune_kwargs()`` returns must compose with our other
     autotune args — i.e. the call site

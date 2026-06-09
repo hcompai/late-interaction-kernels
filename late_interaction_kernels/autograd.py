@@ -29,6 +29,23 @@ _LQ_BUCKET_CEIL = 4096
 _WARNED_LQ_OVER_CEIL = False
 
 
+def _validate_devices(
+    Q: torch.Tensor,
+    D: torch.Tensor,
+    q_mask: torch.Tensor | None,
+    d_mask: torch.Tensor | None,
+) -> None:
+    """Fail fast on mixed devices — shared by the cross-product and KD paths."""
+    if Q.device != D.device:
+        raise ValueError(
+            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
+        )
+    if q_mask is not None and q_mask.device != Q.device:
+        raise ValueError(f"q_mask must be on the same device as Q; got {q_mask.device} vs {Q.device}.")
+    if d_mask is not None and d_mask.device != D.device:
+        raise ValueError(f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}.")
+
+
 def _bucket_lq(Q: torch.Tensor, q_mask: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Round Lq up to the next power of two so Triton's autotune cache reuses
     a config across batches with slightly different query lengths.
@@ -244,6 +261,7 @@ def _maxsim_kd(
         raise ValueError(
             f"d_mask must be [Nq={Nq}, K={K}, Ld={Ld}] for KD layout; got {tuple(d_mask.shape)}."
         )
+    _validate_devices(Q, D, q_mask, d_mask)
 
     # ``F.pad`` + ``reshape(Nq * K, ...)`` keeps strides contiguous so the view
     # below is a real zero-copy reinterpretation, not a hidden materialise.
@@ -367,8 +385,9 @@ def maxsim(
         backward: gradient strategy (``"auto" | "unified" | "lowmem"``).
             ``None`` (default) is treated as ``"auto"``, which routes the
             gradient-heavy shapes (KD / hard-negatives, high-contention
-            squares) to ``"lowmem"`` (bf16 grads, ~½ peak memory,
-            deterministic) and the rest to ``"unified"`` (fastest).
+            squares) to ``"lowmem"`` (grads written in the input dtype,
+            ~½ peak memory, deterministic) and the rest to ``"unified"``
+            (fastest).
             ``"lowmem"`` writes grads in the input dtype and reduces
             ``grad_D`` with half-precision matmuls, so fp32 inputs get
             fp16-precision ``grad_D``; pass ``backward="unified"`` if you
@@ -412,14 +431,7 @@ def maxsim(
             f"Q and D must share the embedding dim; got Q.shape[-1]={Q.shape[-1]} "
             f"vs D.shape[-1]={D.shape[-1]}."
         )
-    if Q.device != D.device:
-        raise ValueError(
-            f"Q and D must be on the same device; got Q.device={Q.device} vs D.device={D.device}."
-        )
-    if q_mask is not None and q_mask.device != Q.device:
-        raise ValueError(f"q_mask must be on the same device as Q; got {q_mask.device} vs {Q.device}.")
-    if d_mask is not None and d_mask.device != D.device:
-        raise ValueError(f"d_mask must be on the same device as D; got {d_mask.device} vs {D.device}.")
+    _validate_devices(Q, D, q_mask, d_mask)
 
     method = method_for_kd  # already resolved + validated above
 

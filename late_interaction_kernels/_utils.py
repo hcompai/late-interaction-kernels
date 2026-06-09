@@ -12,6 +12,43 @@ def next_pow2(x: int) -> int:
     return 1 << (x - 1).bit_length()
 
 
+def bucket_seqlen(max_len: int, floor: int = 16) -> int:
+    """Round a kernel's sequence-loop bound up to the next power of two.
+
+    Several kernels take a max-length loop bound that is both a ``constexpr``
+    and an autotune key, so every distinct value re-triggers the (5-10 s)
+    autotune sweep. Bucketing to {floor, 2*floor, ...} caps the cache at a
+    handful of entries. Safe because every such kernel masks its loads and
+    reductions on the *actual* per-sequence length — a larger loop bound only
+    adds fully-masked iterations. The default floor matches the smallest
+    block size in the autotune pools.
+    """
+    if max_len <= 0:
+        return 0
+    return max(floor, next_pow2(max_len))
+
+
+def assert_max_seqlen_covers(cu_seqlens: torch.Tensor, max_seqlen: int, arg_name: str) -> None:
+    """Check a caller-supplied ``max_seqlen`` against the real ``cu_seqlens`` maxima.
+
+    ``max_seqlen_*`` arguments are hard kernel loop bounds, not hints: a
+    too-small value silently truncates tokens and returns wrong scores.
+    ``torch._assert_async`` runs the check on-device with no D2H sync (the
+    whole point of letting callers pass ``max_seqlen`` is to skip that sync),
+    so a violation surfaces as an async device-side assert rather than an
+    eager ``ValueError`` — same trade-off as the length checks in
+    :func:`late_interaction_kernels.padded.pack_padded`.
+    """
+    if cu_seqlens.numel() <= 1:
+        return
+    seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+    torch._assert_async(
+        seqlens.max().le(max_seqlen),
+        f"{arg_name}={max_seqlen} is smaller than the longest sequence in cu_seqlens; "
+        f"it is a hard loop bound and would silently truncate tokens.",
+    )
+
+
 def package_at_least(name: str, minimum: str) -> bool:
     """True when installed distribution ``name`` is >= ``minimum`` (absent → False).
 

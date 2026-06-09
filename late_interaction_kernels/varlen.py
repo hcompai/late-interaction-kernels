@@ -12,7 +12,12 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import (
+    assert_max_seqlen_covers,
+    bucket_seqlen,
+    next_pow2,
+    pick_compute_dtype,
+)
 
 
 @triton.autotune(
@@ -44,8 +49,6 @@ def _varlen_fwd_kernel(
     stride_am_n,
     stride_am_d,
     stride_am_l,
-    Lq: tl.constexpr,
-    Ld,  # unused; runtime arg kept for call-site compat (constexpr would recompile per Ld).
     BLOCK_Q: tl.constexpr,
     BLOCK_D: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
@@ -292,8 +295,20 @@ def _varlen_forward(
 
     if max_seqlen_q is None:
         max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item()) if Nq else 0
+    else:
+        assert_max_seqlen_covers(cu_seqlens_q, int(max_seqlen_q), "max_seqlen_q")
     if max_seqlen_d is None:
         max_seqlen_d = int((cu_seqlens_d[1:] - cu_seqlens_d[:-1]).max().item()) if Nd else 0
+    else:
+        assert_max_seqlen_covers(cu_seqlens_d, int(max_seqlen_d), "max_seqlen_d")
+
+    # max_lq / max_ld are constexpr loop bounds AND autotune keys, so without
+    # bucketing every distinct (max_lq, max_ld) pair re-triggers the full
+    # autotune sweep. The kernel masks on the actual cu_seqlens bounds, so a
+    # larger loop bound only adds fully-masked iterations. The argmax buffer
+    # is sized on the bucketed value (its rows are -1-padded; backward skips).
+    max_seqlen_q = bucket_seqlen(int(max_seqlen_q))
+    max_seqlen_d = bucket_seqlen(int(max_seqlen_d))
 
     d_pad = next_pow2(d)
     compute_dtype = pick_compute_dtype(Q_packed, D_packed)
@@ -333,8 +348,6 @@ def _varlen_forward(
         am_strides[0],
         am_strides[1],
         am_strides[2],
-        max_seqlen_q,
-        max_seqlen_d,  # Lq, Ld placeholders
         COMPUTE_DTYPE=tl_dtype,
         SAVE_ARGMAX=save_argmax,
     )
@@ -441,8 +454,12 @@ def maxsim_varlen(
         D_packed: ``[sum(Ld_j), d]``.
         cu_seqlens_q: ``[Nq + 1]`` int32 cumulative offsets.
         cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets.
-        max_seqlen_q, max_seqlen_d: tile-count hints; inferred from
-            ``cu_seqlens`` if omitted.
+        max_seqlen_q, max_seqlen_d: hard kernel loop bounds, NOT hints — a
+            value smaller than the longest sequence would silently drop
+            tokens, so it is rejected by an on-device assert (no D2H sync).
+            Inferred from ``cu_seqlens`` (one D2H sync) if omitted. Both are
+            rounded up to the next power of two internally so the autotune
+            cache is reused across batches with different maxima.
 
     Returns:
         scores: ``[Nq, Nd]`` fp32.
