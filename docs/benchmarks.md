@@ -123,8 +123,9 @@ plain forward only.
 
 LIK meets or beats `flash-maxsim` on every cross-product forward shape:
 a dead heat on the tightest ones (`edge-d64`, `rerank-10k`) and 1.12–1.14×
-ahead on the wide regimes (`rerank-very-long`, `train-in-batch-128`). Both kernels are fused (neither materialises the
-score tile), so peak working set is sub-100 KB on every shape and there's
+ahead on the wide regimes (`rerank-very-long`, `train-in-batch-128`). Both
+kernels are fused (neither materialises the score tile), so peak working
+set is sub-100 KB on every shape and there's
 no memory column to compare. The real differentiators are elsewhere: a
 fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
 backward (`unified` / `lowmem`), packed/varlen, PLAID residual
