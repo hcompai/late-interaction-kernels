@@ -9,13 +9,21 @@ strictly extends it for non-human contributors.
 After **every** task that touches Python — code, tests, comments,
 docstrings — and **before** committing, every agent MUST:
 
-1. Run `ruff check . && ruff format --check .` from the repo root, and
-   `ty check late_interaction_kernels/` if types changed. Both must be
-   clean (no new diagnostics). If `ruff format --check` reports a
-   reformat, run `ruff format` and stage the result.
-2. Run `pytest -q` (or the targeted test file when iterating) and
-   confirm no regressions vs the pre-change baseline. Pre-existing
+1. Run `uv run ruff check . && uv run ruff format --check .` from the
+   repo root, and `uv run ty check late_interaction_kernels/` if types
+   changed. Both must be clean (no new diagnostics). If
+   `ruff format --check` reports a reformat, run `uv run ruff format`
+   and stage the result. (The repo is uv-managed — bare `ruff`/`pytest`
+   hit whatever environment happens to be active, or nothing.)
+2. Run `uv run pytest -q` (or the targeted test file when iterating)
+   and confirm no regressions vs the pre-change baseline. Pre-existing
    flaky/skipped tests are fine.
+3. Know what a green local run proves: CUDA/Triton tests auto-skip on
+   machines without a GPU — the common case for agents — so local green
+   does **not** validate kernel behaviour. Kernel changes are covered by
+   the GPU-gated tests and GPU CI; if your change touches kernel or
+   dispatch code, say so in the PR and rely on those, not on the local
+   skip-heavy run.
 
 These steps run **after every task**, not just at PR time — CI runs the
 same checks and a failure caught locally is a free fix. Do not commit
@@ -34,7 +42,15 @@ MUST (in addition to the per-task checklist above):
      in backticks. Keep the tone of existing entries — concrete, no marketing.
    - If the `## [Unreleased]` heading does not exist (because the previous
      release just shipped), insert it directly above the latest version.
-2. Never commit anything in `benchmarks/results/` — it is `.gitignore`d.
+2. **Sweep the docs for claims your change invalidates.** The prose
+   docs make precise, quantitative claims about the kernels —
+   [`docs/how-it-works.html`](docs/how-it-works.html),
+   [`docs/design.md`](docs/design.md), the README tables and headline
+   numbers. If you changed kernels, dispatch/routing, autotune configs,
+   or memory behaviour, grep those files for the affected names and
+   numbers and update them in the same PR. Most documentation drift in
+   this repo has come from skipping this step.
+3. Never commit anything in `benchmarks/results/` — it is `.gitignore`d.
 
 ## Style
 
