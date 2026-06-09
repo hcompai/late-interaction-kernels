@@ -199,8 +199,11 @@ tiles stream through SRAM and only `[Nq, Nd]` scores come back, plus a
 | shape                                     | naive scratch | fused fwd | fused fwd + bwd |
 | ----------------------------------------- | ------------- | --------- | --------------- |
 | `Nq=1, Nd=1k, Lq=32, Ld=300`              | 183 MB        | 4 KB      | 128 KB          |
-| `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali) | 4.5 GB        | 4 KB      | 4 MB            |
+| `Nq=1, Nd=1k, Lq=128, Ld=1024` (ColPali)  | 1.0 GB        | 4 KB      | 512 KB          |
 | `Nq=16, Nd=32, Lq=32, Ld=8192`            | 2.1 GB        | 64 KB     | 64 KB           |
+
+The ColPali row assumes a short text query expanded to `Lq = 128`
+(ColBERT-style query augmentation) against a `Ld ≈ 1024`-patch page.
 
 This runs long-context shapes (`Ld ≥ 8k`) that OOM the naive path, and fits
 ~5–10× more in-batch negatives at a fixed HBM budget. In real ColQwen2

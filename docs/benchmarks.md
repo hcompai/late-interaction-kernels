@@ -76,8 +76,7 @@ Full table:
 | ------------------------------------------------------- | -------- | ---------------- | -------------------------- | ------------ | -------------- | ------------- |
 | text-short `Nq=1, Nd=1k, Lq=32, Ld=300`                 | 0.094 ms | 0.263 ms         | 0.273 ms                   | 2.8×         | 2.9×           | 183 MB → 0    |
 | text-long `Nq=1, Nd=1k, Lq=32, Ld=1024`                 | 0.096 ms | 0.793 ms         | 0.880 ms                   | **8.3×**     | **9.2×**       | 626 MB → 0    |
-| text-medium `Nq=1, Nd=1k, Lq=128, Ld=1024`              | 0.097 ms | 1.538 ms         | 1.603 ms                   | **15.9×**    | **16.5×**      | 1.0 GB → 0    |
-| visual `Nq=1, Nd=1k, Lq=1024, Ld=1024` (ColPali)        | 0.675 ms | 9.365 ms         | 9.173 ms                   | **13.9×**    | **13.6×**      | 4.5 GB → 0    |
+| colpali `Nq=1, Nd=1k, Lq=128, Ld=1024`                  | 0.097 ms | 1.538 ms         | 1.603 ms                   | **15.9×**    | **16.5×**      | 1.0 GB → 0    |
 | corpus-5k `Nq=1, Nd=5k, Lq=32, Ld=300`                  | 0.129 ms | 1.195 ms         | 1.196 ms                   | 9.3×         | 9.3×           | 916 MB → 0    |
 | corpus-10k `Nq=1, Nd=10k, Lq=32, Ld=300`                | 0.247 ms | 2.354 ms         | 2.352 ms                   | 9.5×         | 9.5×           | 1.8 GB → 0    |
 | train-batch `Nq=Nd=32, Lq=32, Ld=300`                   | 0.097 ms | 0.127 ms         | 0.169 ms                   | 1.3×         | 1.7×           | 43 MB → 0     |
@@ -114,7 +113,6 @@ plain forward only.
 | `rerank-short` (Nq=1, Nd=1k, Lq=32, Ld=300)       | 0.106 | 0.111        | 1.05×   |
 | `rerank-long` (Nq=1, Nd=1k, Lq=32, Ld=1024)       | 0.167 | 0.173        | 1.04×   |
 | `rerank-very-long` (Nq=1, Nd=500, Lq=32, Ld=4096) | 0.227 | 0.255        | 1.12×   |
-| `rerank-colpali` (Nq=1, Nd=500, Lq=1024, Ld=1024) | 0.434 | 0.510        | 1.17×   |
 | `rerank-10k` (Nq=1, Nd=10k, Lq=32, Ld=300)        | 0.322 | 0.329        | 1.02×   |
 | `train-in-batch-32` (Nq=Nd=32, Lq=32, Ld=200)     | 0.098 | 0.102        | 1.05×   |
 | `train-in-batch-128` (Nq=Nd=128, Lq=32, Ld=200)   | 0.263 | 0.298        | 1.14×   |
@@ -124,9 +122,8 @@ plain forward only.
 
 
 LIK meets or beats `flash-maxsim` on every cross-product forward shape:
-a dead heat on the tightest ones (`edge-d64`, `rerank-10k`) and 1.12–1.17×
-ahead on the wide regimes (`rerank-very-long`, `rerank-colpali`,
-`train-in-batch-128`). Both kernels are fused (neither materialises the
+a dead heat on the tightest ones (`edge-d64`, `rerank-10k`) and 1.12–1.14×
+ahead on the wide regimes (`rerank-very-long`, `train-in-batch-128`). Both kernels are fused (neither materialises the
 score tile), so peak working set is sub-100 KB on every shape and there's
 no memory column to compare. The real differentiators are elsewhere: a
 fused `normalize=True` (no extra HBM round-trip), a real autograd-aware
@@ -139,8 +136,9 @@ smallest pair shape, where flash's lighter launch wins).
 
 ### Long-query chunking (`Lq > 512`)
 
-For long queries (ColPali-scale `Lq ≈ 1k` visual patches) the un-chunked
-kernel serialises a long `static_range` loop inside each program. Since
+For long query sequences (`Lq > 512`, such as image or document queries used
+on the query side) the un-chunked kernel serialises a long `static_range`
+loop inside each program. Since
 MaxSim is a sum over query tokens of a per-token max, splitting the query
 axis into fixed 128-token chunks and summing the per-chunk scores is
 numerically exact, and launches more, shorter programs that keep the H100
@@ -672,7 +670,7 @@ keeps the `Nq · Nd` result plus — only if autograd is on — a
 | --------------------------------- | ------------- | --------- | ------------------ |
 | `Nq=1, Nd=1000, Lq=32, Ld=300`    | 183 MB        | 4 KB      | 128 KB             |
 | `Nq=128, Nd=128, Lq=32, Ld=300`   | 621 MB        | 64 KB     | 2 MB               |
-| `Nq=1, Nd=1000, Lq=1024, Ld=1024` | 4.5 GB        | 4 KB      | 4 MB               |
+| `Nq=1, Nd=1000, Lq=128, Ld=1024`  | 1.0 GB        | 4 KB      | 512 KB             |
 | `Nq=16, Nd=32, Lq=32, Ld=8192`    | 2.1 GB        | 64 KB     | 64 KB              |
 
 
