@@ -16,7 +16,6 @@
 ---
 
 [[How it works]](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)
-[[Kernel picker]](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html)
 [[Benchmarks]](docs/benchmarks.md)
 [[Design]](docs/design.md)
 [[Changelog]](CHANGELOG.md)
@@ -215,27 +214,6 @@ The backward keeps the discipline: `auto` routes gradient-heavy shapes to
 buffer, no atomics, deterministic) for roughly half the backward peak, e.g. a
 `B256 × 16-neg` ColPali step from 4.3 GB to 2.2 GB. Full tables in
 [`docs/benchmarks.md`](docs/benchmarks.md#memory).
-
-## Choose a kernel
-
-<table>
-<tr>
-<td width="55%" valign="middle">
-
-Not sure which entry point fits your stack? The docs site ships an interactive decision tree that narrows the public API down to the right function in four questions (stack · phase · layout · workload):
-
-**👉 [hcompai.github.io/late-interaction-kernels/choose-a-kernel.html](https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel)**
-
-</td>
-<td width="45%" valign="middle" align="center">
-
-<a href="https://hcompai.github.io/late-interaction-kernels/choose-a-kernel.html#choose-a-kernel">
-  <img src="assets/kernel_picker_widget_preview.webp" alt="Pick a kernel · interactive decision tree" width="420">
-</a>
-
-</td>
-</tr>
-</table>
 
 ## API
 
