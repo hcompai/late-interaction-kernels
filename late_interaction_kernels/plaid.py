@@ -919,7 +919,7 @@ def maxsim_residual_varlen(
 
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
     # No docs -> nothing to launch. The kernel's `pid // Nd` indexing would
-    # divide by the constexpr Nd=0; the empty [Nq, 0] result needs no kernel.
+    # divide by Nd=0; the empty [Nq, 0] result needs no kernel.
     if Nd == 0:
         return out.squeeze(0) if q_squeeze else out
 
