@@ -4,7 +4,7 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.3] - 2026-06-10
 
 ### Fixed
 
@@ -52,19 +52,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **`maxsim_varlen` now buckets `max_lq` / `max_ld` to the next power of
-  two** (floor 16) before they reach the kernel. Both were constexpr
-  autotune keys with no bucketing, so — contrary to the previous docs —
-  every distinct `(max_lq, max_ld)` pair re-triggered the full autotune
-  sweep. The kernel masks on the actual `cu_seqlens` bounds, so results are
-  unchanged; the trade-off (mirroring the dense path's `Lq` bucketing) is
-  up to one power-of-two of fully-masked tile iterations per program, and
-  the argmax buffer is sized on the bucketed `max_lq` (up to 2× larger,
-  rows `-1`-padded). The PLAID kernels (`maxsim_residual` /
-  `maxsim_residual_varlen`) deliberately keep their exact `max_Ld`: it is a
-  property of the compressed index, stable across calls, so the sweep
-  amortizes to one — bucketing there measured 30-50% steady-state
-  throughput loss on `Ld=300` corpora for no benefit.
+- **`maxsim_varlen` autotune sweeps are amortized across batch shapes.**
+  `max_lq` / `max_ld` were constexpr autotune keys with no bucketing, so —
+  contrary to the previous docs — every distinct `(max_lq, max_ld)` pair
+  re-triggered the full autotune sweep *and* recompiled the kernel. They
+  are now exact runtime loop bounds (like the dense kernel's `Ld`), and
+  the autotune cache is keyed on power-of-two-bucketed copies (floor 16)
+  passed as key-only arguments: one sweep per bucket, zero masked
+  iterations added, argmax buffer still sized on the exact `max_lq`.
+  Results are unchanged. The PLAID kernels (`maxsim_residual` /
+  `maxsim_residual_varlen`) deliberately keep their exact `max_Ld` key: it
+  is a property of the compressed index, stable across calls, so the sweep
+  amortizes to one — bucketing the loop bound there measured 30-50%
+  steady-state throughput loss on `Ld=300` corpora for no benefit, which
+  is also why the varlen bounds stay exact.
 - **`max_seqlen_*` arguments are documented as hard loop bounds, not
   hints**, in `maxsim_varlen`, `score_pairs_packed`, and
   `maxsim_residual_varlen`: a too-small value silently truncated tokens and
@@ -76,8 +77,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrapper's convention. Behavior change for callers that relied on the
   un-squeezed shape.
 - Removed the dead `B` constexpr from `_plaid_approx_score_kernel` (it
-  forced a recompile per batch size) and the unused `Lq` / `Ld` placeholder
-  params from the varlen forward kernel.
+  forced a recompile per batch size), the unused `Lq` / `Ld` placeholder
+  params from the varlen forward kernel, and the dead `Nq` constexpr from
+  `_varlen_bwd_dQ_kernel`. The varlen backward kernels also take `max_lq`
+  as a runtime arg instead of a constexpr (mirroring the `score_pairs`
+  backward kernels), so a new query-length maximum no longer recompiles
+  them.
 - Docstring corrections: `maxsim_inference_fp8` no longer mentions argmax
   ties (the inference kernel never computes an argmax), and the `lowmem`
   backward docs say grads are written in the *input* dtype (fp16 / bf16 /

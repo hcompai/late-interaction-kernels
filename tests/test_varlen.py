@@ -67,7 +67,8 @@ def test_varlen_matches_padded_path():
 
 def test_varlen_explicit_max_seqlen_matches_inferred():
     """Caller-supplied max_seqlen_* (non-power-of-2) must give the same
-    scores as the inferred path — exercises the loop-bound bucketing."""
+    scores as the inferred path — exercises the explicit loop-bound path
+    and its bucketed autotune key."""
     from late_interaction_kernels import maxsim_varlen
 
     q_lens = [5, 9]

@@ -13,15 +13,16 @@ def next_pow2(x: int) -> int:
 
 
 def bucket_seqlen(max_len: int, floor: int = 16) -> int:
-    """Round a kernel's sequence-loop bound up to the next power of two.
+    """Round a max sequence length up to the next power of two for use as an
+    autotune cache key.
 
-    Several kernels take a max-length loop bound that is both a ``constexpr``
-    and an autotune key, so every distinct value re-triggers the (5-10 s)
-    autotune sweep. Bucketing to {floor, 2*floor, ...} caps the cache at a
-    handful of entries. Safe because every such kernel masks its loads and
-    reductions on the *actual* per-sequence length — a larger loop bound only
-    adds fully-masked iterations. The default floor matches the smallest
-    block size in the autotune pools.
+    Keying the autotune cache on an exact max length re-triggers the (5-10 s)
+    sweep for every distinct value; bucketing to {floor, 2*floor, ...} caps
+    the cache at a handful of entries. Only the *key* is bucketed — kernels
+    keep the exact value as their runtime loop bound, so no masked iterations
+    are added (bucketing the bound itself measured 30-50% throughput loss on
+    the PLAID kernels). The default floor matches the smallest block size in
+    the autotune pools.
     """
     if max_len <= 0:
         return 0

@@ -22,7 +22,7 @@ from late_interaction_kernels._utils import (
 
 @triton.autotune(
     configs=forward_configs(),
-    key=["max_lq", "max_ld", "d_pad"],
+    key=["lq_key", "ld_key", "d_pad"],
     prune_configs_by={"early_config_prune": prune_forward},
     **autotune_kwargs(),
 )
@@ -36,8 +36,10 @@ def _varlen_fwd_kernel(
     argmax_ptr,
     Nq: tl.constexpr,
     Nd: tl.constexpr,
-    max_lq: tl.constexpr,
-    max_ld: tl.constexpr,
+    max_lq,
+    max_ld,
+    lq_key,  # bucketed max_lq; unused, autotune cache key only
+    ld_key,  # bucketed max_ld; unused, autotune cache key only
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_q_t,
@@ -143,9 +145,8 @@ def _varlen_bwd_dQ_kernel(
     argmax_ptr,  # [Nq, Nd, max_lq]
     grad_s_ptr,  # [Nq, Nd] fp32
     grad_Q_ptr,  # [sum_Lq, d] fp32
-    Nq: tl.constexpr,
     Nd: tl.constexpr,
-    max_lq: tl.constexpr,
+    max_lq,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_d_t,
@@ -211,7 +212,7 @@ def _varlen_bwd_dD_kernel(
     grad_s_ptr,
     grad_D_ptr,  # [sum_Ld, d] fp32
     Nd: tl.constexpr,
-    max_lq: tl.constexpr,
+    max_lq,
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_q_t,
@@ -302,13 +303,14 @@ def _varlen_forward(
     else:
         assert_max_seqlen_covers(cu_seqlens_d, int(max_seqlen_d), "max_seqlen_d")
 
-    # max_lq / max_ld are constexpr loop bounds AND autotune keys, so without
-    # bucketing every distinct (max_lq, max_ld) pair re-triggers the full
-    # autotune sweep. The kernel masks on the actual cu_seqlens bounds, so a
-    # larger loop bound only adds fully-masked iterations. The argmax buffer
-    # is sized on the bucketed value (its rows are -1-padded; backward skips).
-    max_seqlen_q = bucket_seqlen(int(max_seqlen_q))
-    max_seqlen_d = bucket_seqlen(int(max_seqlen_d))
+    # max_lq / max_ld stay exact runtime loop bounds (zero masked iterations,
+    # like the dense kernel's Ld); only the autotune cache is keyed on the
+    # bucketed copies below, so distinct (max_lq, max_ld) pairs share one
+    # sweep per power-of-two bucket instead of each re-triggering it.
+    max_seqlen_q = int(max_seqlen_q)
+    max_seqlen_d = int(max_seqlen_d)
+    lq_key = bucket_seqlen(max_seqlen_q)
+    ld_key = bucket_seqlen(max_seqlen_d)
 
     d_pad = next_pow2(d)
     compute_dtype = pick_compute_dtype(Q_packed, D_packed)
@@ -337,6 +339,8 @@ def _varlen_forward(
         Nd,
         max_seqlen_q,
         max_seqlen_d,
+        lq_key,
+        ld_key,
         d,
         d_pad,
         Q_packed.stride(0),
@@ -387,7 +391,6 @@ class _MaxSimVarlenFn(torch.autograd.Function):
                 argmax,
                 grad_scores,
                 grad_Q,
-                Nq,
                 Nd,
                 max_q,
                 d,
@@ -457,9 +460,9 @@ def maxsim_varlen(
         max_seqlen_q, max_seqlen_d: hard kernel loop bounds, NOT hints — a
             value smaller than the longest sequence would silently drop
             tokens, so it is rejected by an on-device assert (no D2H sync).
-            Inferred from ``cu_seqlens`` (one D2H sync) if omitted. Both are
-            rounded up to the next power of two internally so the autotune
-            cache is reused across batches with different maxima.
+            Inferred from ``cu_seqlens`` (one D2H sync) if omitted. The
+            autotune cache is keyed on power-of-two buckets of both, so it
+            is reused across batches with different maxima.
 
     Returns:
         scores: ``[Nq, Nd]`` fp32.

@@ -136,11 +136,18 @@ def _smem_bytes(cfg, d_pad: int) -> int:
 def prune_forward(configs, named_args, **kwargs):
     """Drop configs that overflow shared memory or are oversized for the problem."""
     # The varlen kernels spell their query loop bound `max_lq` instead of `Lq`.
-    Lq = named_args.get("Lq") or named_args.get("max_lq") or 32
+    # `is None` (not `or`): a legit Lq == 0 must not fall through to 32.
+    Lq = named_args.get("Lq")
+    if Lq is None:
+        Lq = named_args.get("max_lq")
+    if Lq is None:
+        Lq = 32
     # The kernel tiles on the padded embedding dim (`d_pad = next_pow2(d)`), so
     # the SMEM estimate must use d_pad too — keying on raw d underestimates by
     # up to ~2x for non-power-of-2 d and admits configs that OOM at launch.
-    d_pad = named_args.get("d_pad") or next_pow2(named_args.get("d", 128))
+    d_pad = named_args.get("d_pad")
+    if d_pad is None:
+        d_pad = next_pow2(named_args.get("d", 128))
     gpu = detect_gpu()
     # Reserve 8 KiB for Triton scratch; the rest is ours.
     sram_budget = (_SRAM_KIB_BY_FAMILY.get(gpu, 48) - 8) * 1024
