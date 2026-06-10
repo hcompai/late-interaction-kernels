@@ -1,4 +1,5 @@
 # Custom
+.claude/worktrees/
 .DS_Store
 
 # Benchmark outputs land here at runtime; they are machine-specific and
