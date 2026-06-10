@@ -7,8 +7,10 @@ The fused kernel folds ``H @ W.T (+ b) → L2-normalize → MaxSim`` into one
 pass.
 
 :func:`maxsim_from_hidden` is autograd-aware. The backward gathers
-``H_d`` at winning positions only (``Nq · Nd · Lq`` rows, typically
-<10 % of ``Nd · Ld``) and computes the projection + normalize + MaxSim
+``H_d`` at winning positions only — ``Nq · Nd · Lq`` rows, well under
+``Nd · Ld`` for reranking (small ``Nq``). For in-batch training with
+``Nq · Lq > Ld`` the gather is *larger* than ``H_d``; budget memory
+accordingly. It computes the projection + normalize + MaxSim
 Jacobians in closed form. Matches the unfused
 ``F.linear → F.normalize → maxsim`` path to bf16 tolerance. When none
 of the inputs has ``requires_grad=True``, the argmax save and the
@@ -49,8 +51,8 @@ def _fused_head_fwd_kernel(
     d_mask_ptr,  # [Nd, Ld] or dummy
     scores_ptr,  # [Nq, Nd]
     argmax_ptr,  # [Nq*Nd, Lq] int32 or dummy
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+    Nd,
     Lq: tl.constexpr,
     Ld,
     d_out: tl.constexpr,
@@ -274,8 +276,10 @@ def maxsim_from_hidden(
         scores = maxsim(Q, D, d_mask=d_mask)
 
     but ``D`` is never materialized in HBM. The backward gathers
-    ``H_d`` only at winning positions; for typical ColBERT shapes that's
-    1–10 % of the dense gradient work. Auto-skips the argmax save and
+    ``H_d`` only at winning positions; for reranking shapes (small ``Nq``)
+    that's 1–10 % of the dense gradient work, but the gather holds
+    ``Nq · Nd · Lq`` rows of ``d_model`` — for in-batch training it can
+    exceed ``H_d`` itself. Auto-skips the argmax save and
     the autograd graph when none of ``Q`` / ``H_d`` / ``W`` / ``b``
     has ``requires_grad=True``.
 

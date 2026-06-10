@@ -23,7 +23,7 @@ try:
     import triton.language as tl
 
     from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-    from late_interaction_kernels._utils import next_pow2
+    from late_interaction_kernels._utils import autotune_placeholder, next_pow2
 
     _HAS_TRITON = True
 except ImportError:  # pragma: no cover
@@ -68,10 +68,13 @@ def dequantize_fp8_per_token(X_fp8: torch.Tensor, scale: torch.Tensor) -> torch.
 
 
 if _HAS_TRITON:
-
+    # ``has_q_mask`` / ``has_d_mask`` stay out of the key for the same reason
+    # as the main forward kernel: they are constexpr toggles that don't shift
+    # the winning tile config, and keying on them would re-sweep on every
+    # present/absent mask combination.
     @triton.autotune(
         configs=forward_configs(),
-        key=["Lq", "d_pad", "has_q_mask", "has_d_mask", "SCALE_Q_PER_TOKEN", "SCALE_D_PER_TOKEN"],
+        key=["Lq", "d_pad", "SCALE_Q_PER_TOKEN", "SCALE_D_PER_TOKEN"],
         prune_configs_by={"early_config_prune": prune_forward},
         **autotune_kwargs(),
     )
@@ -84,8 +87,8 @@ if _HAS_TRITON:
         q_mask_ptr,
         d_mask_ptr,
         scores_ptr,
-        Nq: tl.constexpr,
-        Nd: tl.constexpr,
+        Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+        Nd,
         Lq: tl.constexpr,
         Ld,
         d: tl.constexpr,
@@ -352,8 +355,10 @@ def maxsim_inference_fp8(
 
     has_q_mask = q_mask is not None
     has_d_mask = d_mask is not None
-    q_mask_i8 = q_mask.contiguous().to(torch.int8) if has_q_mask else Q
-    d_mask_i8 = d_mask.contiguous().to(torch.int8) if has_d_mask else D
+    # int8 placeholders (not Q/D, which are fp8): the autotuner keys on every
+    # tensor arg's dtype, so present-vs-absent masks must not change it.
+    q_mask_i8 = q_mask.contiguous().to(torch.int8) if has_q_mask else autotune_placeholder(Q, torch.int8)
+    d_mask_i8 = d_mask.contiguous().to(torch.int8) if has_d_mask else autotune_placeholder(D, torch.int8)
     qm_strides = (q_mask_i8.stride(0), q_mask_i8.stride(1)) if has_q_mask else (0, 0)
     dm_strides = (d_mask_i8.stride(0), d_mask_i8.stride(1)) if has_d_mask else (0, 0)
 

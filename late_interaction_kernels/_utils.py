@@ -80,18 +80,31 @@ def package_at_least(name: str, minimum: str) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def detect_gpu() -> str:
-    """Return a short GPU family string: 'hopper' | 'a100' | 'ada' | 'ampere' | 'generic'."""
+    """Return a short GPU family string:
+    'hopper' | 'blackwell' | 'a100' | 'ada' | 'ampere' | 'generic'.
+
+    Keyed on compute capability rather than the marketing name — names are
+    open-ended (an "RTX PRO 6000 Blackwell" or "A30" never matched) while the
+    capability cleanly identifies the SMEM-per-SM class the autotune configs
+    care about.
+    """
     if not torch.cuda.is_available():
         return "generic"
-    name = torch.cuda.get_device_name().lower()
-    if "h100" in name or "h200" in name:
-        return "hopper"
-    if "a100" in name:
-        return "a100"
-    if "l4" in name or "l40" in name or "rtx 40" in name:
+    major, minor = torch.cuda.get_device_capability()
+    if major == 12:
+        # Consumer Blackwell (RTX 50): 100 KiB-class SMEM, Ada-like configs.
         return "ada"
-    if "3090" in name or "a10" in name or "a40" in name:
-        return "ampere"
+    if major >= 10:
+        # Datacenter Blackwell (B100/B200/GB200): Hopper-class 228 KiB SMEM.
+        return "blackwell"
+    if major == 9:
+        return "hopper"
+    if (major, minor) == (8, 0):
+        return "a100"
+    if (major, minor) == (8, 9):
+        return "ada"
+    if major == 8:
+        return "ampere"  # 8.6 / 8.7: 3090, A10, A40, Orin
     return "generic"
 
 
@@ -125,8 +138,10 @@ def pick_compute_dtype(Q: torch.Tensor, D: torch.Tensor) -> torch.dtype:
     """Pick the compute dtype for `tl.dot`.
 
     We honor user intent: if both tensors are fp16/bf16, dot runs in that dtype
-    with fp32 accumulator. If either is fp32 we fall back to fp16 on the tile
-    (fp32 GEMM doesn't go through tensor cores on H100 anyway).
+    with fp32 accumulator. If either is fp32 we downcast the tile to fp16:
+    same 10-bit mantissa as TF32 (the fp32 tensor-core path) but half the
+    operand bandwidth, and the fp16 range is a non-issue on the unit-norm
+    embeddings these kernels score.
     """
     if Q.dtype == torch.bfloat16 or D.dtype == torch.bfloat16:
         return torch.bfloat16

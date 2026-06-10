@@ -18,6 +18,7 @@ import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS
 
 # -----------------------------------------------------------------------------
 # C1. plaid_approx_score
@@ -27,7 +28,7 @@ from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2
 @triton.jit
 def _plaid_approx_score_kernel(
     qcs_ptr,  # [n_centroids, Lq] query-centroid scores, fp32
-    codes_ptr,  # [B, max_Ld] int64 centroid codes (padded)
+    codes_ptr,  # [B, max_Ld] int32 centroid codes (padded)
     doc_len_ptr,  # [B] int64 real lengths
     out_ptr,  # [B] fp32 scores
     n_centroids: tl.constexpr,
@@ -60,8 +61,9 @@ def _plaid_approx_score_kernel(
             mask=d_valid,
             other=0,
         ).to(tl.int32)
-        # Clamp to valid centroid range so the gather never reads out of bounds.
-        codes = tl.where(codes < n_centroids, codes, 0)
+        # Clamp out-of-range codes (incl. negative) to centroid 0 so the
+        # gather never reads out of bounds.
+        codes = tl.where((codes >= 0) & (codes < n_centroids), codes, 0)
 
         tile = tl.load(
             qcs_ptr + codes[:, None] * stride_qcs_c + q_off[None, :] * stride_qcs_l,
@@ -87,8 +89,9 @@ def plaid_approx_score(
     Args:
         query_centroid_scores: ``[n_centroids, Lq]`` fp32. Typically
             ``centroids @ Q.T``, computed once per query.
-        codes: ``[B, max_Ld]`` int64 centroid codes. Positions beyond
-            ``doc_lengths`` are masked.
+        codes: ``[B, max_Ld]`` integer centroid codes (converted to int32).
+            Positions beyond ``doc_lengths`` are masked; out-of-range codes
+            are clamped to centroid 0.
         doc_lengths: ``[B]`` int64 real per-doc lengths.
 
     Returns:
@@ -102,7 +105,7 @@ def plaid_approx_score(
         raise ValueError("doc_lengths must be [B] with B matching codes")
 
     query_centroid_scores = query_centroid_scores.contiguous().to(torch.float32)
-    codes = codes.contiguous().to(torch.int64)
+    codes = codes.contiguous().to(torch.int32)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
 
     n_centroids, Lq = query_centroid_scores.shape
@@ -147,15 +150,15 @@ def plaid_approx_score(
 @triton.jit
 def _maxsim_residual_kernel(
     Q_ptr,  # [Nq, Lq, d] query embeddings (assumed normalized)
-    codes_ptr,  # [Nd, Ld]  int64 centroid codes (padded)
+    codes_ptr,  # [Nd, Ld]  int32 centroid codes (padded)
     residuals_ptr,  # [Nd, Ld, packed_dim] uint8 packed residuals
     doc_len_ptr,  # [Nd] int64 real doc lengths
     centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32 centroid table
     bucket_weights_ptr,  # [n_buckets] fp32 residual bucket values
     out_ptr,  # [Nq, Nd] fp32
     argmax_ptr,  # [Nq, Nd, Lq] int32 (only written if SAVE_ARGMAX)
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+    Nd,
     Lq: tl.constexpr,
     max_Ld: tl.constexpr,
     d: tl.constexpr,
@@ -302,17 +305,20 @@ def _maxsim_residual_kernel(
 # -----------------------------------------------------------------------------
 
 
+# Same launch-param sweep as the other row-streaming backwards: the stock
+# num_warps=4 over-subscribes one-row programs (see backward/_autotune.py).
+@triton.autotune(configs=BWD_CONFIGS, key=["Lq", "d_pad"])
 @triton.jit
 def _maxsim_residual_bwd_dQ_kernel(
     argmax_ptr,  # [Nq, Nd, Lq] int32
     grad_s_ptr,  # [Nq, Nd] fp32
-    codes_ptr,  # [Nd, Ld]  int64 centroid codes
+    codes_ptr,  # [Nd, Ld]  int32 centroid codes
     residuals_ptr,  # [Nd, Ld, packed_dim] uint8
     centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32
     bucket_weights_ptr,  # [n_buckets] fp32
     grad_Qhat_ptr,  # [Nq, Lq, d] fp32 output
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+    Nd,
     Lq: tl.constexpr,
     d: tl.constexpr,
     d_pad: tl.constexpr,
@@ -415,7 +421,9 @@ def _maxsim_residual_forward(
         raise ValueError("residuals must be [Nd, max_Ld, packed_dim]")
 
     Q = Q.contiguous()
-    codes = codes.contiguous().to(torch.int64)
+    # int32, not int64: codes dominate HBM traffic here, and int32 matches the
+    # on-disk ColBERTv2 / fast-plaid format, so the common case is a no-op.
+    codes = codes.contiguous().to(torch.int32)
     residuals = residuals.contiguous().to(torch.uint8)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
     # A zero-length document has no MaxSim winner. Inference (save_argmax=False)
@@ -548,7 +556,8 @@ class _MaxSimResidualFn(torch.autograd.Function):
         d_pad = next_pow2(d)
         codes_per_byte = 8 // nbits
 
-        grad_Qhat = torch.zeros(Nq, Lq, d, device=Q.device, dtype=torch.float32)
+        # `empty`: the kernel stores every (q, s) row unconditionally.
+        grad_Qhat = torch.empty(Nq, Lq, d, device=Q.device, dtype=torch.float32)
 
         grid = (Nq * Lq,)
         _maxsim_residual_bwd_dQ_kernel[grid](
@@ -582,8 +591,6 @@ class _MaxSimResidualFn(torch.autograd.Function):
             grad_Qhat.stride(1),
             grad_Qhat.stride(2),
             normalize=normalize,
-            num_warps=4,
-            num_stages=2,
         )
 
         if normalize:
@@ -624,7 +631,7 @@ def maxsim_residual(
 
     Compressed format (PLAID / ColBERTv2):
 
-    * ``codes[n, t]`` — int64 centroid index for doc ``n``, token ``t``.
+    * ``codes[n, t]`` — integer centroid index for doc ``n``, token ``t``.
     * ``residuals[n, t, :]`` — ``ceil(d * nbits / 8)`` bytes; each byte
       packs ``8 / nbits`` bucket codes (little-endian within the byte).
     * ``bucket_weights[b]`` — scalar quantization offset added to the
@@ -632,7 +639,7 @@ def maxsim_residual(
 
     Args:
         Q: ``[Nq, Lq, d]`` (or ``[Lq, d]``) query embeddings.
-        codes: ``[Nd, max_Ld]`` int64 centroid codes.
+        codes: ``[Nd, max_Ld]`` integer centroid codes (converted to int32).
         residuals: ``[Nd, max_Ld, packed_dim]`` uint8 packed residuals.
         doc_lengths: ``[Nd]`` int64 real per-doc lengths.
         centroids: ``[n_centroids, d]`` fp16/bf16/fp32.
@@ -683,15 +690,15 @@ def maxsim_residual(
 @triton.jit
 def _maxsim_residual_varlen_kernel(
     Q_ptr,  # [Nq, Lq, d] query embeddings (assumed normalized or we normalize)
-    codes_flat_ptr,  # [sum_Ld] int64 centroid codes, concatenated over docs
+    codes_flat_ptr,  # [sum_Ld] int32 centroid codes, concatenated over docs
     residuals_flat_ptr,  # [sum_Ld, packed_dim] uint8 packed residuals
     cu_seqlens_d_ptr,  # [Nd + 1] int32 cumulative doc-token offsets
     centroids_ptr,  # [n_centroids, d] fp16/bf16/fp32
     bucket_weights_ptr,  # [n_buckets] fp32
     out_ptr,  # [Nq, Nd] fp32
     argmax_ptr,  # [Nq, Nd, Lq] int32 (only if SAVE_ARGMAX)
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+    Nd,
     Lq: tl.constexpr,
     max_Ld: tl.constexpr,  # worst-case doc length across this batch
     d: tl.constexpr,
@@ -843,7 +850,8 @@ def maxsim_residual_varlen(
 
     Args:
         Q: ``[Nq, Lq, d]`` (or ``[Lq, d]``) query embeddings.
-        codes_flat: ``[total_d_tokens]`` int64 concatenated centroid codes.
+        codes_flat: ``[total_d_tokens]`` integer concatenated centroid codes
+            (converted to int32).
         residuals_flat: ``[total_d_tokens, packed_dim]`` uint8 packed
             residuals (``packed_dim = ceil(d * nbits / 8)``).
         cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets.
@@ -874,7 +882,7 @@ def maxsim_residual_varlen(
         raise ValueError("cu_seqlens_d must be 1-D [Nd + 1]")
 
     Q = Q.contiguous()
-    codes_flat = codes_flat.contiguous().to(torch.int64)
+    codes_flat = codes_flat.contiguous().to(torch.int32)
     residuals_flat = residuals_flat.contiguous().to(torch.uint8)
     cu_seqlens_d = cu_seqlens_d.contiguous().to(torch.int32)
     if centroids.dtype not in (torch.float16, torch.bfloat16, torch.float32):
@@ -908,7 +916,7 @@ def maxsim_residual_varlen(
 
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
     # No docs -> nothing to launch. The kernel's `pid // Nd` indexing would
-    # divide by the constexpr Nd=0; the empty [Nq, 0] result needs no kernel.
+    # divide by Nd=0; the empty [Nq, 0] result needs no kernel.
     if Nd == 0:
         return out.squeeze(0) if q_squeeze else out
 

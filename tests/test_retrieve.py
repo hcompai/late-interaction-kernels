@@ -206,7 +206,7 @@ def test_unnormalized_input_warns_once(monkeypatch):
 
     # Reset the one-shot flag so we can deterministically observe the warn.
     monkeypatch.delenv("LIK_SUPPRESS_NORM_WARN", raising=False)
-    _autograd_mod._WARNED_UNNORMALIZED = False
+    _autograd_mod._NORM_CHECKED = False
 
     Q = torch.randn(2, 16, 64, device="cuda", dtype=torch.float32) * 10.0  # clearly not unit
     D = torch.randn(4, 32, 64, device="cuda", dtype=torch.float32)

@@ -11,7 +11,12 @@ import importlib.metadata as metadata
 import pytest
 import torch
 
-from late_interaction_kernels._utils import assert_max_seqlen_covers, bucket_seqlen, package_at_least
+from late_interaction_kernels._utils import (
+    assert_max_seqlen_covers,
+    bucket_seqlen,
+    detect_gpu,
+    package_at_least,
+)
 
 
 @pytest.mark.parametrize(
@@ -62,3 +67,35 @@ def test_assert_max_seqlen_covers_rejects_too_small():
     cu = torch.tensor([0, 4, 12], dtype=torch.int32)
     with pytest.raises(RuntimeError, match="max_seqlen_q=4 is smaller"):
         assert_max_seqlen_covers(cu, 4, "max_seqlen_q")
+
+
+@pytest.mark.parametrize(
+    ("capability", "expected"),
+    [
+        ((9, 0), "hopper"),  # H100 / H200
+        ((10, 0), "blackwell"),  # B100 / B200 / GB200
+        ((12, 0), "ada"),  # consumer Blackwell (RTX 50): 100 KiB SMEM class
+        ((8, 0), "a100"),
+        ((8, 9), "ada"),  # L4 / L40 / RTX 40
+        ((8, 6), "ampere"),  # 3090 / A10 / A40
+        ((7, 5), "generic"),  # T4 and older: safe floor
+    ],
+)
+def test_detect_gpu_capability_mapping(monkeypatch, capability: tuple[int, int], expected: str):
+    """The autotune family is keyed on compute capability, not the device name."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a, **k: capability)
+    detect_gpu.cache_clear()
+    try:
+        assert detect_gpu() == expected
+    finally:
+        detect_gpu.cache_clear()
+
+
+def test_detect_gpu_no_cuda_is_generic(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    detect_gpu.cache_clear()
+    try:
+        assert detect_gpu() == "generic"
+    finally:
+        detect_gpu.cache_clear()

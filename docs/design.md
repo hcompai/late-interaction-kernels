@@ -134,8 +134,10 @@ These are the only two `grad_D` strategies. `auto` (the default) picks
 
 ### Backward launch-param autotuning
 
-Backward kernels have no block tiling to sweep, so they are autotuned over
-`num_warps × num_stages` only (see `## Autotune → Backward`).
+Most backward kernels have no block tiling to sweep, so they are autotuned
+over `num_warps × num_stages` only (see `## Autotune → Backward`). The one
+exception is the lowmem `grad_D` kernel, whose block-tiled one-hot matmul
+draws from the forward config pool instead.
 
 ## Varlen / packed path
 
@@ -206,8 +208,9 @@ the key — they're constexpr/runtime toggles that change codegen but not the
 winning tile, so keeping them only multiplied the sweep count. Configs are
 pruned by:
 
-* shared-memory budget (≤ 220 KiB on H100, ≤ 156 KiB on A100 — the raw
-  228 / 164 KiB per SM minus an 8 KiB reserve for Triton scratch),
+* shared-memory budget (≤ 220 KiB on H100 / datacenter Blackwell, ≤ 156 KiB
+  on A100 — the raw 228 / 164 KiB per SM minus an 8 KiB reserve for Triton
+  scratch),
 * `BLOCK_Q > 2 · Lq` (block bigger than the problem).
 
 All configs are plain `(BLOCK_Q, BLOCK_D, num_warps, num_stages)` tuples

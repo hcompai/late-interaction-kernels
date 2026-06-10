@@ -128,9 +128,12 @@ def _should_chunk_lq(Lq: int) -> bool:
 
 _VALID_METHODS = ("auto", "unified", "lowmem")
 
-# One-shot flag so we don't spam the user's logs if they happen to pass
-# unnormalized inputs inside a tight training loop.
-_WARNED_UNNORMALIZED = False
+# One-shot flag: the check runs on the *first* call only, whatever its
+# outcome. The heuristic needs a ``.item()`` — a device→host sync — so
+# re-running it per call would stall the CPU/GPU pipeline on every
+# ``maxsim(normalize=False)`` (the PyLate / colpali-engine hot path) and
+# break CUDA-graph capture.
+_NORM_CHECKED = False
 
 
 def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
@@ -140,9 +143,10 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
     ``maxsim`` on raw encoder outputs silently produces different score
     scales than PyLate. Silence with ``LIK_SUPPRESS_NORM_WARN=1``.
     """
-    global _WARNED_UNNORMALIZED
-    if _WARNED_UNNORMALIZED or os.environ.get("LIK_SUPPRESS_NORM_WARN", "0") == "1":
+    global _NORM_CHECKED
+    if _NORM_CHECKED or os.environ.get("LIK_SUPPRESS_NORM_WARN", "0") == "1":
         return
+    _NORM_CHECKED = True
     # Cheap heuristic: inspect the median L2 norm over the first 64 tokens.
     with torch.no_grad():
         sample = Q.detach()
@@ -152,7 +156,6 @@ def _maybe_warn_unnormalized(Q: torch.Tensor) -> None:
         norms = sample.float().norm(dim=-1)
         med = norms.median().item()
     if not (0.9 <= med <= 1.1):
-        _WARNED_UNNORMALIZED = True
         warnings.warn(
             f"late-interaction-kernels: `maxsim(..., normalize=False)` but Q's median L2 norm "
             f"is {med:.3f} (ColBERT-style models expect ≈1.0). Pass `normalize=True` to fuse "

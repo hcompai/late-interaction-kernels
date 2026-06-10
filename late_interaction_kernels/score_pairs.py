@@ -20,6 +20,7 @@ import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
 from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2, pick_compute_dtype
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS
 
 
 @triton.autotune(
@@ -137,9 +138,14 @@ def _scatter_fwd_kernel(
 # Multiple pairs may share q_idx, so writes into grad_Q are atomic. We slice
 # by slot rather than by pair to keep each program's working set to one
 # embedding row, which matches varlen's `_varlen_bwd_dQ_kernel` shape.
+#
+# Launch params come from the shared backward sweep (the stock num_warps=4
+# over-subscribes one-row programs — see backward/_autotune.py). reset_to_zero
+# keeps the autotune trials from atomic-adding onto each other.
 # -----------------------------------------------------------------------------
 
 
+@triton.autotune(configs=BWD_CONFIGS, key=["d_pad"], reset_to_zero=["grad_Q_ptr"])
 @triton.jit
 def _scatter_bwd_dQ_kernel(
     D_ptr,
@@ -207,6 +213,7 @@ def _scatter_bwd_dQ_kernel(
 # -----------------------------------------------------------------------------
 
 
+@triton.autotune(configs=BWD_CONFIGS, key=["d_pad"], reset_to_zero=["grad_D_ptr"])
 @triton.jit
 def _scatter_bwd_dD_kernel(
     Q_ptr,
@@ -379,8 +386,6 @@ class _MaxSimScorePairsFn(torch.autograd.Function):
                 argmax.stride(1),
                 grad_Q.stride(0),
                 grad_Q.stride(1),
-                num_warps=4,
-                num_stages=2,
             )
             _scatter_bwd_dD_kernel[(num_pairs * max_q,)](
                 Q,
@@ -401,8 +406,6 @@ class _MaxSimScorePairsFn(torch.autograd.Function):
                 argmax.stride(1),
                 grad_D.stride(0),
                 grad_D.stride(1),
-                num_warps=4,
-                num_stages=2,
             )
 
         return (

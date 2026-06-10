@@ -4,6 +4,29 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-06-10
+
+### Fixed
+
+- `maxsim(normalize=False)` ran a `.item()` norm-check device sync on every
+  call; it now runs once per process, restoring CUDA-graph capture on the
+  PyLate / colpali-engine hot path.
+
+### Changed
+
+- PLAID centroid codes are handled as int32 end to end (any integer dtype is
+  still accepted; out-of-range codes in `plaid_approx_score` clamp to
+  centroid 0).
+- Batch sizes (`Nq`, `Nd`) are runtime kernel arguments, not constexpr — no
+  more recompiles per batch shape under dynamic batching.
+- GPU family detection is keyed on compute capability, not the device name;
+  Blackwell now gets first-class autotune configs.
+- The varlen, packed-pairs and residual backward launches are autotuned like
+  the dense backwards (up to 1.42× on H100 at training shapes).
+- Backward gradient buffers that the kernels overwrite in full use
+  `torch.empty` instead of `torch.zeros` (atomic-scatter buffers stay zeroed).
+- The fp8 autotune key no longer splits on mask presence.
+
 ## [0.4.3] - 2026-06-10
 
 ### Fixed
