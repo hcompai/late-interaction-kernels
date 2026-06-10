@@ -75,8 +75,9 @@ Two benefits:
   `static_range(Lq / BLOCK_Q)` loop inside each program. Chunking launches
   more, shorter programs that fill the SM array concurrently.
 * **Autotune cache collapse.** The kernel always sees `Lq == 128`, so
-  all long queries share one autotune entry (two with tail-padding)
-  instead of one per `Lq` bucket.
+  all long queries share one autotune entry — tail-padded and
+  exact-multiple lengths included, since the mask flag is out of the
+  autotune key — instead of one per `Lq` bucket.
 
 The split fires only when `Lq > 512`; shorter queries fall through to the
 direct kernel call unchanged. Chunking is cross-product-only — the KD /
@@ -205,11 +206,14 @@ the key — they're constexpr/runtime toggles that change codegen but not the
 winning tile, so keeping them only multiplied the sweep count. Configs are
 pruned by:
 
-* shared-memory budget (≤ 224 KiB on H100, ≤ 164 KiB on A100),
+* shared-memory budget (≤ 220 KiB on H100, ≤ 156 KiB on A100 — the raw
+  228 / 164 KiB per SM minus an 8 KiB reserve for Triton scratch),
 * `BLOCK_Q > 2 · Lq` (block bigger than the problem).
 
-Hopper shortlist enables `num_consumer_groups` warp specialization
-(Triton ≥ 3.2, FA-3 style); fallback is transparent on older Triton.
+All configs are plain `(BLOCK_Q, BLOCK_D, num_warps, num_stages)` tuples
+with no warp-specialization kwargs; the old `num_consumer_groups` Hopper
+entries were dropped when Triton 3.5 removed the API (see the v0.2.0
+changelog).
 
 With long-query chunking (see `## Forward → Long-query chunking`) long
 queries always present `Lq = 128` to the kernel, collapsing the forward

@@ -916,8 +916,9 @@
   <div class="note">
     <strong>The problem to solve.</strong>
     Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
-    tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, batch
-    of 64 pairs) that tensor is 8 GB in fp16. Each element is written once
+    tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, a
+    batch of 64 queries × 64 documents — 4,096 scored pairs) that tensor is
+    8 GB in fp16. Each element is written once
     and read back once, so the GPU spends most of its time on HBM traffic,
     not compute. The kernels in this library compute the same result without ever
     materialising that tensor, by streaming $B_q \times B_d$ tiles through
@@ -1200,58 +1201,58 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
         <line x1="60"  y1="240" x2="700" y2="240" stroke="currentColor" stroke-opacity="0.3" />
         <line x1="60"  y1="20"  x2="60"  y2="240" stroke="currentColor" stroke-opacity="0.3" />
 
-        <!-- 80 GB GPU memory limit -->
-        <line x1="60" y1="60" x2="700" y2="60" stroke="var(--warn)" stroke-dasharray="4,4" stroke-width="1"/>
-        <text x="695" y="54" fill="var(--warn)" font-size="11" text-anchor="end" font-family="var(--mono)">80 GB · H100 limit</text>
-
-        <!-- Naive curve: quadratic in L  (Nq=Nd=64, d=128, fp16) -->
-        <!-- bytes = Nq*Nd*L*L*2 . Map L∈[128, 2048] to x∈[60, 700], bytes∈[0, ~33 GB] to y∈[240, 20] -->
+        <!-- Naive curve: quadratic in L  (Nq=Nd=64, fp16) -->
+        <!-- bytes(L) = 64·64·L²·2 = 8192·L². Map L∈[0, 2048] to x = 60 + 0.3125·L,
+             GB to y = 240 − 5.5·GB (0–40 GB over y∈[240, 20]). Points every 128 tokens. -->
         <path d="M 60 240
-                 L 100 239.2
-                 L 140 237.4
-                 L 180 234.4
-                 L 220 230.3
-                 L 260 224.9
-                 L 300 218.3
-                 L 340 210.4
-                 L 380 201.3
-                 L 420 191.0
-                 L 460 179.4
-                 L 500 166.7
-                 L 540 152.6
-                 L 580 137.4
-                 L 620 121.0
-                 L 660 103.3
-                 L 700 84.3"
+                 L 100 239.3
+                 L 140 237.0
+                 L 180 233.4
+                 L 220 228.2
+                 L 260 221.5
+                 L 300 213.4
+                 L 340 203.8
+                 L 380 192.8
+                 L 420 180.2
+                 L 460 166.2
+                 L 500 150.7
+                 L 540 133.7
+                 L 580 115.2
+                 L 620 95.3
+                 L 660 73.9
+                 L 700 51.0"
               fill="none" stroke="var(--warn)" stroke-width="2.5" />
-        <text x="700" y="78" fill="var(--warn)" font-size="12" text-anchor="end" font-weight="600">Naive · materialises S</text>
+        <text x="695" y="44" fill="var(--warn)" font-size="12" text-anchor="end" font-weight="600">Naive · materialises S</text>
 
-        <!-- Fused: nearly flat, only the output [Nq, Nd] scalars + Q, D themselves -->
-        <line x1="60" y1="235" x2="700" y2="232" stroke="var(--accent-2)" stroke-width="2.5"/>
-        <text x="700" y="225" fill="var(--accent-2)" font-size="12" text-anchor="end" font-weight="600">Fused · streams tiles</text>
+        <!-- Fused: flat, only the output [Nq, Nd] scalars — invisibly small on this axis -->
+        <line x1="60" y1="238" x2="700" y2="238" stroke="var(--accent-2)" stroke-width="2.5"/>
+        <text x="700" y="228" fill="var(--accent-2)" font-size="12" text-anchor="end" font-weight="600">Fused · streams tiles</text>
 
         <!-- x-axis ticks -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="middle">
-          <text x="60"  y="258">256</text>
-          <text x="220" y="258">768</text>
-          <text x="380" y="258">1280</text>
-          <text x="540" y="258">1792</text>
+          <text x="60"  y="258">0</text>
+          <text x="220" y="258">512</text>
+          <text x="380" y="258">1024</text>
+          <text x="540" y="258">1536</text>
           <text x="700" y="258">2048</text>
         </g>
         <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">sequence length L (L_q = L_d)</text>
 
-        <!-- y-axis ticks -->
+        <!-- y-axis ticks (5.5 px per GB) -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="end">
           <text x="55" y="244">0</text>
-          <text x="55" y="184">8 GB</text>
-          <text x="55" y="124">16 GB</text>
-          <text x="55" y="64">24 GB</text>
+          <text x="55" y="200">8 GB</text>
+          <text x="55" y="156">16 GB</text>
+          <text x="55" y="112">24 GB</text>
+          <text x="55" y="68">32 GB</text>
+          <text x="55" y="24">40 GB</text>
         </g>
         <text x="20" y="130" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)" transform="rotate(-90 20 130)">peak HBM for one S</text>
       </svg>
       <div class="chart-legend">
         <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $N_q = N_d = 64$</span>
         <span><span class="sw" style="background:var(--accent-2)"></span>fused kernel — only the $[N_q, N_d]$ score matrix</span>
+        <span>fp32 doubles every point; an 80 GB H100 runs out of memory near $L \approx 3125$ even in fp16</span>
       </div>
     </div>
   </div>
@@ -1275,8 +1276,9 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
     Triton program per $(q\text{-batch}, d\text{-batch})$ pair, document tiles
     of $\text{BLOCK\_D}$ rows nested inside query tiles of $\text{BLOCK\_Q}$
     rows. The full similarity tensor $\Sm$ never exists in HBM. Only the
-    $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in SRAM
-    for the duration of one tile-matmul.
+    $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in fp32
+    registers for the duration of one tile-matmul — SRAM holds just the
+    $\Qm$ and $\Dm$ operand tiles feeding it.
   </p>
 
 <pre><code><span style="color:var(--ink-dim)"># one program per (q_batch, d_batch)</span>
@@ -1397,7 +1399,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     <div class="legend-row">
       <span><span class="sw" style="background:var(--q-active)"></span>Q (active)</span>
       <span><span class="sw" style="background:var(--d-active)"></span>D (active)</span>
-      <span><span class="sw" style="background:var(--s-active)"></span>S tile · ephemeral, SRAM only</span>
+      <span><span class="sw" style="background:var(--s-active)"></span>S tile · ephemeral, registers only</span>
       <span><span class="sw" style="background:var(--o-active)"></span>running max m</span>
       <span><span class="sw" style="background:var(--done)"></span>consumed</span>
     </div>
@@ -1431,8 +1433,9 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     softmax has to track $\Mm$ <em>and</em> the running sum of exponentials
     $\ell$, and rescale both whenever the running max changes: the rescalers
     are the $\exp(\Mm^{(k-1)} - \Mm^{(k)})$ factors in FA-1. Online max has no such
-    rescaler: $\max$ is idempotent, so the update is just an elementwise max
-    and the result is identical to the offline computation.
+    rescaler: $\max$ is associative and commutative, so folding the tiles in
+    one by one — in any order — gives exactly the same result as the offline
+    computation.
   </div>
 
   <h3>Worked example</h3>
@@ -1544,10 +1547,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     </li>
     <li>
       <strong><code>lowmem</code> — destination-owned (&ldquo;pull&rdquo;).</strong>
-      One program per output row $(j, t)$ — that row's only writer. It
-      <em>pulls</em> the contributing $(i, s)$ pairs from the saved argmax
-      through a one-hot matmul, accumulates in fp32 registers, and stores
-      once, directly in the input dtype. No atomics, fixed order.
+      One program per $\text{BLOCK\_D}$-row tile of
+      $\nabla_{\Dm}[j, \cdot]$ — every output row still has exactly one
+      writer. The program <em>pulls</em> the contributing $(i, s)$ pairs
+      from the saved argmax through a one-hot matmul, accumulates in fp32
+      registers, and stores each row once, directly in the input dtype.
+      No atomics, fixed order.
     </li>
   </ul>
 
@@ -1616,12 +1621,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <rect x="408" y="162" width="96" height="26" rx="4" fill="var(--q-idle)" stroke="var(--q-active)"
               fill-opacity="0.45" stroke-opacity="0.45"/>
         <text x="456" y="179" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)" fill-opacity="0.55">(i=2, s=2)</text>
-        <text x="408" y="203" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">→ pulled by the (j, t=12) owner</text>
+        <text x="408" y="203" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">→ pulled by the (j, t=12…15) owner</text>
 
         <!-- owner program -->
         <rect x="566" y="66" width="170" height="62" rx="6"
               fill="color-mix(in oklch, var(--accent-2) 8%, var(--panel))" stroke="var(--accent-2)" stroke-width="1.3"/>
-        <text x="651" y="86"  font-size="10.5" text-anchor="middle" fill="var(--ink)">program owns (j, t=5)</text>
+        <text x="651" y="86"  font-size="10.5" text-anchor="middle" fill="var(--ink)">program owns tile (j, t=4…7)</text>
         <text x="651" y="103" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">Σ in fp32 registers</text>
         <text x="651" y="118" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">via one-hot matmul</text>
 
@@ -1632,7 +1637,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
         <!-- single store -->
         <rect x="566" y="160" width="170" height="26" rx="4" fill="var(--d-idle)" stroke="var(--d-active)"/>
-        <text x="651" y="177" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">grad_D[j, 5] · bf16</text>
+        <text x="651" y="177" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">grad_D[j, 4…7] · bf16</text>
         <path d="M 651 132 L 651 156" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#bwarr)"/>
         <text x="662" y="148" font-size="9.5" text-anchor="start" fill="var(--ink-dim)">store ×1</text>
 
@@ -1686,10 +1691,17 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h3>Backward launch-param autotuning</h3>
 
   <p>
-    The backward kernels have no block-tiling dimensions to sweep. Each is one
-    Triton program per output row streaming a single embedding vector, so they
-    are autotuned over <code>num_warps</code> and <code>num_stages</code> only,
-    keyed like the forward so the cache holds one entry per training regime.
+    The backward kernels fall into two tuning regimes. The $\nabla_{\Qm}$
+    kernels and the <code>unified</code> kernel have no block-tiling
+    dimensions to sweep: each is one Triton program per output row streaming
+    a single embedding vector, so they are autotuned over
+    <code>num_warps</code> and <code>num_stages</code> only, keyed like the
+    forward so the cache holds one entry per training regime. The
+    <code>lowmem</code> $\nabla_{\Dm}$ kernel is the exception — its one-hot
+    matmul is block-tiled just like the forward, one program per
+    (slab, $\text{BLOCK\_D}$-row doc-tile) — so it draws from the forward's
+    config pool and sweeps $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ tile
+    shapes alongside the launch parameters.
   </p>
 </section>
 
@@ -1713,7 +1725,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
       <tr><th>Level</th><th>Size</th><th>Bandwidth</th><th>Where it lives</th></tr>
     </thead>
     <tbody>
-      <tr><td>Registers</td>            <td>256 KB / SM</td>          <td>~20 TB/s</td>   <td>Inside each thread</td></tr>
+      <tr><td>Registers</td>            <td>256 KB / SM</td>          <td>~80 TB/s</td>   <td>Inside each thread</td></tr>
       <tr><td>SRAM (shared memory)</td> <td>228 KB / SM (H100)</td>   <td>~19 TB/s</td>   <td>On-chip, per SM</td></tr>
       <tr><td>L2 cache</td>             <td>50 MB (H100)</td>         <td>~5 TB/s</td>    <td>On-chip, chip-wide</td></tr>
       <tr><td>HBM</td>                  <td>80 GB (H100)</td>         <td>~3.3 TB/s</td>  <td>Off-chip, on the package</td></tr>
@@ -1833,18 +1845,18 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   <h2><span class="num">C</span>The constexpr bargain</h2>
 
   <p>
-    A <code>tl.constexpr</code> kernel argument is baked into the compiled
-    binary. That is a bargain, not a feature: the compiler can specialise
-    and unroll code for that exact value, but every new value it meets
-    compiles a brand-new kernel — a multi-second stall — and adds an entry
-    to the autotune cache. So every shape-like argument poses the same
-    question: <em>does the compiler actually do anything with this
-    value?</em>
+    A <code>tl.constexpr</code> kernel argument is a value the compiler
+    sees at compile time, so it can generate code tailored to exactly
+    that value. The catch: every <em>new</em> value triggers a fresh
+    compile (a multi-second stall) and adds another autotune-cache entry.
+    That is the bargain, and it is only worth taking when the answer to
+    one question is yes: <em>does knowing the value let the compiler
+    generate better code?</em>
   </p>
 
   <p>
-    The forward kernel answers it twice, on two loops that look almost
-    identical:
+    The forward kernel answers it both ways, on two loops that look
+    almost identical:
   </p>
 
 <pre><code>for q_start in tl.static_range(0, Lq, BLOCK_Q):  <span style="color:var(--ink-dim)"># unrolled at compile time → Lq is constexpr</span>
@@ -1852,33 +1864,37 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     for d_start in range(0, Ld, BLOCK_D):        <span style="color:var(--ink-dim)"># plain runtime loop → Ld is a normal argument</span></code></pre>
 
   <p>
-    For $L_d$ the answer is no. It bounds the long inner loop, which the
-    compiler pipelines rather than unrolls, so specialising on it would
-    make $L_d = 300$ and $L_d = 301$ different binaries with identical
-    machine code — one recompile per distinct document length in a ragged
-    corpus, for nothing. $L_d$ stays a plain runtime argument.
+    For $L_d$: no. The inner loop is long, so the compiler keeps it as a
+    loop and pipelines it, loading the next $\Dm$ tile while the current
+    one is being multiplied. The machine code is identical whether
+    $L_d$ is 300 or 301; specialising would just recompile once per
+    distinct document length in a ragged corpus, for nothing. $L_d$ stays
+    a plain runtime argument.
   </p>
 
   <p>
-    For $L_q$ the answer is yes. The outer loop runs only
-    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations — a handful of
-    query tiles — so it is worth <em>unrolling</em>: the compiler deletes
-    the loop and pastes $n$ consecutive copies of its body (the
-    load-tile / matmul / row-max sequence) as straight-line code, no
-    counter, no branch. It can only do that if it knows $n$ at compile
-    time, and $n$ comes from $L_q$ — that is what forces $L_q$ to be
-    constexpr. The price would be one recompile per distinct query
-    length, and per-batch lengths float step to step. So the kernel
-    shrinks the domain instead of refusing the deal: $L_q$ is rounded up
-    to the next power of two and $\Qm$ zero-padded, with the query mask
-    covering the fake tokens exactly — at most nine values between 16 and
-    4096 can ever exist.
+    For $L_q$: yes. The outer loop runs just
+    $n = \lceil L_q / \text{BLOCK\_Q} \rceil$ iterations, so the compiler
+    <em>unrolls</em> it: it deletes the loop and pastes $n$ copies of the
+    body back-to-back — straight-line code, no counter, no branch. It can
+    only do that if it knows $n$ at compile time, and $n$ comes from
+    $L_q$. That is what makes $L_q$ constexpr.
+  </p>
+
+  <p>
+    One problem remains: query lengths float from batch to batch, and
+    each distinct $L_q$ would be its own compile. So the kernel shrinks
+    the domain. $L_q$ is rounded up to the next power of two, $\Qm$ is
+    zero-padded, and the query mask hides the padding — at most nine
+    compiled values between 16 and 4096 in normal use. (Past 4096, $L_q$
+    passes through unbucketed, with a one-shot warning pointing
+    long-context callers at <code>maxsim_varlen</code>.)
   </p>
 
   <div class="panel">
     <div class="chart-wrap">
-      <svg viewBox="0 0 760 290" preserveAspectRatio="xMidYMid meet" role="img"
-           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back; an unrolled loop pastes n copies as straight-line code">
+      <svg viewBox="0 0 760 304" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="The same loop body compiled two ways: a runtime loop keeps one copy with a branch back and serves every Ld with one binary; an unrolled loop pastes n copies with their q_start constants baked in, so a new Lq compiles a new binary">
         <defs>
           <marker id="uarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
@@ -1894,6 +1910,12 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <text x="535" y="73" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)">loop body</text>
         <path d="M 604 58 C 646 20, 424 20, 466 58" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
         <text x="535" y="26" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">branch back · ⌈Ld / BLOCK_D⌉ times</text>
+
+        <rect x="646" y="50" width="94" height="38" rx="5"
+              fill="color-mix(in oklch, var(--accent-2) 8%, var(--panel))"
+              stroke="color-mix(in oklch, var(--accent-2) 45%, var(--line))"/>
+        <text x="693" y="66" font-size="9" text-anchor="middle" fill="var(--accent-2)">Ld = 300 or 301</text>
+        <text x="693" y="80" font-size="9" text-anchor="middle" fill="var(--accent-2)">→ same binary</text>
 
         <line x1="24" y1="110" x2="736" y2="110" stroke="var(--line)"/>
 
@@ -1915,7 +1937,16 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <path d="M 369 215 L 406 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
         <path d="M 544 215 L 581 215" stroke="var(--ink-mid)" stroke-width="1.2" fill="none" marker-end="url(#uarr)"/>
 
-        <text x="388" y="264" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">straight-line code · no counter, no branch · n is stamped in at compile time (here n = 4)</text>
+        <!-- each copy carries its q_start as a literal — the counter the loop no longer needs -->
+        <g font-size="9" text-anchor="middle" fill="var(--ink-dim)">
+          <text x="125" y="250">q_start = 0</text>
+          <text x="300" y="250">= BLOCK_Q</text>
+          <text x="475" y="250">= 2·BLOCK_Q</text>
+          <text x="650" y="250">= 3·BLOCK_Q</text>
+        </g>
+
+        <text x="388" y="272" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">no counter, no branch · each copy gets its q_start baked in as a constant (here n = 4)</text>
+        <text x="388" y="290" font-size="9.5" text-anchor="middle" fill="var(--accent-3)">the price: a new Lq means a new n, hence a brand-new binary (one recompile + one autotune entry)</text>
       </svg>
       <div class="chart-legend">
         <span>The same loop body, compiled two ways. The loop form never needs its trip count at compile time; the unrolled form <em>is</em> its trip count — change $L_q$ and you have a different binary.</span>
@@ -2345,7 +2376,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
            s.flags.dLoaded = j;
          });
     step("compute-s",
-         "Compute S_tile = Q_tile · D_tileᵀ on tensor cores (fp32 acc). Lives in SRAM only.",
+         "Compute S_tile = Q_tile · D_tileᵀ on tensor cores (fp32 acc). Lives in registers only.",
          function(s) { s.flags.sLive = true; });
     step("update-m",
          "Online max: m ← max(m, rowmax(S_tile)). No HBM traffic.",
@@ -2353,7 +2384,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
            s.m = "[" + rowMaxAfter[j+1].map(function(x){return x.toFixed(2);}).join(", ") + "]";
          });
     step("free-d",
-         "Discard S_tile and D_tile from SRAM. The tile is never written to HBM.",
+         "Discard S_tile from registers and D_tile from SRAM. Neither is ever written to HBM.",
          function(s) { s.flags.dLoaded = -1; s.flags.sLive = false; });
   })(j);
 

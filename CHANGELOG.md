@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- The interactive kernel picker page (`docs/choose-a-kernel.html`). It predates
+  the API consolidation: with `maxsim` dispatching on layout and the patchers /
+  native PyLate & colpali-engine backends covering the framework paths, a
+  decision tree over many entry points no longer reflects the library. The
+  README "Choose a kernel" section and links are gone with it.
+
 ## [0.4.2] - 2026-06-09
 
 ### Added

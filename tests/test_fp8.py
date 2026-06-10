@@ -4,7 +4,6 @@ import pytest
 import torch
 
 fp8_dtype = getattr(torch, "float8_e4m3fn", None)
-pytestmark_no_fp8 = pytest.mark.skipif(fp8_dtype is None, reason="torch has no FP8 dtype")
 
 
 # (Nq, Nd, Lq, Ld, d)
@@ -102,8 +101,8 @@ def test_maxsim_fp8_parity(shape, scale_q, scale_d):
     denom = max(1e-6, ref.abs().max().item())
     rel = (out.float() - ref.float()).abs().max().item() / denom
     # fp8 e4m3 has ~2.5-bit mantissa; per-row accumulation of Lq≈32 rows
-    # inflates the max error by sqrt(Lq). 3% max-relative is the accepted
-    # FP8 reranking tolerance (matches TRT-LLM / SGLang fp8 docs).
+    # inflates the max error by sqrt(Lq). 5% max-relative leaves headroom
+    # over the ~3% typical FP8 reranking error (TRT-LLM / SGLang fp8 docs).
     assert rel < 0.05, f"rel_err={rel:.3e} ({scale_q=}, {scale_d=}, shape={shape})"
 
 

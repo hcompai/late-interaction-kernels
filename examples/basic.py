@@ -19,7 +19,9 @@ def rerank_example():
     """Score 1000 docs against one 32-token query in fp16."""
     Q = torch.randn(32, 128, device="cuda", dtype=torch.float16)
     D = torch.randn(1000, 300, 128, device="cuda", dtype=torch.float16)
-    scores = maxsim(Q, D)  # [1000], fp32 — `requires_grad=False` → no argmax save
+    # Real encoders emit L2-normalized token embeddings; `normalize=True`
+    # folds that step into the kernel for these raw random vectors.
+    scores = maxsim(Q, D, normalize=True)  # [1000], fp32 — `requires_grad=False` → no argmax save
     top10 = scores.topk(10)
     print("top-10 doc indices:", top10.indices.tolist())
     print("top-10 scores:", [f"{s:.3f}" for s in top10.values.tolist()])

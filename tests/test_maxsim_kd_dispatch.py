@@ -5,8 +5,6 @@ Python ``for`` loop and call ``lik.maxsim(Q, D_kd)`` directly with a 4-D
 candidate tensor (PyLate's ``colbert_kd_scores`` layout).
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 

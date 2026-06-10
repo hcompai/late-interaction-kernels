@@ -6,8 +6,6 @@ gradients come from PyTorch's autograd through the same einsum the
 kernels are meant to fuse.
 """
 
-from __future__ import annotations
-
 import pytest
 import torch
 
@@ -60,8 +58,8 @@ def test_kd_forward_matches_einsum(dtype, Nq, K, Lq, Ld, d):
 
     assert got.shape == (Nq, K)
     # bf16/fp16 inputs against fp32-acc kernel and fp32-cast einsum — same
-    # numeric contract Raphael's table uses (max rel err ~1e-6 for the
-    # kernels; absolute is bounded by Lq*Ld accumulation).
+    # numeric contract as the in-batch parity tests (max rel err ~1e-6 for
+    # the kernels; absolute is bounded by Lq*Ld accumulation).
     torch.testing.assert_close(got, ref, atol=2e-2, rtol=2e-2)
 
 
@@ -153,7 +151,9 @@ def test_kd_backward_matches_autograd(dtype):
     grad_Q_ref = Q2.grad
     grad_D_ref = D2.grad
 
-    # Same parity bar as in-batch backward tests in tests/test_forward.py.
+    # Looser than the in-batch backward parity bar (tests/test_backward.py
+    # asserts rel < 1e-2): low-precision grads through the KD path get
+    # atol/rtol = 5e-2.
     torch.testing.assert_close(grad_Q_kernel, grad_Q_ref, atol=5e-2, rtol=5e-2)
     torch.testing.assert_close(grad_D_kernel, grad_D_ref, atol=5e-2, rtol=5e-2)
 
