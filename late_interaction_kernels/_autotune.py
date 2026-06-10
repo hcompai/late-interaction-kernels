@@ -136,8 +136,9 @@ def prune_forward(configs, named_args, **kwargs):
     keep = []
     for cfg in configs:
         bq, bd = cfg.kwargs["BLOCK_Q"], cfg.kwargs["BLOCK_D"]
-        # Triton allocates num_stages copies of Q/D in SMEM for the
-        # async-copy pipeline; the fp32 S accumulator stays in one slot.
+        # Triton allocates num_stages copies of Q/D in SMEM for the async-copy
+        # pipeline. tl.dot accumulates S in fp32 registers (no SMEM copy), but
+        # the budget adds one bq×bd×4-byte slot as a conservative upper bound.
         need = (bq * d_pad + bd * d_pad) * 2 * cfg.num_stages + bq * bd * 4
         if need > sram_budget:
             continue
