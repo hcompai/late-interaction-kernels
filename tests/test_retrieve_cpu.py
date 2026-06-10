@@ -333,7 +333,7 @@ def test_suppress_norm_warn_env_var_silences_warning(monkeypatch):
     from late_interaction_kernels import autograd as _autograd_mod
 
     monkeypatch.setenv("LIK_SUPPRESS_NORM_WARN", "1")
-    _autograd_mod._WARNED_UNNORMALIZED = False
+    _autograd_mod._NORM_CHECKED = False
 
     Q = torch.randn(2, 16, 64, dtype=torch.float32) * 10.0  # clearly not unit-norm
     with warnings.catch_warnings(record=True) as w:
@@ -362,7 +362,7 @@ def test_unnormalized_warn_fires_once_direct(monkeypatch):
     from late_interaction_kernels import autograd as _autograd_mod
 
     monkeypatch.delenv("LIK_SUPPRESS_NORM_WARN", raising=False)
-    _autograd_mod._WARNED_UNNORMALIZED = False
+    _autograd_mod._NORM_CHECKED = False
 
     Q = torch.randn(2, 16, 64, dtype=torch.float32) * 10.0
     with warnings.catch_warnings(record=True) as w:
@@ -377,6 +377,37 @@ def test_unnormalized_warn_fires_once_direct(monkeypatch):
     ]
     assert len(lik_msgs) == 1, f"expected exactly one warning, got {lik_msgs}"
     assert "normalize=True" in lik_msgs[0]
+
+
+def test_norm_check_runs_once_even_when_normalized(monkeypatch):
+    """The norm heuristic must run on the first call only, whatever its outcome.
+
+    The check costs a ``.item()`` (device→host sync); re-sampling on every
+    ``maxsim(normalize=False)`` call would stall the PyLate / colpali-engine
+    hot path forever when inputs are correctly normalized.
+    """
+    import warnings
+
+    pytest.importorskip("triton")
+    from late_interaction_kernels import autograd as _autograd_mod
+
+    monkeypatch.delenv("LIK_SUPPRESS_NORM_WARN", raising=False)
+    _autograd_mod._NORM_CHECKED = False
+
+    Q_unit = torch.nn.functional.normalize(torch.randn(2, 16, 64), dim=-1)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _autograd_mod._maybe_warn_unnormalized(Q_unit)
+
+    assert _autograd_mod._NORM_CHECKED, "first call must mark the check as done"
+    lik_msgs = [m for m in w if "late-interaction-kernels" in str(m.message)]
+    assert lik_msgs == [], f"unit-norm input must not warn, got {lik_msgs}"
+
+    # A later unnormalized batch is no longer sampled — one-shot by design.
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _autograd_mod._maybe_warn_unnormalized(Q_unit * 10.0)
+    assert [m for m in w if "late-interaction-kernels" in str(m.message)] == []
 
 
 def test_scorer_retrieve_method_matches_top_level_retrieve():

@@ -4,6 +4,51 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The unnormalized-input heuristic no longer syncs the GPU on every call.**
+  `maxsim(normalize=False)` sampled token norms with a `.item()` —
+  a device→host sync — on *every* call until it happened to see a bad batch,
+  which for correctly normalized inputs (the PyLate / colpali-engine hot
+  path) meant a pipeline stall per training step and broken CUDA-graph
+  capture. The check now runs once per process, whatever its outcome.
+
+### Changed
+
+- **PLAID centroid codes are handled as int32 end to end.**
+  `plaid_approx_score`, `maxsim_residual`, and `maxsim_residual_varlen`
+  previously upcast `codes` to int64 before the launch even though the
+  kernels gather in int32 — doubling the code-read HBM traffic and forcing
+  a copy for the int32 codes that ColBERTv2-style indexes store on disk.
+  Any integer dtype is still accepted; out-of-range codes in
+  `plaid_approx_score` (including negative ones) still clamp to centroid 0.
+- **Batch sizes (`Nq`, `Nd`) are runtime kernel arguments, not constexpr.**
+  The forward, backward (unified, lowmem, varlen, pairs, residual), fp8 and
+  fused-head kernels recompiled for every distinct batch shape — pure
+  compile-cache pollution under dynamic batching or chunked `maxsim_topk`,
+  since the values only feed program-id arithmetic and loop bounds.
+- **GPU family detection is keyed on compute capability, not the device
+  name.** Blackwell now gets first-class treatment (B100/B200/GB200 →
+  Hopper-class 228 KiB SMEM configs, RTX 50 → the 100 KiB Ada pool) instead
+  of falling through to the 48 KiB generic floor, and previously unmatched
+  names (A30, RTX 3080, RTX PRO 6000, …) land in their real family.
+- **The remaining hardcoded backward launches are autotuned.** The varlen,
+  packed-pairs and residual backward kernels still pinned `num_warps=4`;
+  they now draw from the same `num_warps`/`num_stages` sweep as the dense
+  backwards. Measured on H100 at training shapes (256 packed queries/docs):
+  1.42× on the varlen backward, 1.17× on the pairs backward, parity at
+  small shapes. Atomic-scatter kernels reset their output between autotune
+  trials, so gradients are unaffected.
+- **Backward gradient buffers skip the redundant memset.** `lowmem` and the
+  row-owned varlen/residual `grad_Q` paths allocated `torch.zeros` for
+  buffers their kernels overwrite in full; they now use `torch.empty`
+  (atomic-scatter buffers stay zeroed).
+- **The fp8 autotune key no longer splits on mask presence.** Absent masks
+  pass a dtype-stable int8 placeholder (same policy as the main forward), so
+  masked and unmasked calls share one autotune entry.
+
 ## [0.4.3] - 2026-06-10
 
 ### Fixed

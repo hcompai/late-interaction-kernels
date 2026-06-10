@@ -1,11 +1,13 @@
 """Shared autotune configs for the backward kernels.
 
-Every backward kernel is one program per output row that streams a single
-``d_pad`` vector through a doc/bucket loop — there is no block tiling to
-sweep, so the only useful knobs are ``num_warps`` and ``num_stages``. The
-stock launch (``num_warps=4``) badly over-subscribes these narrow programs;
-on H100 the optimum sits at 1–2 warps and tuning is worth 1.3–1.7x on the
-unified path.
+Most backward kernels are one program per output row streaming a single
+``d_pad`` vector through a doc/bucket loop — no block tiling to sweep, so
+the only useful knobs are ``num_warps`` and ``num_stages``. The stock
+launch (``num_warps=4``) badly over-subscribes these narrow programs; on
+H100 the optimum sits at 1–2 warps and tuning is worth 1.3–1.7x on the
+unified path. (The lowmem ``grad_D`` kernel is the exception: its one-hot
+matmul is block-tiled like the forward, so it draws from the forward's
+config pool instead — see ``lowmem._bwd_dD_owned_kernel``.)
 
 The key mirrors the forward autotuner: ``Lq`` (already power-of-two bucketed
 upstream, and the dimension that separates the ColBERT ``Lq=32`` regime from

@@ -107,8 +107,8 @@ if _HAS_TRITON:
         q_mask_ptr,
         grad_Q_ptr,
         grad_D_ptr,
-        Nq: tl.constexpr,
-        Nd: tl.constexpr,  # K_per_query in KD/pairs mode
+        Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+        Nd,  # K_per_query in KD/pairs mode
         Lq: tl.constexpr,
         Ld,
         d: tl.constexpr,

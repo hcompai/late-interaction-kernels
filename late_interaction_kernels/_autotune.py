@@ -12,11 +12,12 @@ Family rules of thumb (verified on H100 / A100 and conservative on the rest):
 - Ampere / Ada are happiest with `num_stages=2`.
 
 Per-family SRAM budgets (KiB of shared memory the kernel can actually use):
-- Hopper (H100 / H200):       228
-- Ampere (A100):              164
-- Ampere consumer (3090, A10): 100
-- Ada (L4, L40, RTX 4090):    100
-- Unknown / older:             48 (safe floor)
+- Hopper (H100 / H200):           228
+- Blackwell DC (B100/B200/GB200): 228
+- Ampere (A100):                  164
+- Ampere consumer (3090, A10):    100
+- Ada (L4, L40, RTX 4090) + consumer Blackwell (RTX 50): 100
+- Unknown / older:                 48 (safe floor)
 """
 
 import re
@@ -105,6 +106,7 @@ def _large_d_configs():
 
 _SRAM_KIB_BY_FAMILY = {
     "hopper": 228,
+    "blackwell": 228,
     "a100": 164,
     "ampere": 100,
     "ada": 100,
@@ -115,7 +117,7 @@ _SRAM_KIB_BY_FAMILY = {
 def forward_configs():
     gpu = detect_gpu()
     base = _large_d_configs()
-    if gpu == "hopper":
+    if gpu in ("hopper", "blackwell"):
         return base + _small_d_hopper()
     if gpu in ("a100", "ampere", "ada"):
         return base + _small_d_ampere()

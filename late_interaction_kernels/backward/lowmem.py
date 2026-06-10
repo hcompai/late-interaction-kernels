@@ -42,8 +42,8 @@ if _HAS_TRITON:
         grad_s_ptr,
         q_mask_ptr,
         grad_Q_ptr,
-        Nq: tl.constexpr,
-        Nd: tl.constexpr,  # K_per_query in KD/pairs mode
+        Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+        Nd,  # K_per_query in KD/pairs mode
         Lq: tl.constexpr,
         Ld,
         d: tl.constexpr,
@@ -110,8 +110,8 @@ if _HAS_TRITON:
         grad_s_ptr,
         q_mask_ptr,
         grad_D_ptr,
-        Nq: tl.constexpr,
-        Nd: tl.constexpr,  # cross: doc count; KD: K per query
+        Nq,  # runtime: loop bound / slab arithmetic — constexpr would recompile per batch shape
+        Nd,  # cross: doc count; KD: K per query
         Lq: tl.constexpr,
         Ld,
         d: tl.constexpr,
@@ -248,7 +248,9 @@ def maxsim_backward_lowmem(
     qm_strides = (q_mask.stride(0), q_mask.stride(1)) if has_q_mask else (0, 0)
 
     # --- grad_Q: row-owned kernel, bf16 output (fp32 accumulate in-kernel) ---
-    grad_Q = torch.zeros(Nq, Lq, d, device=Q.device, dtype=Q.dtype)
+    # `empty`, not `zeros`: the kernel stores every (q, s) row unconditionally
+    # (masked rows store 0), so the memset would be pure overhead.
+    grad_Q = torch.empty(Nq, Lq, d, device=Q.device, dtype=Q.dtype)
     _bwd_dQ_kernel[(Nq * Lq,)](
         D,
         argmax,
@@ -279,7 +281,9 @@ def maxsim_backward_lowmem(
 
     # --- grad_D: one destination-owned matmul kernel, bf16 output ---
     # Cross and KD share it; cross loops all queries per slab, KD owns one.
-    grad_D = torch.zeros(Nd_total, Ld, d, device=D.device, dtype=D.dtype)
+    # `empty`: the grid covers every (slab, doc-tile) and each program stores
+    # its full tile — zeroing the n_neg-inflated KD buffer costs real HBM time.
+    grad_D = torch.empty(Nd_total, Ld, d, device=D.device, dtype=D.dtype)
     compute_dtype = pick_compute_dtype(Q, D)
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 

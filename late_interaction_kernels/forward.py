@@ -49,8 +49,8 @@ def _maxsim_fwd_kernel(
     d_mask_ptr,
     scores_ptr,
     argmax_ptr,
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,  # cross-product: doc count; KD/pairs: K per query
+    Nq,  # runtime: only used for pid arithmetic — constexpr would recompile per batch shape
+    Nd,  # cross-product: doc count; KD/pairs: K per query
     Lq: tl.constexpr,
     Ld,
     d: tl.constexpr,

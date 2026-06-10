@@ -18,6 +18,7 @@ from late_interaction_kernels._utils import (
     next_pow2,
     pick_compute_dtype,
 )
+from late_interaction_kernels.backward._autotune import BWD_CONFIGS
 
 
 @triton.autotune(
@@ -34,8 +35,8 @@ def _varlen_fwd_kernel(
     cu_d_ptr,
     scores_ptr,
     argmax_ptr,
-    Nq: tl.constexpr,
-    Nd: tl.constexpr,
+    Nq,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
+    Nd,
     max_lq,
     max_ld,
     lq_key,  # bucketed max_lq; unused, autotune cache key only
@@ -137,6 +138,7 @@ def _varlen_fwd_kernel(
 # -----------------------------------------------------------------------------
 
 
+@triton.autotune(configs=BWD_CONFIGS, key=["lq_key", "d_pad"])
 @triton.jit
 def _varlen_bwd_dQ_kernel(
     D_ptr,  # [sum_Ld, d]
@@ -145,8 +147,9 @@ def _varlen_bwd_dQ_kernel(
     argmax_ptr,  # [Nq, Nd, max_lq]
     grad_s_ptr,  # [Nq, Nd] fp32
     grad_Q_ptr,  # [sum_Lq, d] fp32
-    Nd: tl.constexpr,
+    Nd,  # runtime: loop bound — constexpr would recompile per batch shape
     max_lq,
+    lq_key,  # bucketed max_lq; unused, autotune cache key only
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_d_t,
@@ -203,6 +206,7 @@ def _varlen_bwd_dQ_kernel(
 # -----------------------------------------------------------------------------
 
 
+@triton.autotune(configs=BWD_CONFIGS, key=["lq_key", "d_pad"], reset_to_zero=["grad_D_ptr"])
 @triton.jit
 def _varlen_bwd_dD_kernel(
     Q_ptr,  # [sum_Lq, d]
@@ -211,8 +215,9 @@ def _varlen_bwd_dD_kernel(
     argmax_ptr,
     grad_s_ptr,
     grad_D_ptr,  # [sum_Ld, d] fp32
-    Nd: tl.constexpr,
+    Nd,  # runtime: pid arithmetic only — constexpr would recompile per batch shape
     max_lq,
+    lq_key,  # bucketed max_lq; unused, autotune cache key only
     d: tl.constexpr,
     d_pad: tl.constexpr,
     stride_q_t,
@@ -316,7 +321,8 @@ def _varlen_forward(
     compute_dtype = pick_compute_dtype(Q_packed, D_packed)
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
-    scores = torch.zeros(Nq, Nd, device=Q_packed.device, dtype=torch.float32)
+    # Every program stores its score (empty sequences store 0.0), so no memset.
+    scores = torch.empty(Nq, Nd, device=Q_packed.device, dtype=torch.float32)
 
     Q_packed = Q_packed.contiguous()
     D_packed = D_packed.contiguous()
@@ -380,10 +386,13 @@ class _MaxSimVarlenFn(torch.autograd.Function):
         Nd = cu_d.numel() - 1
         d_pad = next_pow2(d)
 
-        grad_Q = torch.zeros_like(Q, dtype=torch.float32)
+        # grad_Q rows are each owned by exactly one program — no memset needed.
+        # grad_D is an atomic scatter target and must start zeroed.
+        grad_Q = torch.empty_like(Q, dtype=torch.float32)
         grad_D = torch.zeros_like(D, dtype=torch.float32)
 
         if max_q > 0:
+            lq_key = bucket_seqlen(max_q)
             _varlen_bwd_dQ_kernel[(Nq * max_q,)](
                 D,
                 cu_q,
@@ -393,6 +402,7 @@ class _MaxSimVarlenFn(torch.autograd.Function):
                 grad_Q,
                 Nd,
                 max_q,
+                lq_key,
                 d,
                 d_pad,
                 D.stride(0),
@@ -404,8 +414,6 @@ class _MaxSimVarlenFn(torch.autograd.Function):
                 grad_scores.stride(1),
                 grad_Q.stride(0),
                 grad_Q.stride(1),
-                num_warps=4,
-                num_stages=2,
             )
 
             _varlen_bwd_dD_kernel[(Nq * Nd,)](
@@ -417,6 +425,7 @@ class _MaxSimVarlenFn(torch.autograd.Function):
                 grad_D,
                 Nd,
                 max_q,
+                lq_key,
                 d,
                 d_pad,
                 Q.stride(0),
@@ -428,8 +437,6 @@ class _MaxSimVarlenFn(torch.autograd.Function):
                 grad_scores.stride(1),
                 grad_D.stride(0),
                 grad_D.stride(1),
-                num_warps=4,
-                num_stages=2,
             )
 
         return (
