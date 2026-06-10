@@ -17,7 +17,7 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import next_pow2
+from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2
 
 # -----------------------------------------------------------------------------
 # C1. plaid_approx_score
@@ -30,7 +30,6 @@ def _plaid_approx_score_kernel(
     codes_ptr,  # [B, max_Ld] int64 centroid codes (padded)
     doc_len_ptr,  # [B] int64 real lengths
     out_ptr,  # [B] fp32 scores
-    B: tl.constexpr,
     n_centroids: tl.constexpr,
     Lq: tl.constexpr,
     max_Ld: tl.constexpr,
@@ -119,7 +118,6 @@ def plaid_approx_score(
         codes,
         doc_lengths,
         out,
-        B,
         n_centroids,
         Lq,
         max_Ld,
@@ -449,6 +447,11 @@ def _maxsim_residual_forward(
         raise ValueError(
             f"residuals last dim {packed_dim} != expected {expected_pd} for d={d}, nbits={nbits}"
         )
+    # max_Ld stays exact (no power-of-two bucketing, unlike maxsim_varlen):
+    # it is a property of the compressed index, stable across calls, so the
+    # per-value autotune sweep amortizes to one — while a bucketed loop bound
+    # costs masked decompress+dot iterations on every call (measured -30-50%
+    # throughput on Ld=300 corpora, where 300 would bucket to 512).
 
     d_pad = next_pow2(d)
     codes_per_byte = 8 // nbits
@@ -639,22 +642,26 @@ def maxsim_residual(
             the kernel (standard PLAID convention).
 
     Returns:
-        scores: ``[Nq, Nd]`` fp32.
+        scores: ``[Nq, Nd]`` fp32. ``[Nd]`` if Q was 2-D.
 
     Autograd flows into ``Q`` (only). ``codes`` / ``residuals`` are integer;
     ``centroids`` / ``bucket_weights`` are treated as frozen.
     The argmax save and fused backward kernel run only when
     ``Q.requires_grad`` is True.
     """
-    if Q.dim() == 2:
+    q_squeeze = Q.dim() == 2
+    if q_squeeze:
         Q = Q.unsqueeze(0)
     if Q.requires_grad:
-        return _MaxSimResidualFn.apply(
+        scores = _MaxSimResidualFn.apply(
             Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize
         )
-    scores, _, _ = _maxsim_residual_forward(
-        Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
-    )
+    else:
+        scores, _, _ = _maxsim_residual_forward(
+            Q, codes, residuals, doc_lengths, centroids, bucket_weights, nbits, normalize, False
+        )
+    if q_squeeze:
+        return scores.squeeze(0)
     return scores
 
 
@@ -843,7 +850,9 @@ def maxsim_residual_varlen(
         centroids: ``[n_centroids, d]`` fp16/bf16/fp32.
         bucket_weights: ``[2**nbits]`` fp32.
         nbits: one of ``{2, 4, 8}``.
-        max_seqlen_d: optional; inferred from ``cu_seqlens_d`` otherwise.
+        max_seqlen_d: hard doc-loop bound (not a hint); must be >= the
+            longest doc or tokens are dropped — checked by an on-device
+            assert. Inferred from ``cu_seqlens_d`` (one D2H sync) if omitted.
         normalize: L2-normalize Q and the reconstructed embedding inside
             the kernel (standard PLAID convention).
 
@@ -887,6 +896,9 @@ def maxsim_residual_varlen(
         starts = cu_seqlens_d[:-1]
         ends = cu_seqlens_d[1:]
         max_seqlen_d = int((ends - starts).max().item()) if Nd > 0 else 0
+    else:
+        assert_max_seqlen_covers(cu_seqlens_d, int(max_seqlen_d), "max_seqlen_d")
+    # Exact, not bucketed — see the matching note in _maxsim_residual_forward.
     max_seqlen_d = max(int(max_seqlen_d), 1)
 
     d_pad = next_pow2(d)
@@ -895,9 +907,14 @@ def maxsim_residual_varlen(
     tl_dtype = tl.float16 if compute_dtype == torch.float16 else tl.bfloat16
 
     out = torch.empty(Nq, Nd, device=Q.device, dtype=torch.float32)
+    # No docs -> nothing to launch. The kernel's `pid // Nd` indexing would
+    # divide by the constexpr Nd=0; the empty [Nq, 0] result needs no kernel.
+    if Nd == 0:
+        return out.squeeze(0) if q_squeeze else out
+
     argmax = torch.empty(1, device=Q.device, dtype=torch.int32)  # unused placeholder
 
-    grid = (Nq * max(Nd, 1),)
+    grid = (Nq * Nd,)
     _maxsim_residual_varlen_kernel[grid](
         Q,
         codes_flat,

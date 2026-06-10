@@ -29,6 +29,30 @@ def _make(Nq, Nd, Lq, Ld, d, dtype=torch.bfloat16, device="cuda"):
 
 
 @pytest.mark.skipif(fp8_dtype is None, reason="torch has no FP8 dtype")
+def test_fp8_fallback_works_on_cpu():
+    """The documented "transparent fallback" must run without Triton/CUDA:
+    on CPU it dequantizes to bf16 and routes through the eager reference."""
+    import warnings
+
+    from late_interaction_kernels.fp8 import maxsim_inference_fp8, quantize_fp8_per_tensor
+    from late_interaction_kernels.reference import maxsim_reference
+
+    torch.manual_seed(0)
+    Q, D = _make(2, 4, 8, 16, 32, dtype=torch.float32, device="cpu")
+    Qq, sq = quantize_fp8_per_tensor(Q)
+    Dq, sd = quantize_fp8_per_tensor(D)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        scores = maxsim_inference_fp8(Qq, Dq, scale_Q=sq, scale_D=sd)
+
+    ref = maxsim_reference(Q, D)
+    assert scores.shape == (2, 4)
+    err = (scores - ref).abs().max().item() / max(1e-6, ref.abs().max().item())
+    assert err < 0.05  # fp8 quantization + bf16 dequant noise
+
+
+@pytest.mark.skipif(fp8_dtype is None, reason="torch has no FP8 dtype")
 def test_quantize_roundtrip_per_tensor():
     from late_interaction_kernels.fp8 import (
         dequantize_fp8_per_tensor,

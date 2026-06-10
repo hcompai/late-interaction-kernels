@@ -71,9 +71,14 @@ def maxsim_topk(
             else:
                 merged_scores = torch.cat([topk_scores, chunk_scores], dim=-1)
                 merged_indices = torch.cat([topk_idx, chunk_indices], dim=-1)
+                # Early chunks can contribute fewer than k columns total
+                # (e.g. k=10, chunk_size=4), so clamp k at the merge; the
+                # final width still reaches min(k, Nd) once all chunks are
+                # merged.
+                k_merge = min(k, merged_scores.shape[-1])
                 topk_scores, gather_idx = torch.topk(
                     merged_scores,
-                    k,
+                    k_merge,
                     dim=-1,
                     largest=largest,
                     sorted=sorted,

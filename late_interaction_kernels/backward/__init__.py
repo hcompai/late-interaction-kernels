@@ -3,8 +3,9 @@
 :mod:`late_interaction_kernels.autograd` picks among them via ``backward=``.
 
 - :mod:`.unified` — fp32 atomic scatter; fastest single-pass path.
-- :mod:`.lowmem`  — destination-owned, bf16 grads (no fp32 buffer, no atomics);
-  lower peak memory and deterministic. Default where grad buffers dominate.
+- :mod:`.lowmem`  — destination-owned, grads written in the input dtype (no
+  fp32 buffer, no atomics); lower peak memory and deterministic. Default
+  where grad buffers dominate.
 """
 
 # Both modules guard Triton internally (@triton.jit kernels live behind a

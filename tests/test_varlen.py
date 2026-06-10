@@ -65,6 +65,58 @@ def test_varlen_matches_padded_path():
     assert (a - b).abs().max().item() < 1e-3
 
 
+def test_varlen_explicit_max_seqlen_matches_inferred():
+    """Caller-supplied max_seqlen_* (non-power-of-2) must give the same
+    scores as the inferred path — exercises the explicit loop-bound path
+    and its bucketed autotune key."""
+    from late_interaction_kernels import maxsim_varlen
+
+    q_lens = [5, 9]
+    d_lens = [13, 30, 7]
+    Qp, cu_q = _build_varlen(q_lens, 128)
+    Dp, cu_d = _build_varlen(d_lens, 128)
+
+    inferred = maxsim_varlen(Qp, Dp, cu_q, cu_d)
+    explicit = maxsim_varlen(Qp, Dp, cu_q, cu_d, max_seqlen_q=max(q_lens), max_seqlen_d=max(d_lens))
+    torch.testing.assert_close(inferred, explicit)
+
+    # A generous bound is also fine — the kernel masks on cu_seqlens.
+    generous = maxsim_varlen(Qp, Dp, cu_q, cu_d, max_seqlen_q=64, max_seqlen_d=64)
+    torch.testing.assert_close(inferred, generous)
+
+
+# Too-small max_seqlen_* triggers ``torch._assert_async``, which aborts the
+# CUDA context for the whole process — run in a subprocess like the
+# pack_padded async-assert tests.
+_VARLEN_ASSERT_SCRIPT = """
+import torch
+from late_interaction_kernels import maxsim_varlen
+
+Qp = torch.randn(8, 64, device="cuda", dtype=torch.float16)
+Dp = torch.randn(24, 64, device="cuda", dtype=torch.float16)
+cu_q = torch.tensor([0, 4, 8], device="cuda", dtype=torch.int32)
+cu_d = torch.tensor([0, 12, 24], device="cuda", dtype=torch.int32)
+try:
+    maxsim_varlen(Qp, Dp, cu_q, cu_d, max_seqlen_d=4)  # real max is 12
+    torch.cuda.synchronize()
+except RuntimeError:
+    raise SystemExit(7)
+raise SystemExit(0)
+"""
+
+
+def test_varlen_too_small_max_seqlen_asserts():
+    """max_seqlen_* is a hard loop bound: a too-small value used to silently
+    truncate tokens; now the on-device assert rejects it."""
+    import subprocess
+    import sys
+
+    result = subprocess.run([sys.executable, "-c", _VARLEN_ASSERT_SCRIPT], capture_output=True)
+    assert result.returncode == 7, (
+        f"expected exit 7 (RuntimeError caught); got {result.returncode}\n{result.stderr.decode()}"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Backward parity: check grad_Q and grad_D match the padded autograd path by
 # building two equivalent inputs — one varlen-packed, one padded with masks —

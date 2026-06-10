@@ -136,6 +136,21 @@ def pack_padded(
         raise ValueError(f"doc_lengths must be [B={B}, C={C}]; got {tuple(doc_lengths.shape)}")
 
     device = queries.device
+
+    # Empty batch: ``qlen.max()`` / ``dlen.max()`` below would raise on a
+    # zero-element tensor, so build the trivially-empty PackedBatch up front
+    # (CUDA and CPU paths then agree on the [0, C] result).
+    if B == 0:
+        return PackedBatch(
+            Q_packed=queries.reshape(0, d),
+            cu_seqlens_q=torch.zeros(1, dtype=torch.int32, device=device),
+            D_packed=documents.reshape(0, d),
+            cu_seqlens_d=torch.zeros(1, dtype=torch.int32, device=device),
+            pair_q_idx=torch.zeros(0, dtype=torch.int32, device=device),
+            pair_d_idx=torch.zeros(0, dtype=torch.int32, device=device),
+            max_seqlen_q=0,
+            max_seqlen_d=0,
+        )
     qlen = query_lengths.to(device=device, dtype=torch.int32)
     dlen = doc_lengths.to(device=device, dtype=torch.int32)
 

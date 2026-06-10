@@ -72,6 +72,19 @@ def test_scorer_score_is_no_grad():
     assert not out.requires_grad
 
 
+def test_scorer_forward_respects_callers_no_grad():
+    """Regression: ``forward()`` used to force ``enable_grad()``, overriding a
+    caller's ``torch.no_grad()`` and returning ``requires_grad=True``."""
+    from late_interaction_kernels import MaxSimScorer
+
+    Q = torch.randn(2, 8, 16, requires_grad=True)
+    D = torch.randn(3, 12, 16, requires_grad=True)
+    scorer = MaxSimScorer(normalize=True)
+    with torch.no_grad():
+        out = scorer(Q, D)
+    assert not out.requires_grad
+
+
 def test_scorer_composes_inside_nn_module():
     from late_interaction_kernels import MaxSimScorer
 
@@ -183,6 +196,36 @@ def test_retrieve_chunked_equals_unchunked():
     D = torch.randn(50, 16, 16, dtype=torch.float32)
     full_s, full_i = retrieve(Q, D, top_k=7, normalize=True)
     chunked_s, chunked_i = retrieve(Q, D, top_k=7, normalize=True, chunk=13)
+    assert torch.allclose(full_s, chunked_s, atol=1e-5)
+    assert torch.equal(full_i, chunked_i)
+
+
+def test_retrieve_chunked_top_k_larger_than_chunk():
+    """Regression: each chunk contributes at most ``chunk`` columns, so the
+    running merge starts narrower than ``top_k`` and used to crash with
+    "selected index k out of range"."""
+    from late_interaction_kernels import retrieve
+
+    torch.manual_seed(0)
+    Q = torch.randn(2, 8, 16, dtype=torch.float32)
+    D = torch.randn(20, 6, 16, dtype=torch.float32)
+    full_s, full_i = retrieve(Q, D, top_k=10, normalize=True)
+    chunked_s, chunked_i = retrieve(Q, D, top_k=10, normalize=True, chunk=4)
+    assert chunked_s.shape == (2, 10)
+    assert torch.allclose(full_s, chunked_s, atol=1e-5)
+    assert torch.equal(full_i, chunked_i)
+
+
+def test_retrieve_chunked_top_k_larger_than_nd():
+    """``top_k > Nd`` with chunking still clamps the output width to Nd."""
+    from late_interaction_kernels import retrieve
+
+    torch.manual_seed(0)
+    Q = torch.randn(2, 8, 16, dtype=torch.float32)
+    D = torch.randn(6, 6, 16, dtype=torch.float32)
+    full_s, full_i = retrieve(Q, D, top_k=10, normalize=True)
+    chunked_s, chunked_i = retrieve(Q, D, top_k=10, normalize=True, chunk=4)
+    assert chunked_s.shape == (2, 6)
     assert torch.allclose(full_s, chunked_s, atol=1e-5)
     assert torch.equal(full_i, chunked_i)
 

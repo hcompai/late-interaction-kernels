@@ -9,8 +9,9 @@ native LIK backends, so its numeric-prefix parsing is pinned here.
 import importlib.metadata as metadata
 
 import pytest
+import torch
 
-from late_interaction_kernels._utils import package_at_least
+from late_interaction_kernels._utils import assert_max_seqlen_covers, bucket_seqlen, package_at_least
 
 
 @pytest.mark.parametrize(
@@ -38,3 +39,26 @@ def test_package_at_least_absent_package_is_false(monkeypatch):
 
     monkeypatch.setattr(metadata, "version", _raise)
     assert package_at_least("definitely-not-installed", "1.0.0") is False
+
+
+@pytest.mark.parametrize(
+    ("max_len", "expected"),
+    [(0, 0), (1, 16), (5, 16), (16, 16), (17, 32), (1030, 2048)],
+)
+def test_bucket_seqlen(max_len: int, expected: int):
+    assert bucket_seqlen(max_len) == expected
+
+
+def test_assert_max_seqlen_covers_accepts_exact_and_generous():
+    cu = torch.tensor([0, 4, 12], dtype=torch.int32)
+    assert_max_seqlen_covers(cu, 8, "max_seqlen_q")  # longest is 8
+    assert_max_seqlen_covers(cu, 64, "max_seqlen_q")
+    assert_max_seqlen_covers(torch.zeros(1, dtype=torch.int32), 0, "max_seqlen_q")  # no sequences
+
+
+def test_assert_max_seqlen_covers_rejects_too_small():
+    """On CPU ``torch._assert_async`` evaluates eagerly; on CUDA the same
+    violation surfaces as a device-side assert (see test_varlen.py)."""
+    cu = torch.tensor([0, 4, 12], dtype=torch.int32)
+    with pytest.raises(RuntimeError, match="max_seqlen_q=4 is smaller"):
+        assert_max_seqlen_covers(cu, 4, "max_seqlen_q")

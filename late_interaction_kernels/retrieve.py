@@ -11,6 +11,7 @@ Every backend is autograd-aware, so training and retrieval code is
 unit-testable on macOS / Windows before renting a CUDA box.
 """
 
+import contextlib
 from typing import Literal
 
 import torch
@@ -56,8 +57,10 @@ def _score(
         # `inference=True` is a stronger contract than auto-dispatch:
         # `score()` must not participate in autograd even when inputs have
         # ``requires_grad=True``, so force ``no_grad()``. Training
-        # (`inference=False`) routes through autograd as usual.
-        with torch.no_grad() if inference else torch.enable_grad():
+        # (`inference=False`) must NOT force ``enable_grad()`` — that would
+        # override a caller's ``torch.no_grad()`` — so it leaves the caller's
+        # grad mode untouched.
+        with torch.no_grad() if inference else contextlib.nullcontext():
             return maxsim(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize, backward=backward)
 
     if Q.device.type == "mps":
@@ -69,7 +72,7 @@ def _score(
 
     from late_interaction_kernels.reference import maxsim_reference
 
-    with torch.no_grad() if inference else torch.enable_grad():
+    with torch.no_grad() if inference else contextlib.nullcontext():
         return maxsim_reference(Q, D, q_mask=q_mask, d_mask=d_mask, normalize=normalize)
 
 
@@ -291,7 +294,14 @@ def retrieve(
             else:
                 merged_scores = torch.cat([topk_s, chunk_scores], dim=-1)
                 merged_indices = torch.cat([topk_i, chunk_indices], dim=-1)
-                topk_s, gather_idx = torch.topk(merged_scores, k, dim=-1, largest=largest, sorted=sorted)
+                # Early chunks can contribute fewer than k columns total
+                # (e.g. top_k=10, chunk=4), so clamp k at the merge; the
+                # final width still reaches min(top_k, Nd) once all chunks
+                # are merged.
+                k_merge = min(k, merged_scores.shape[-1])
+                topk_s, gather_idx = torch.topk(
+                    merged_scores, k_merge, dim=-1, largest=largest, sorted=sorted
+                )
                 topk_i = torch.gather(merged_indices, -1, gather_idx)
 
     if q_was_2d:

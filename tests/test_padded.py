@@ -148,6 +148,48 @@ def test_pack_padded_validate_flag_catches_zero_length() -> None:
         pack_padded(queries, documents, qlen_bad, dlen, validate=True)
 
 
+def test_pack_padded_empty_batch() -> None:
+    """B == 0 must produce an empty PackedBatch instead of crashing on
+    ``qlen.max()`` of a zero-element tensor."""
+    B, C, Lq, Ld, d = 0, 3, 8, 12, 16
+    queries = torch.randn(B, Lq, d)
+    documents = torch.randn(B, C, Ld, d)
+    qlen = torch.zeros(B, dtype=torch.int32)
+    dlen = torch.zeros(B, C, dtype=torch.int32)
+
+    batch = pack_padded(queries, documents, qlen, dlen)
+    assert batch.Q_packed.shape == (0, d)
+    assert batch.D_packed.shape == (0, d)
+    assert batch.cu_seqlens_q.tolist() == [0]
+    assert batch.cu_seqlens_d.tolist() == [0]
+    assert batch.pair_q_idx.numel() == 0
+    assert batch.pair_d_idx.numel() == 0
+    assert batch.max_seqlen_q == 0
+    assert batch.max_seqlen_d == 0
+
+
+def test_maxsim_padded_empty_batch_cpu() -> None:
+    B, C = 0, 4
+    queries = torch.randn(B, 8, 16)
+    documents = torch.randn(B, C, 12, 16)
+    qlen = torch.zeros(B, dtype=torch.int32)
+    dlen = torch.zeros(B, C, dtype=torch.int32)
+    scores = maxsim_padded(queries, documents, qlen, dlen)
+    assert scores.shape == (B, C)
+
+
+@pytest.mark.cuda
+def test_maxsim_padded_empty_batch_cuda() -> None:
+    """The CUDA path must agree with CPU on the empty batch (no crash)."""
+    B, C = 0, 4
+    queries = torch.randn(B, 8, 16, device="cuda")
+    documents = torch.randn(B, C, 12, 16, device="cuda")
+    qlen = torch.zeros(B, dtype=torch.int32, device="cuda")
+    dlen = torch.zeros(B, C, dtype=torch.int32, device="cuda")
+    scores = maxsim_padded(queries, documents, qlen, dlen)
+    assert scores.shape == (B, C)
+
+
 # ---------------------------------------------------------------------------
 # Always-on async assert (subprocess-isolated)
 #

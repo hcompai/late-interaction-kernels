@@ -19,7 +19,7 @@ import triton
 import triton.language as tl
 
 from late_interaction_kernels._autotune import autotune_kwargs, forward_configs, prune_forward
-from late_interaction_kernels._utils import next_pow2, pick_compute_dtype
+from late_interaction_kernels._utils import assert_max_seqlen_covers, next_pow2, pick_compute_dtype
 
 
 @triton.autotune(
@@ -287,8 +287,12 @@ def _scatter_forward(
     Nd = cu_seqlens_d.numel() - 1
     if max_seqlen_q is None:
         max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item()) if Nq else 0
+    else:
+        assert_max_seqlen_covers(cu_seqlens_q, int(max_seqlen_q), "max_seqlen_q")
     if max_seqlen_d is None:
         max_seqlen_d = int((cu_seqlens_d[1:] - cu_seqlens_d[:-1]).max().item()) if Nd else 0
+    else:
+        assert_max_seqlen_covers(cu_seqlens_d, int(max_seqlen_d), "max_seqlen_d")
 
     d = Q_packed.shape[1]
     d_pad = next_pow2(d)
@@ -433,8 +437,10 @@ def score_pairs_packed(
         cu_seqlens_d: ``[Nd + 1]`` int32 cumulative offsets into ``D_packed``.
         pair_q_idx: ``[num_pairs]`` int32 query indices.
         pair_d_idx: ``[num_pairs]`` int32 doc indices.
-        max_seqlen_q / max_seqlen_d: hints; computed from ``cu_seqlens`` if
-            omitted (one D2H sync per call).
+        max_seqlen_q / max_seqlen_d: hard kernel loop bounds, NOT hints — a
+            value smaller than the longest sequence would silently drop
+            tokens, so it is rejected by an on-device assert (no D2H sync).
+            Computed from ``cu_seqlens`` (one D2H sync) if omitted.
 
     Returns:
         scores: ``[num_pairs]`` fp32. ``scores[k]`` is the MaxSim of
