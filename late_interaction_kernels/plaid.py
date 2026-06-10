@@ -61,9 +61,8 @@ def _plaid_approx_score_kernel(
             mask=d_valid,
             other=0,
         ).to(tl.int32)
-        # Clamp to the valid centroid range so the gather never reads out of
-        # bounds. Out-of-range codes silently score as centroid 0 — garbage
-        # in, garbage out, but never a crash or an OOB read.
+        # Clamp out-of-range codes (incl. negative) to centroid 0 so the
+        # gather never reads out of bounds.
         codes = tl.where((codes >= 0) & (codes < n_centroids), codes, 0)
 
         tile = tl.load(
@@ -90,10 +89,9 @@ def plaid_approx_score(
     Args:
         query_centroid_scores: ``[n_centroids, Lq]`` fp32. Typically
             ``centroids @ Q.T``, computed once per query.
-        codes: ``[B, max_Ld]`` integer centroid codes (any int dtype;
-            converted to int32 — codes are the dominant HBM traffic here and
-            int64 would double it). Positions beyond ``doc_lengths`` are
-            masked; out-of-range codes are clamped to centroid 0.
+        codes: ``[B, max_Ld]`` integer centroid codes (converted to int32).
+            Positions beyond ``doc_lengths`` are masked; out-of-range codes
+            are clamped to centroid 0.
         doc_lengths: ``[B]`` int64 real per-doc lengths.
 
     Returns:
@@ -423,9 +421,8 @@ def _maxsim_residual_forward(
         raise ValueError("residuals must be [Nd, max_Ld, packed_dim]")
 
     Q = Q.contiguous()
-    # int32 codes: halves the code-read traffic vs int64 (and matches the
-    # int32 on-disk format ColBERTv2 / fast-plaid use, so the common case is
-    # a no-op instead of an upcast copy). The kernel gathers in int32 anyway.
+    # int32, not int64: codes dominate HBM traffic here, and int32 matches the
+    # on-disk ColBERTv2 / fast-plaid format, so the common case is a no-op.
     codes = codes.contiguous().to(torch.int32)
     residuals = residuals.contiguous().to(torch.uint8)
     doc_lengths = doc_lengths.contiguous().to(torch.int64)
