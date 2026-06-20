@@ -1291,7 +1291,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Spelling out the loop nest sketched in section <a href="#inside">3</a>: one
-    Triton program per $(q\text{-batch}, d\text{-batch})$ pair, document tiles
+    Triton program per (query, document) pair &mdash; $(\texttt{q\_idx},
+    \texttt{d\_idx})$ in the pseudo-code below &mdash; with document tiles
     of $\text{BLOCK\_D}$ rows nested inside query tiles of $\text{BLOCK\_Q}$
     rows. The full similarity tensor $\Sm$ never exists in HBM. Only the
     $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in fp32
@@ -1299,18 +1300,18 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
     $\Qm$ and $\Dm$ operand tiles feeding it.
   </p>
 
-<pre><code><span style="color:var(--ink-dim)"># one program per (q_batch, d_batch)</span>
+<pre><code><span style="color:var(--ink-dim)"># one program per (query, document)</span>
 score ← 0
 for q_start in range(0, Lq, BLOCK_Q):
-    Q_tile ← Q[q_batch, q_start : q_start + BLOCK_Q]      <span style="color:var(--ink-dim)"># SRAM</span>
+    Q_tile ← Q[q_idx, q_start : q_start + BLOCK_Q]        <span style="color:var(--ink-dim)"># SRAM</span>
     m     ← −∞                                            <span style="color:var(--ink-dim)"># [BLOCK_Q] in registers</span>
     for d_start in range(0, Ld, BLOCK_D):
-        D_tile ← D[d_batch, d_start : d_start + BLOCK_D]  <span style="color:var(--ink-dim)"># SRAM</span>
+        D_tile ← D[d_idx, d_start : d_start + BLOCK_D]    <span style="color:var(--ink-dim)"># SRAM</span>
         S_tile  = Q_tile @ D_tileᵀ                        <span style="color:var(--ink-dim)"># tensor cores, fp32 acc</span>
         S_tile ← mask(S_tile, d_active, −∞)               <span style="color:var(--ink-dim)"># fused-in masking</span>
         m      ← maximum(m, rowmax(S_tile))               <span style="color:var(--ink-dim)"># online max</span>
     score += sum(m)                                       <span style="color:var(--ink-dim)"># contribution from this Q tile</span>
-scores[q_batch, d_batch] ← score                          <span style="color:var(--ink-dim)"># only this scalar is written</span>
+scores[q_idx, d_idx] ← score                              <span style="color:var(--ink-dim)"># only this scalar is written</span>
 </code></pre>
 
   <p>
