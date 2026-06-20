@@ -1305,7 +1305,7 @@ for q_start in range(0, Lq, BLOCK_Q):
         S_tile ← mask(S_tile, d_active, −∞)               <span style="color:var(--ink-dim)"># fused-in masking</span>
         m      ← maximum(m, rowmax(S_tile))               <span style="color:var(--ink-dim)"># online max</span>
     score += sum(m)                                       <span style="color:var(--ink-dim)"># contribution from this Q tile</span>
-scores[q_batch, d_batch] ← score                           <span style="color:var(--ink-dim)"># only this scalar is written</span>
+scores[q_batch, d_batch] ← score                          <span style="color:var(--ink-dim)"># only this scalar is written</span>
 </code></pre>
 
   <p>
@@ -1318,7 +1318,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
 
   <p>
     Per program, SRAM holds only the operand tiles
-    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ in low precision —
+    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ in half precision —
     Triton double-buffers them so the next $\Dm$ tile loads while the
     current GEMM runs. The score tile $\Sm$ and the running max $\Mm$
     live in fp32 <em>registers</em>, never in SRAM: <code>tl.dot</code>
