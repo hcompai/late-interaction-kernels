@@ -1802,11 +1802,13 @@ scores[q_idx, d_idx] ← score                              <span style="color:v
   </p>
 
   <p>
-    Scoring one $(\Qm, \Dm)$ pair is $2 L_q L_d \, d$ FLOPs of matmul plus a few
-    cheap reductions. The two implementations differ only in what they push
-    through HBM. The naive form materialises the score tile $\Sm$, so its
-    traffic is dominated by the $L_q \times L_d$ surface (read + write,
-    fp16):
+    Scoring one $(\Qm, \Dm)$ pair is a matmul of $2 L_q L_d \, d$ FLOPs — the
+    $L_q \times L_d$ score entries, each a dot product over $d$ that costs $d$
+    multiplies and $d$ adds, hence the leading $2$ — plus a few cheap
+    reductions. The two implementations differ only in what they push through
+    HBM. The naive form materialises the score tile $\Sm$, so its traffic is
+    dominated by the $L_q \times L_d$ surface, written once and read back once
+    at $2$ bytes per fp16 element ($4$ bytes per entry):
   </p>
 
   <p>
@@ -1816,7 +1818,8 @@ scores[q_idx, d_idx] ← score                              <span style="color:v
 
   <p>
     The fused form never writes $\Sm$; the only HBM traffic is the operand
-    reads $\Qm$ and $\Dm$:
+    reads $\Qm$ and $\Dm$ — $(L_q + L_d)\, d$ elements at $2$ bytes each, which
+    is the $2$ in the denominator below:
   </p>
 
   <p>
@@ -1826,12 +1829,25 @@ scores[q_idx, d_idx] ← score                              <span style="color:v
   </p>
 
   <p>
-    At a balanced shape ($L_q = L_d = 1024$, $d = 128$), the naive form sits
-    at about <strong>64 FLOPs/byte</strong>, four to five times below the
-    ridge, so the tensor cores idle while HBM works flat out. The fused
-    form sits at about <strong>512 FLOPs/byte</strong>, comfortably above
-    the ridge, where the kernel is finally limited by compute. The same
-    workload moves between regimes purely by changing what crosses HBM:
+    Two configurations, both with $d = 128$, bound the range. For
+    <a href="https://huggingface.co/vidore/colpali-v1.3-hf">ColPali</a> (a text
+    query $L_q = 128$ against one page, $L_d \approx 1024$), the naive form
+    sits at about 64 FLOPs/byte and the fused form at about 114, roughly twice
+    the arithmetic intensity. Both stay on the memory-bound side of the ridge,
+    but the fused kernel moves twice the work per byte, so the matmul waits far
+    less on HBM.
+  </p>
+
+  <p>
+    On the other hand,
+    <a href="https://huggingface.co/vidore/colqwen2-v1.0-hf">ColQwen2</a>
+    stretches the document side. Its dynamic resolution emits one token per
+    28×28-px block, so the larger the image the more visual tokens: a
+    4k page (3840×2160) runs to about 10,600. With aggressive query expansion at
+    that size ($L_q = 300$, $L_d \approx 10{,}600$), the naive form holds at 64,
+    since it depends only on $d$, while the fused form reaches about 292: right
+    up against the ridge, though still short of compute-bound. The same matmul
+    climbs the roofline by changing nothing but what crosses HBM:
   </p>
 
   <div class="panel">
@@ -1850,17 +1866,19 @@ scores[q_idx, d_idx] ← score                              <span style="color:v
 
         <!-- ridge -->
         <line x1="525" y1="40" x2="525" y2="130" stroke="currentColor" stroke-dasharray="3,3" stroke-opacity="0.42" />
-        <text x="525" y="32" fill="var(--ink-mid)" font-size="11" text-anchor="middle">ridge AI<tspan font-size="9" dy="-3">★</tspan><tspan dy="3"> ≈ 295</tspan></text>
+        <text x="525" y="32" fill="var(--ink-mid)" font-size="11" text-anchor="middle">H100 ridge AI<tspan font-size="9" dy="-3">★</tspan><tspan dy="3"> ≈ 295</tspan></text>
 
-        <!-- naive marker -->
+        <!-- naive marker (AI = d/2 = 64, shared by both models → x = 70 + 184.5·log10(64) ≈ 403) -->
         <circle cx="403" cy="90" r="6.5" fill="var(--warn)" />
-        <text x="403" y="148" fill="var(--warn)"   font-size="12" text-anchor="middle" font-weight="500">naive</text>
-        <text x="403" y="162" fill="var(--ink-dim)" font-size="10.5" text-anchor="middle">≈ 64 FLOPs/B</text>
+        <text x="403" y="150" fill="var(--warn)" font-size="11" text-anchor="middle" font-weight="500">≈ 64</text>
 
-        <!-- fused marker -->
-        <circle cx="570" cy="90" r="6.5" fill="var(--accent-2)" />
-        <text x="570" y="148" fill="var(--accent-2)" font-size="12" text-anchor="middle" font-weight="500">fused</text>
-        <text x="570" y="162" fill="var(--ink-dim)"  font-size="10.5" text-anchor="middle">≈ 512 FLOPs/B</text>
+        <!-- ColPali fused (AI ≈ 114 → x ≈ 450) -->
+        <circle cx="450" cy="90" r="6.5" fill="var(--accent-3)" />
+        <text x="450" y="150" fill="var(--accent-3)" font-size="11" text-anchor="middle" font-weight="500">≈ 114</text>
+
+        <!-- ColQwen2 fused (AI ≈ 291 → x ≈ 522, right up against the ridge) -->
+        <circle cx="522" cy="90" r="6.5" fill="var(--accent-2)" />
+        <text x="522" y="150" fill="var(--accent-2)" font-size="11" text-anchor="middle" font-weight="500">≈ 292</text>
 
         <!-- x ticks (log scale, AI 1 → 2048) -->
         <g fill="var(--ink-dim)" font-size="10" text-anchor="middle">
@@ -1875,13 +1893,32 @@ scores[q_idx, d_idx] ← score                              <span style="color:v
         </g>
         <text x="375" y="190" text-anchor="middle" fill="var(--ink-dim)" font-size="11">arithmetic intensity (FLOPs / HBM byte, log scale)</text>
       </svg>
+      <div class="chart-legend">
+        <span><span class="sw" style="background:var(--warn)"></span>Naive — materialises $\Sm$ ($d/2 = 64$, same for both models)</span>
+        <span><span class="sw" style="background:var(--accent-3)"></span>Fused — ColPali ($L_q = 128$, $L_d \approx 1024$)</span>
+        <span><span class="sw" style="background:var(--accent-2)"></span>Fused — ColQwen2 ($L_q = 300$, $L_d \approx 10{,}600$)</span>
+        <span>both at $d = 128$; neither shape crosses the ridge</span>
+      </div>
     </div>
   </div>
 
   <p>
     Fusing is not faster because the arithmetic is cheaper. It is the same
-    matmul. It is faster because the matmul never has to wait for memory.
+    matmul. It is faster because it makes far fewer round-trips to HBM, so the
+    matmul spends much less of its time stalled on memory.
   </p>
+
+  <div class="note">
+    <p>
+      <strong>Short queries blunt the intensity gain, not the memory win.</strong>
+      When $L_q$ is small the fused intensity is capped near $L_q$, so on
+      text-query workloads both forms stay memory-bound; fusing then speeds the
+      kernel by the HBM traffic it removes, not by crossing into compute-bound
+      territory. The memory saving is independent of shape: the fused kernel
+      never materialises $\Sm$, so it lowers peak VRAM at every query length,
+      which is often what lets the batch fit at all.
+    </p>
+  </div>
 </section>
 
 <!-- ============================================================ -->
