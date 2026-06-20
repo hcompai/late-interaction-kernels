@@ -942,7 +942,8 @@
   </p>
 
   <p>
-    The MaxSim forward uses a grid of $N_q \cdot N_d$ programs, one per
+    LIK's fused MaxSim forward kernel (not the vanilla PyTorch path of §4)
+    uses a grid of $N_q \cdot N_d$ programs, one per
     query–document pair. Program $(i, j)$ pulls the embeddings of query $i$
     and document $j$ from HBM, accumulates a single fp32 scalar, and writes it
     to position $(i, j)$ of the score matrix. All $N_q \cdot N_d$ programs run
