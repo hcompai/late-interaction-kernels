@@ -918,9 +918,9 @@
   <div class="note">
     <strong>The problem to solve.</strong>
     Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
-    tensor first, then reduces. ColPali queries are short ($L_q = 128$ after
-    ColBERT-style augmentation), documents are full pages ($L_d \approx 1024$
-    patches); a contrastive batch of 128 queries × 128 documents (16,384
+    tensor first, then reduces. Queries augmented with query expansion run about
+    $L_q = 128$ tokens, documents are pages of $L_d \approx 1024$ visual tokens;
+    a contrastive batch of 128 queries × 128 documents (16,384
     scored pairs) makes that tensor 8.6 GB in fp32, 4.3 GB in fp16. Each element is written once
     and read back once, so the GPU spends most of its time on HBM traffic,
     not compute. The kernels in this library compute the same result without ever
@@ -1191,9 +1191,9 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Scaling is quadratic in the contrastive batch size, not the query length.
-    ColPali queries are short — a fixed $L_q = 128$ after ColBERT-style
-    augmentation — against $L_d \approx 1024$ page patches, so the per-pair
-    $L_q \cdot L_d$ surface is fixed; the blow-up comes from in-batch negatives.
+    Queries augmented with query expansion run about $L_q = 128$ tokens, against
+    $L_d \approx 1024$ visual tokens per page, so the per-pair $L_q \cdot L_d$
+    surface is fixed and the blow-up comes from in-batch negatives.
     With $N_q = N_d = B$ the tensor grows as $B^2$: at $B = 128$ it is $8.6$ GB
     in fp32 ($4.3$ GB in fp16), and training builds three or four such
     intermediates per step. The chart plots that growth against the batch size:
