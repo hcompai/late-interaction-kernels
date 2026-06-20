@@ -871,11 +871,13 @@
   <p class="lede">
     Late-interaction retrieval models compare every query token to every
     document token. A direct implementation builds a four-dimensional similarity
-    tensor that overflows GPU memory at modern context lengths. The kernels in
-    the late-interaction-kernels (LIK) library compute the same result
-    without ever storing that tensor, by
-    streaming tiles through on-chip memory and folding the reductions into the
-    same pass.
+    tensor, writes it to GPU memory and reads it straight back to reduce it — so
+    it both overflows memory at modern batch sizes and runs bandwidth-bound,
+    leaving the compute units idle. The kernels in the
+    late-interaction-kernels (LIK) library compute the same result without ever
+    storing that tensor, by streaming tiles through on-chip memory and folding
+    the reductions into the same pass. That both cuts peak memory and runs
+    faster, at identical numerics.
   </p>
 </header>
 
