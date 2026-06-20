@@ -916,9 +916,10 @@
   <div class="note">
     <strong>The problem to solve.</strong>
     Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
-    tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, a
-    batch of 64 queries × 64 documents — 4,096 scored pairs) that tensor is
-    8 GB in fp16. Each element is written once
+    tensor first, then reduces. ColPali queries are short ($L_q = 128$ after
+    ColBERT-style augmentation), documents are full pages ($L_d \approx 1024$
+    patches); a contrastive batch of 128 queries × 128 documents (16,384
+    scored pairs) makes that tensor 8.6 GB in fp32, 4.3 GB in fp16. Each element is written once
     and read back once, so the GPU spends most of its time on HBM traffic,
     not compute. The kernels in this library compute the same result without ever
     materialising that tensor, by streaming $B_q \times B_d$ tiles through
@@ -1187,23 +1188,25 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
   </p>
 
   <p>
-    Scaling is quadratic in the sequence length. At ColPali shapes
-    ($N_q = N_d = 64$, $L_q = L_d = 1024$, fp32) the tensor is $16$ GB; in
-    fp16 it is $8$ GB. Training builds three or four such intermediates per
-    step. The chart shows the same number plotted as a function of the
-    sequence length:
+    Scaling is quadratic in the contrastive batch size, not the query length.
+    ColPali queries are short — a fixed $L_q = 128$ after ColBERT-style
+    augmentation — against $L_d \approx 1024$ page patches, so the per-pair
+    $L_q \cdot L_d$ surface is fixed; the blow-up comes from in-batch negatives.
+    With $N_q = N_d = B$ the tensor grows as $B^2$: at $B = 128$ it is $8.6$ GB
+    in fp32 ($4.3$ GB in fp16), and training builds three or four such
+    intermediates per step. The chart plots that growth against the batch size:
   </p>
 
   <div class="panel">
     <div class="chart-wrap">
-      <svg viewBox="0 0 720 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Peak HBM memory vs sequence length">
+      <svg viewBox="0 0 720 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Peak HBM memory vs contrastive batch size">
         <!-- axes -->
         <line x1="60"  y1="240" x2="700" y2="240" stroke="currentColor" stroke-opacity="0.3" />
         <line x1="60"  y1="20"  x2="60"  y2="240" stroke="currentColor" stroke-opacity="0.3" />
 
-        <!-- Naive curve: quadratic in L  (Nq=Nd=64, fp16) -->
-        <!-- bytes(L) = 64·64·L²·2 = 8192·L². Map L∈[0, 2048] to x = 60 + 0.3125·L,
-             GB to y = 240 − 5.5·GB (0–40 GB over y∈[240, 20]). Points every 128 tokens. -->
+        <!-- Naive curve: quadratic in B  (Nq=Nd=B, Lq=128, Ld=1024, fp16) -->
+        <!-- bytes(B) = B²·128·1024·2. Map B∈[0, 256] to x = 60 + 2.5·B,
+             GB to y = 240 − 11·GB (0–20 GB over y∈[240, 20]). Same parabola pixels. -->
         <path d="M 60 240
                  L 100 239.3
                  L 140 237.0
@@ -1231,28 +1234,28 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
         <!-- x-axis ticks -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="middle">
           <text x="60"  y="258">0</text>
-          <text x="220" y="258">512</text>
-          <text x="380" y="258">1024</text>
-          <text x="540" y="258">1536</text>
-          <text x="700" y="258">2048</text>
+          <text x="220" y="258">64</text>
+          <text x="380" y="258">128</text>
+          <text x="540" y="258">192</text>
+          <text x="700" y="258">256</text>
         </g>
-        <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">sequence length L (L_q = L_d)</text>
+        <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">contrastive batch B (N_q = N_d = B)</text>
 
         <!-- y-axis ticks (5.5 px per GB) -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="end">
           <text x="55" y="244">0</text>
-          <text x="55" y="200">8 GB</text>
-          <text x="55" y="156">16 GB</text>
-          <text x="55" y="112">24 GB</text>
-          <text x="55" y="68">32 GB</text>
-          <text x="55" y="24">40 GB</text>
+          <text x="55" y="200">4 GB</text>
+          <text x="55" y="156">8 GB</text>
+          <text x="55" y="112">12 GB</text>
+          <text x="55" y="68">16 GB</text>
+          <text x="55" y="24">20 GB</text>
         </g>
         <text x="20" y="130" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)" transform="rotate(-90 20 130)">peak HBM for one S</text>
       </svg>
       <div class="chart-legend">
-        <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $N_q = N_d = 64$</span>
+        <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $L_q = 128$, $L_d = 1024$</span>
         <span><span class="sw" style="background:var(--accent-2)"></span>fused kernel — only the $[N_q, N_d]$ score matrix</span>
-        <span>fp32 doubles every point; an 80 GB H100 runs out of memory near $L \approx 3125$ even in fp16</span>
+        <span>fp32 doubles every point; an 80 GB H100 runs out of memory near $B \approx 550$ even in fp16</span>
       </div>
     </div>
   </div>
@@ -1782,7 +1785,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    At ColPali shapes ($L_q = L_d = 1024$, $d = 128$), the naive form sits
+    At a balanced shape ($L_q = L_d = 1024$, $d = 128$), the naive form sits
     at about <strong>64 FLOPs/byte</strong>, four to five times below the
     ridge, so the tensor cores idle while HBM works flat out. The fused
     form sits at about <strong>512 FLOPs/byte</strong>, comfortably above
