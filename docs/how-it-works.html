@@ -917,16 +917,21 @@
   </p>
 
   <div class="note">
-    <strong>The problem to solve.</strong>
-    Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
-    tensor first, then reduces. Queries augmented with query expansion run about
-    $L_q = 128$ tokens, documents are pages of $L_d \approx 1024$ visual tokens;
-    a contrastive batch of 128 queries × 128 documents (16,384
-    scored pairs) makes that tensor 8.6 GB in fp32, 4.3 GB in fp16. Each element is written once
-    and read back once, so the GPU spends most of its time on HBM traffic,
-    not compute. The kernels in this library compute the same result without ever
-    materialising that tensor, by streaming $B_q \times B_d$ tiles through
-    on-chip memory and folding the reductions into the same pass.
+    <p>
+      <strong>The problem to solve.</strong>
+      Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
+      tensor first, then reduces. Queries augmented with query expansion run about
+      $L_q = 128$ tokens, documents are pages of $L_d \approx 1024$ visual tokens;
+      a contrastive batch of 128 queries × 128 documents (16,384
+      scored pairs) makes that tensor 8.6 GB in fp32, 4.3 GB in fp16. Each element
+      is written once and read back once, so the GPU spends most of its time on
+      HBM traffic, not compute.
+    </p>
+    <p>
+      The kernels in this library compute the same result without ever
+      materialising that tensor, by streaming $B_q \times B_d$ tiles through
+      on-chip memory and folding the reductions into the same pass.
+    </p>
   </div>
 </section>
 
