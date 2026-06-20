@@ -1475,16 +1475,6 @@ scores[q_batch, d_batch] ← score                          <span style="color:v
     tensor-core native path.
   </p>
 
-  <div class="note">
-    <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
-    softmax has to track $\Mm$ <em>and</em> the running sum of exponentials
-    $\ell$, and rescale both whenever the running max changes: the rescalers
-    are the $\exp(\Mm^{(k-1)} - \Mm^{(k)})$ factors in FA-1. Online max has no such
-    rescaler: $\max$ is associative and commutative, so folding the tiles in
-    one by one — in any order — gives exactly the same result as the offline
-    computation.
-  </div>
-
   <h3>Worked example</h3>
   <p>Three doc-tiles, one query row. The argmax index is recorded for backward.</p>
 
