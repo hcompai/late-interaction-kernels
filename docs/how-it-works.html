@@ -870,12 +870,15 @@
   </p>
   <p class="lede">
     Late-interaction retrieval models compare every query token to every
-    document token. A direct implementation builds a four-dimensional similarity
-    tensor that overflows GPU memory at modern context lengths. The kernels in
-    the late-interaction-kernels (LIK) library compute the same result
-    without ever storing that tensor, by
-    streaming tiles through on-chip memory and folding the reductions into the
-    same pass.
+    document token. A direct implementation writes a four-dimensional similarity
+    tensor to GPU memory just to reduce it, overflowing memory at large batch
+    sizes and stalling the compute units on HBM traffic.
+  </p>
+  <p class="lede">
+    The kernels in the late-interaction-kernels (LIK) library compute the same
+    result without ever storing that tensor, by streaming tiles through on-chip
+    memory and folding the reductions into the same pass. That both (1) cuts
+    peak memory and (2) runs faster, at identical numerics.
   </p>
 </header>
 
@@ -914,15 +917,21 @@
   </p>
 
   <div class="note">
-    <strong>The problem to solve.</strong>
-    Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
-    tensor first, then reduces. At ColPali scale ($L_q = L_d = 1024$, a
-    batch of 64 queries × 64 documents — 4,096 scored pairs) that tensor is
-    8 GB in fp16. Each element is written once
-    and read back once, so the GPU spends most of its time on HBM traffic,
-    not compute. The kernels in this library compute the same result without ever
-    materialising that tensor, by streaming $B_q \times B_d$ tiles through
-    on-chip memory and folding the reductions into the same pass.
+    <p>
+      <strong>The problem to solve.</strong>
+      Computing this naively builds the full $[N_q, N_d, L_q, L_d]$ similarity
+      tensor first, then reduces. Queries augmented with query expansion run about
+      $L_q = 128$ tokens, documents are pages of $L_d \approx 1024$ visual tokens;
+      a contrastive batch of 128 queries × 128 documents (16,384
+      scored pairs) makes that tensor 8.6 GB in fp32, 4.3 GB in fp16. Each element
+      is written once and read back once, so the GPU spends most of its time on
+      HBM traffic, not compute.
+    </p>
+    <p>
+      The kernels in this library compute the same result without ever
+      materialising that tensor, by streaming $B_q \times B_d$ tiles through
+      on-chip memory and folding the reductions into the same pass.
+    </p>
   </div>
 </section>
 
@@ -938,7 +947,8 @@
   </p>
 
   <p>
-    The MaxSim forward uses a grid of $N_q \cdot N_d$ programs, one per
+    LIK's fused MaxSim forward kernel (not the vanilla PyTorch path of §4)
+    uses a grid of $N_q \cdot N_d$ programs, one per
     query–document pair. Program $(i, j)$ pulls the embeddings of query $i$
     and document $j$ from HBM, accumulates a single fp32 scalar, and writes it
     to position $(i, j)$ of the score matrix. All $N_q \cdot N_d$ programs run
@@ -1079,6 +1089,12 @@
         <!-- S tile -->
         <rect x="310" y="68" width="128" height="128" rx="4"
               fill="var(--s-idle)" stroke="var(--s-active)" stroke-width="1.2"/>
+        <!-- one highlighted row: the row max reduces it to a single tile_max entry -->
+        <rect x="314" y="116" width="120" height="16" rx="2"
+              fill="var(--o-active)" fill-opacity="0.18"
+              stroke="var(--o-active)" stroke-width="1.4"/>
+        <text x="374" y="146" font-size="9.5" text-anchor="middle"
+              fill="var(--o-active)" font-family="var(--font-mono)">max</text>
         <text x="374" y="60" font-size="10.5" text-anchor="middle"
               fill="var(--ink-mid)" font-family="var(--font-mono)">S tile = Q · D<tspan dy="-3" font-size="8">⊤</tspan></text>
         <text x="374" y="214" font-size="10" text-anchor="middle"
@@ -1187,23 +1203,25 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
   </p>
 
   <p>
-    Scaling is quadratic in the sequence length. At ColPali shapes
-    ($N_q = N_d = 64$, $L_q = L_d = 1024$, fp32) the tensor is $16$ GB; in
-    fp16 it is $8$ GB. Training builds three or four such intermediates per
-    step. The chart shows the same number plotted as a function of the
-    sequence length:
+    Scaling is quadratic in the contrastive batch size, not the query length.
+    Queries augmented with query expansion run about $L_q = 128$ tokens, against
+    $L_d \approx 1024$ visual tokens per page, so the per-pair $L_q \cdot L_d$
+    surface is fixed and the blow-up comes from in-batch negatives.
+    With $N_q = N_d = B$ the tensor grows as $B^2$: at $B = 128$ it is $8.6$ GB
+    in fp32 ($4.3$ GB in fp16), and training builds three or four such
+    intermediates per step. The chart plots that growth against the batch size:
   </p>
 
   <div class="panel">
     <div class="chart-wrap">
-      <svg viewBox="0 0 720 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Peak HBM memory vs sequence length">
+      <svg viewBox="0 0 720 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Peak HBM memory vs contrastive batch size">
         <!-- axes -->
         <line x1="60"  y1="240" x2="700" y2="240" stroke="currentColor" stroke-opacity="0.3" />
         <line x1="60"  y1="20"  x2="60"  y2="240" stroke="currentColor" stroke-opacity="0.3" />
 
-        <!-- Naive curve: quadratic in L  (Nq=Nd=64, fp16) -->
-        <!-- bytes(L) = 64·64·L²·2 = 8192·L². Map L∈[0, 2048] to x = 60 + 0.3125·L,
-             GB to y = 240 − 5.5·GB (0–40 GB over y∈[240, 20]). Points every 128 tokens. -->
+        <!-- Naive curve: quadratic in B  (Nq=Nd=B, Lq=128, Ld=1024, fp16) -->
+        <!-- bytes(B) = B²·128·1024·2. Map B∈[0, 256] to x = 60 + 2.5·B,
+             GB to y = 240 − 11·GB (0–20 GB over y∈[240, 20]). Same parabola pixels. -->
         <path d="M 60 240
                  L 100 239.3
                  L 140 237.0
@@ -1231,28 +1249,28 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
         <!-- x-axis ticks -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="middle">
           <text x="60"  y="258">0</text>
-          <text x="220" y="258">512</text>
-          <text x="380" y="258">1024</text>
-          <text x="540" y="258">1536</text>
-          <text x="700" y="258">2048</text>
+          <text x="220" y="258">64</text>
+          <text x="380" y="258">128</text>
+          <text x="540" y="258">192</text>
+          <text x="700" y="258">256</text>
         </g>
-        <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">sequence length L (L_q = L_d)</text>
+        <text x="380" y="275" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)">contrastive batch B (N_q = N_d = B)</text>
 
         <!-- y-axis ticks (5.5 px per GB) -->
         <g font-family="var(--mono)" font-size="11" fill="var(--ink-dim)" text-anchor="end">
           <text x="55" y="244">0</text>
-          <text x="55" y="200">8 GB</text>
-          <text x="55" y="156">16 GB</text>
-          <text x="55" y="112">24 GB</text>
-          <text x="55" y="68">32 GB</text>
-          <text x="55" y="24">40 GB</text>
+          <text x="55" y="200">4 GB</text>
+          <text x="55" y="156">8 GB</text>
+          <text x="55" y="112">12 GB</text>
+          <text x="55" y="68">16 GB</text>
+          <text x="55" y="24">20 GB</text>
         </g>
         <text x="20" y="130" text-anchor="middle" fill="var(--ink-dim)" font-size="12" font-family="var(--mono)" transform="rotate(-90 20 130)">peak HBM for one S</text>
       </svg>
       <div class="chart-legend">
-        <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $N_q = N_d = 64$</span>
+        <span><span class="sw" style="background:var(--warn)"></span>S in HBM, fp16, $L_q = 128$, $L_d = 1024$</span>
         <span><span class="sw" style="background:var(--accent-2)"></span>fused kernel — only the $[N_q, N_d]$ score matrix</span>
-        <span>fp32 doubles every point; an 80 GB H100 runs out of memory near $L \approx 3125$ even in fp16</span>
+        <span>fp32 doubles every point; an 80 GB H100 runs out of memory near $B \approx 550$ even in fp16</span>
       </div>
     </div>
   </div>
@@ -1273,7 +1291,8 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
 
   <p>
     Spelling out the loop nest sketched in section <a href="#inside">3</a>: one
-    Triton program per $(q\text{-batch}, d\text{-batch})$ pair, document tiles
+    Triton program per (query, document) pair &mdash; $(\texttt{q\_idx},
+    \texttt{d\_idx})$ in the pseudo-code below &mdash; with document tiles
     of $\text{BLOCK\_D}$ rows nested inside query tiles of $\text{BLOCK\_Q}$
     rows. The full similarity tensor $\Sm$ never exists in HBM. Only the
     $\text{BLOCK\_Q} \times \text{BLOCK\_D}$ slice does, and it lives in fp32
@@ -1281,18 +1300,18 @@ scores = M.sum(dim=-1)                 <span style="color:var(--ink-dim)"># [Nq,
     $\Qm$ and $\Dm$ operand tiles feeding it.
   </p>
 
-<pre><code><span style="color:var(--ink-dim)"># one program per (q_batch, d_batch)</span>
+<pre><code><span style="color:var(--ink-dim)"># one program per (query, document)</span>
 score ← 0
 for q_start in range(0, Lq, BLOCK_Q):
-    Q_tile ← Q[q_batch, q_start : q_start + BLOCK_Q]      <span style="color:var(--ink-dim)"># SRAM</span>
+    Q_tile ← Q[q_idx, q_start : q_start + BLOCK_Q]        <span style="color:var(--ink-dim)"># SRAM</span>
     m     ← −∞                                            <span style="color:var(--ink-dim)"># [BLOCK_Q] in registers</span>
     for d_start in range(0, Ld, BLOCK_D):
-        D_tile ← D[d_batch, d_start : d_start + BLOCK_D]  <span style="color:var(--ink-dim)"># SRAM</span>
+        D_tile ← D[d_idx, d_start : d_start + BLOCK_D]    <span style="color:var(--ink-dim)"># SRAM</span>
         S_tile  = Q_tile @ D_tileᵀ                        <span style="color:var(--ink-dim)"># tensor cores, fp32 acc</span>
         S_tile ← mask(S_tile, d_active, −∞)               <span style="color:var(--ink-dim)"># fused-in masking</span>
         m      ← maximum(m, rowmax(S_tile))               <span style="color:var(--ink-dim)"># online max</span>
     score += sum(m)                                       <span style="color:var(--ink-dim)"># contribution from this Q tile</span>
-scores[q_batch, d_batch] ← score                           <span style="color:var(--ink-dim)"># only this scalar is written</span>
+scores[q_idx, d_idx] ← score                              <span style="color:var(--ink-dim)"># only this scalar is written</span>
 </code></pre>
 
   <p>
@@ -1303,9 +1322,10 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     nothing to rescale.
   </p>
 
+  <h3>What lives in SRAM, what lives in registers</h3>
   <p>
     Per program, SRAM holds only the operand tiles
-    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ in low precision —
+    $(\text{BLOCK\_Q} + \text{BLOCK\_D}) \cdot d$ in half precision —
     Triton double-buffers them so the next $\Dm$ tile loads while the
     current GEMM runs. The score tile $\Sm$ and the running max $\Mm$
     live in fp32 <em>registers</em>, never in SRAM: <code>tl.dot</code>
@@ -1318,37 +1338,71 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     to trade block size against occupancy.
   </p>
 
-  <h3 id="chunking">Long-query chunking</h3>
+  <div class="panel">
+    <div class="chart-wrap">
+      <svg viewBox="0 0 760 272" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="Per program, Q and D operand tiles stream through SRAM in half precision and are double-buffered, while the S tile and running max stay in fp32 registers">
+        <defs>
+          <marker id="dbarr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-mid)"/>
+          </marker>
+        </defs>
 
-  <p>
-    For long query sequences ($L_q > 512$, e.g. image or document queries used
-    on the query side), the outer
-    loop in the pseudo-code above serialises $\sim\!8$ query-tile iterations
-    inside one program, leaving the rest of the SM grid idle. But MaxSim is
-    a sum over query tokens of a per-token max, so it decomposes exactly:
-  </p>
+        <text x="380" y="22" font-size="12.5" text-anchor="middle"
+              fill="var(--ink)" font-family="var(--font-display)" font-weight="600">
+          Where each tile lives, per program
+        </text>
 
-  <p>
-    $$\text{score}[i, j] = \sum_{c=0}^{n_c - 1} \sum_{s \in \text{chunk}_c} \max_t \langle \Qm_{i, s},\, \Dm_{j, t} \rangle.$$
-  </p>
+        <!-- HBM -->
+        <rect x="20" y="78" width="104" height="150" rx="6" fill="none" stroke="var(--ink-dim)" stroke-width="1.2"/>
+        <text x="72" y="70" font-size="11" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">HBM</text>
+        <rect x="40" y="98" width="64" height="44" rx="4" fill="var(--q-idle)" stroke="var(--q-active)" stroke-width="1.2"/>
+        <text x="72" y="125" font-size="11" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">Q</text>
+        <rect x="40" y="160" width="64" height="44" rx="4" fill="var(--d-idle)" stroke="var(--d-active)" stroke-width="1.2"/>
+        <text x="72" y="187" font-size="11" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">D</text>
+        <text x="72" y="221" font-size="9" text-anchor="middle" fill="var(--ink-dim)" font-family="var(--font-mono)">full inputs</text>
 
-  <p>
-    When $L_q &gt; 512$, <code>maxsim()</code> reshapes $\Qm$ into
-    $N_q n_c$ chunks of 128 tokens ($n_c = \lceil L_q / 128 \rceil$), runs
-    the kernel over the larger batch, and sums the chunk scores back per
-    query — plain tensor ops, so autograd flows through unchanged. Two
-    gains at once: more programs on the grid, and the kernel always sees
-    $L_q = 128$, pinning the autotune cache to one entry instead of one
-    per distinct query length.
-  </p>
+        <!-- SRAM -->
+        <rect x="196" y="48" width="214" height="200" rx="8" fill="none" stroke="var(--ink-mid)" stroke-width="1.3"/>
+        <text x="303" y="40" font-size="11" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">SRAM · operand tiles (half precision)</text>
+        <rect x="216" y="71" width="176" height="34" rx="4" fill="var(--q-idle)" stroke="var(--q-active)" stroke-width="1.2"/>
+        <text x="304" y="92" font-size="10" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">Q tile · BLOCK_Q × d</text>
+        <rect x="216" y="123" width="176" height="34" rx="4" fill="var(--d-idle)" stroke="var(--d-active)" stroke-width="1.4"/>
+        <text x="304" y="144" font-size="10" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">D tile · buf 0 → GEMM</text>
+        <rect x="216" y="177" width="176" height="34" rx="4" fill="var(--d-idle)" stroke="var(--d-active)" stroke-width="1.2" stroke-dasharray="4,3"/>
+        <text x="304" y="198" font-size="10" text-anchor="middle" fill="var(--ink-dim)" font-family="var(--font-mono)">D tile · buf 1 ← loading</text>
+        <text x="303" y="230" font-size="8.5" text-anchor="middle" fill="var(--accent-3)" font-family="var(--font-mono)">double-buffered · swap each D-tile</text>
 
-  <p>
-    Below the $L_q = 512$ crossover the serial loop is already short and
-    the grid already full, so the extra launches would only slow things
-    down — short ColBERT-style queries take the un-chunked path. The same
-    logic exempts the 4-D KD layout entirely: it already launches
-    $N_q \cdot K$ programs, enough to fill every SM.
-  </p>
+        <!-- tensor cores -->
+        <rect x="448" y="72" width="86" height="84" rx="6" fill="none" stroke="var(--accent-3)" stroke-width="1.3"/>
+        <text x="491" y="110" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">tensor</text>
+        <text x="491" y="126" font-size="10.5" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">cores</text>
+
+        <!-- registers -->
+        <rect x="572" y="48" width="168" height="200" rx="8" fill="none" stroke="var(--accent)" stroke-width="1.3"/>
+        <text x="656" y="40" font-size="11" text-anchor="middle" fill="var(--accent)" font-family="var(--font-mono)">fp32 registers</text>
+        <rect x="590" y="84" width="132" height="60" rx="4" fill="var(--s-idle)" stroke="var(--s-active)" stroke-width="1.4"/>
+        <text x="656" y="108" font-size="10" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">S tile</text>
+        <text x="656" y="124" font-size="9" text-anchor="middle" fill="var(--ink-dim)" font-family="var(--font-mono)">BLOCK_Q × BLOCK_D</text>
+        <rect x="590" y="174" width="132" height="38" rx="4" fill="var(--o-idle)" stroke="var(--o-active)" stroke-width="1.4"/>
+        <text x="656" y="198" font-size="10" text-anchor="middle" fill="var(--ink-mid)" font-family="var(--font-mono)">m · running max</text>
+
+        <!-- arrows -->
+        <path d="M 126 194 L 212 194" fill="none" stroke="var(--ink-mid)" stroke-width="1.2" marker-end="url(#dbarr)"/>
+        <text x="168" y="186" font-size="9" text-anchor="middle" fill="var(--ink-dim)" font-family="var(--font-mono)">cp.async</text>
+        <path d="M 410 88 L 446 88" fill="none" stroke="var(--q-active)" stroke-width="1.2" marker-end="url(#dbarr)"/>
+        <path d="M 410 140 L 446 140" fill="none" stroke="var(--d-active)" stroke-width="1.2" marker-end="url(#dbarr)"/>
+        <path d="M 534 114 L 588 114" fill="none" stroke="var(--ink-mid)" stroke-width="1.2" marker-end="url(#dbarr)"/>
+        <text x="551" y="108" font-size="8.5" text-anchor="middle" fill="var(--ink-dim)" font-family="var(--font-mono)">fp32</text>
+        <path d="M 656 144 L 656 172" fill="none" stroke="var(--o-active)" stroke-width="1.2" marker-end="url(#dbarr)"/>
+        <text x="666" y="162" font-size="8.5" text-anchor="start" fill="var(--ink-dim)" font-family="var(--font-mono)">rowmax</text>
+      </svg>
+      <div class="chart-legend">
+        <span>Operand tiles stream through SRAM in half precision (fp16/bf16) and are double-buffered: buf 1 prefetches the next $\Dm$ tile while buf 0 feeds the current GEMM.</span>
+        <span>The $\Sm$ tile and running max $\Mm$ never enter SRAM: <code>tl.dot</code> accumulates straight into fp32 registers, and the row-max runs there.</span>
+      </div>
+    </div>
+  </div>
 
   <h3>Step through the algorithm</h3>
   <p>
@@ -1427,16 +1481,6 @@ scores[q_batch, d_batch] ← score                           <span style="color:
     GEMM uses bf16/fp16 operands with fp32 accumulation, matching the
     tensor-core native path.
   </p>
-
-  <div class="note">
-    <strong>Why this is bitwise simpler than FlashAttention.</strong> Online
-    softmax has to track $\Mm$ <em>and</em> the running sum of exponentials
-    $\ell$, and rescale both whenever the running max changes: the rescalers
-    are the $\exp(\Mm^{(k-1)} - \Mm^{(k)})$ factors in FA-1. Online max has no such
-    rescaler: $\max$ is associative and commutative, so folding the tiles in
-    one by one — in any order — gives exactly the same result as the offline
-    computation.
-  </div>
 
   <h3>Worked example</h3>
   <p>Three doc-tiles, one query row. The argmax index is recorded for backward.</p>
@@ -1626,7 +1670,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
         <!-- owner program -->
         <rect x="566" y="66" width="170" height="62" rx="6"
               fill="color-mix(in oklch, var(--accent-2) 8%, var(--panel))" stroke="var(--accent-2)" stroke-width="1.3"/>
-        <text x="651" y="86"  font-size="10.5" text-anchor="middle" fill="var(--ink)">program owns tile (j, t=4…7)</text>
+        <text x="651" y="86"  font-size="9.5" text-anchor="middle" fill="var(--ink)">program owns tile (j, t=4…7)</text>
         <text x="651" y="103" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">Σ in fp32 registers</text>
         <text x="651" y="118" font-size="9.5" text-anchor="middle" fill="var(--ink-dim)">via one-hot matmul</text>
 
@@ -1673,7 +1717,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </table>
 
   <p>
-    That last row is the entire routing logic of <code>auto</code> (the
+    That weak-spot row is the entire routing logic of <code>auto</code> (the
     default). On long-query × long-doc cross-products the one-hot waste
     outweighs the atomic pain, so those go to <code>unified</code>.
     Everything gradient-heavy — KD / hard-negative layouts and
@@ -1782,7 +1826,7 @@ scores[q_batch, d_batch] ← score                           <span style="color:
   </p>
 
   <p>
-    At ColPali shapes ($L_q = L_d = 1024$, $d = 128$), the naive form sits
+    At a balanced shape ($L_q = L_d = 1024$, $d = 128$), the naive form sits
     at about <strong>64 FLOPs/byte</strong>, four to five times below the
     ridge, so the tensor cores idle while HBM works flat out. The fused
     form sits at about <strong>512 FLOPs/byte</strong>, comfortably above

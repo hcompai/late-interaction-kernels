@@ -43,7 +43,7 @@ The full algorithmic walkthrough (tiling, online max, the backward pass) with st
 
 ## Introduction
 
-`late-interaction-kernels` provides fused Triton and Metal kernels for **MaxSim**, the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2. They're numerically identical to plain PyTorch, but fuse the similarity matrix, max-reduction and (optional) L2-normalisation into a single launch, so the full `[Nq, Nd, Lq, Ld]` score tensor never lands in HBM.
+**MaxSim** is the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2: it compares every query token to every document token. A direct implementation writes the full `[Nq, Nd, Lq, Ld]` similarity tensor to GPU memory just to reduce it, overflowing memory at large batch sizes and stalling the compute units on HBM traffic. `late-interaction-kernels` provides fused Triton and Metal kernels that compute the same result without ever materialising that tensor, folding the similarity matrix, max-reduction and (optional) L2-normalisation into a single launch. That both (1) cuts peak VRAM and (2) runs faster, at identical numerics to plain PyTorch.
 
 [PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) support them natively: install the extra and their `auto` dispatch picks the kernels up, no code change. You can also call them directly: a stateless `MaxSimScorer` module for custom training loops, or function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
 
