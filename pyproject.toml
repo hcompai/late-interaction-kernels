@@ -41,9 +41,9 @@ classifiers = [
 dependencies = [
   # Torch index (CPU/CUDA) is selected by the `torch-cpu`/`torch-cuda` extras;
   # plain `uv sync` without an extra falls back to PyPI's default wheel.
-  "torch>=2.5,<3",
+  "torch>=2.5",
   # Triton only ships on Linux CUDA wheels; macOS/Windows use the pure-PyTorch reference.
-  "triton>=3.0,<4; platform_system=='Linux'",
+  "triton>=3.0; platform_system=='Linux'",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +60,7 @@ dev = [
 # handles both module layouts: `pylate.scores.scores` (<=1.4) and
 # `pylate.scores.colbert` + the ColBERTScores loss routing (>=1.5). On
 # >=1.5.1 PyLate has native LIK support and the patch is a deprecated no-op.
-pylate = ["pylate>=1.3.3,<2"]
+pylate = ["pylate>=1.3.3"]
 # colpali_engine drop-in (`patch_colpali_engine()`). >=0.3.10: first release
 # with the patched-API surface (the ColbertLoss family + the
 # `BaseVisualRetrieverProcessor.score_multi_vector` helper). On >=0.3.17
@@ -69,10 +69,10 @@ pylate = ["pylate>=1.3.3,<2"]
 # colpali_engine's torchvision/transformers tree conflicts with the cu124
 # torch wheel, so it's never co-activated with `torch-cuda` (the GPU parity
 # tests install it out-of-band — see scripts/sky_colpali_compat_test.yaml).
-colpali = ["colpali-engine>=0.3.10,<1"]
+colpali = ["colpali-engine>=0.3.10"]
 # Mutually exclusive wheel sources; CI uses `torch-cpu`, GPU dev uses `torch-cuda`.
-torch-cpu = ["torch>=2.5,<3"]
-torch-cuda = ["torch>=2.5,<3"]
+torch-cpu = ["torch>=2.5"]
+torch-cuda = ["torch>=2.5"]
 
 [project.urls]
 Homepage = "https://github.com/hcompai/late-interaction-kernels"

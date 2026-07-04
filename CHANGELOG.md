@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Dropped the speculative upper bounds on runtime and optional dependencies
+  (`torch`, `triton`, `pylate`, `colpali-engine`): they are floor-only now, so
+  a downstream env can resolve them freely. `patch_pylate()` / `patch_colpali_engine()`
+  already no-op above the native-LIK cutoff (`pylate>=1.5.1`, `colpali-engine>=0.3.17`),
+  so no future major can reach the monkeypatched internals. Dev-tool caps
+  (`pytest`, `ruff`, `ty`, `numpy`) stay — they never reach downstream installers.
+
 ## [0.4.4] - 2026-06-10
 
 ### Fixed
