@@ -39,40 +39,34 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  # Torch index (CPU/CUDA) is selected by the `torch-cpu`/`torch-cuda` extras;
-  # plain `uv sync` without an extra falls back to PyPI's default wheel.
-  "torch>=2.5,<3",
-  # Triton only ships on Linux CUDA wheels; macOS/Windows use the pure-PyTorch reference.
-  "triton>=3.0,<4; platform_system=='Linux'",
+  # Wheel source comes from the `torch-cpu`/`torch-cuda` extras; bare install uses PyPI's default.
+  "torch>=2.5",
+  # Triton ships Linux-only wheels; elsewhere we use the PyTorch reference path.
+  "triton>=3.0; platform_system=='Linux'",
 ]
 
 [project.optional-dependencies]
-# Everything needed to run tests and linting locally.
+# Local test + lint stack. Dev-only caps never reach downstream installers.
 dev = [
   "numpy>=1.21,<3",
   "pytest>=7,<10",
   "ruff>=0.4,<1",
-  # ty is alpha; every 0.0.z can break — cap below 0.1 and revisit each bump.
+  # ty is alpha; any 0.0.z can break. Revisit the cap on each bump.
   "ty>=0.0.20,<0.1",
 ]
-# PyLate drop-in (`patch_pylate()`). >=1.3.3: first release with the
-# `(queries_mask, documents_mask)` signature we patch against. The patch
-# handles both module layouts: `pylate.scores.scores` (<=1.4) and
-# `pylate.scores.colbert` + the ColBERTScores loss routing (>=1.5). On
-# >=1.5.1 PyLate has native LIK support and the patch is a deprecated no-op.
-pylate = ["pylate>=1.3.3,<2"]
-# colpali_engine drop-in (`patch_colpali_engine()`). >=0.3.10: first release
-# with the patched-API surface (the ColbertLoss family + the
-# `BaseVisualRetrieverProcessor.score_multi_vector` helper). On >=0.3.17
-# colpali-engine has native LIK support and the patch is a deprecated no-op.
-# CPU-only extra:
-# colpali_engine's torchvision/transformers tree conflicts with the cu124
-# torch wheel, so it's never co-activated with `torch-cuda` (the GPU parity
-# tests install it out-of-band — see scripts/sky_colpali_compat_test.yaml).
-colpali = ["colpali-engine>=0.3.10,<1"]
-# Mutually exclusive wheel sources; CI uses `torch-cpu`, GPU dev uses `torch-cuda`.
-torch-cpu = ["torch>=2.5,<3"]
-torch-cuda = ["torch>=2.5,<3"]
+# `patch_pylate()` target. Floor is the first release with the mask signature we
+# patch; no upper cap because the patch no-ops on PyLate >=1.5.1 (native LIK), so
+# a future major never reaches our monkeypatch of PyLate internals.
+pylate = ["pylate>=1.3.3"]
+# `patch_colpali_engine()` target. Floor is the first release with the API we patch;
+# no upper cap because the patch no-ops on colpali-engine >=0.3.17 (native LIK).
+# Kept CPU-only: its torchvision/transformers tree conflicts with the cu124 torch
+# wheel, so it's never co-activated with `torch-cuda` (GPU parity tests install it
+# out-of-band, see scripts/sky_colpali_compat_test.yaml).
+colpali = ["colpali-engine>=0.3.10"]
+# Mutually exclusive wheel sources: CI uses `torch-cpu`, GPU dev uses `torch-cuda`.
+torch-cpu = ["torch>=2.5"]
+torch-cuda = ["torch>=2.5"]
 
 [project.urls]
 Homepage = "https://github.com/hcompai/late-interaction-kernels"
@@ -91,8 +85,8 @@ select = ["E", "F", "I", "B", "UP"]
 # B023: benchmark closures intentionally capture loop vars.
 ignore = ["E501", "B008", "E741", "B023"]
 
-# Per-extra wheel source: `--extra torch-cpu` for CI/CPU, `--extra torch-cuda` for GPU.
-# PyPI's default torch supports MPS on macOS; pytorch-cpu has no Darwin wheels.
+# The two extras are mutually exclusive wheel sources. macOS uses PyPI's default
+# torch for MPS; pytorch-cpu has no Darwin wheels.
 [tool.uv]
 conflicts = [[{ extra = "torch-cpu" }, { extra = "torch-cuda" }]]
 
