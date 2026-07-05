@@ -8,12 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Dropped the speculative upper bounds on runtime and optional dependencies
-  (`torch`, `triton`, `pylate`, `colpali-engine`): they are floor-only now, so
-  a downstream env can resolve them freely. `patch_pylate()` / `patch_colpali_engine()`
-  already no-op above the native-LIK cutoff (`pylate>=1.5.1`, `colpali-engine>=0.3.17`),
-  so no future major can reach the monkeypatched internals. Dev-tool caps
-  (`pytest`, `ruff`, `ty`, `numpy`) stay — they never reach downstream installers.
+- Dropped the upper bounds on `torch`, `triton`, `pylate`, and `colpali-engine`
+  so downstream envs resolve them freely. Dev-tool caps (`pytest`, `ruff`, `ty`,
+  `numpy`) stay, since they never reach downstream installers.
 
 ## [0.4.4] - 2026-06-10
 
