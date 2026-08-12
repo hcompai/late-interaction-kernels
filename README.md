@@ -26,7 +26,7 @@
 <tr>
 <td width="55%" valign="middle">
 
-The full algorithmic walkthrough (tiling, online max, the backward pass) with step-through animations and benchmark plots lives on the docs site:
+The docs explain tiling, online max, and the backward pass. They also include animations and benchmark plots:
 
 **👉 [hcompai.github.io/late-interaction-kernels](https://hcompai.github.io/late-interaction-kernels/how-it-works.html)**
 
@@ -43,9 +43,11 @@ The full algorithmic walkthrough (tiling, online max, the backward pass) with st
 
 ## Introduction
 
-**MaxSim** is the late-interaction scoring at the heart of ColBERT, ColPali, ModernColBERT, LateOn and ColBERTv2: it compares every query token to every document token. A direct implementation writes the full `[Nq, Nd, Lq, Ld]` similarity tensor to GPU memory just to reduce it, overflowing memory at large batch sizes and stalling the compute units on HBM traffic. `late-interaction-kernels` provides fused Triton and Metal kernels that compute the same result without ever materialising that tensor, folding the similarity matrix, max-reduction and (optional) L2-normalisation into a single launch. That both (1) cuts peak VRAM and (2) runs faster, at identical numerics to plain PyTorch.
+**MaxSim** is the scoring method used by ColBERT, ColPali, ModernColBERT, LateOn, and ColBERTv2. It compares every query token with every document token. A direct implementation creates a full `[Nq, Nd, Lq, Ld]` similarity tensor in GPU memory before reducing it. That tensor can exceed available memory at large batch sizes, and reading and writing it slows the GPU.
 
-[PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) support them natively: install the extra and their `auto` dispatch picks the kernels up, no code change. You can also call them directly: a stateless `MaxSimScorer` module for custom training loops, or function-level entry points (`maxsim`, `maxsim_varlen`, `maxsim_padded`, ...) for everything else.
+`late-interaction-kernels` provides fused Triton and Metal kernels that produce the same scores without writing that tensor. Each kernel calculates similarities, takes the maximum, and optionally L2-normalizes the inputs in one launch. The results match plain PyTorch, use less GPU memory, and run faster.
+
+[PyLate](https://github.com/lightonai/pylate) and [colpali-engine](https://github.com/illuin-tech/colpali) support the kernels natively. Install their optional extra and `auto` dispatch uses them without code changes. You can also call `MaxSimScorer` in a custom training loop, or call functions such as `maxsim`, `maxsim_varlen`, and `maxsim_padded` directly.
 
 ## Install
 
@@ -63,7 +65,7 @@ pip install late-interaction-kernels
 
 ### Score directly (`maxsim` / `maxsim_pairs`)
 
-`maxsim` is the lowest-level public entry point: autograd-aware, mask-aware, and dispatches on `D.dim()`, so one call covers in-batch and knowledge-distillation layouts in a single fused launch. The argmax buffer for the backward is skipped automatically when neither input requires grad, so this is the inference path too.
+`maxsim` is the lowest-level public function. It supports autograd and masks, and selects the layout from `D.dim()`. The same call handles in-batch scoring and knowledge distillation in one fused launch. When neither input needs gradients, it skips the argmax buffer used by the backward pass.
 
 ```python
 from late_interaction_kernels import maxsim, maxsim_pairs
@@ -80,7 +82,7 @@ scores = maxsim_pairs(Q, D, q_mask=q_mask, d_mask=d_mask)
 
 ### PyLate & colpali-engine
 
-Both ship a native LIK backend: install the extra and their `auto` dispatch picks it up, no code change (force it with `PYLATE_SCORES_BACKEND=lik` / `COLPALI_SCORES_BACKEND=lik`). On older versions the `patch_*` drop-ins route scoring + loss through the fused kernel at import time (`LIK_DISABLE=1` falls back; deprecated no-ops once native support is present).
+Both libraries include a native LIK backend. Install the optional extra and their `auto` dispatch selects it without code changes. Set `PYLATE_SCORES_BACKEND=lik` or `COLPALI_SCORES_BACKEND=lik` to select it explicitly. For older versions, the `patch_*` functions replace scoring and loss at import time. Set `LIK_DISABLE=1` to use the original implementation.
 
 <table>
 <tr>
@@ -121,7 +123,7 @@ lik.patch_colpali_engine()
 
 ### Top-k retrieval
 
-Score `Q` against a large corpus and return the top-`k` per query without materialising the full `[Nq, Nd]` matrix. `chunk=` streams documents in tiles so peak HBM stays bounded.
+Score `Q` against a large corpus and return the top `k` documents for each query. `retrieve` does not create the full `[Nq, Nd]` score matrix. Set `chunk=` to process documents in tiles and limit peak GPU memory.
 
 ```python
 from late_interaction_kernels import retrieve
@@ -135,7 +137,7 @@ scores, indices = retrieve(Q, D, top_k=100, chunk=4096)
 
 <br>
 
-For PLAID-style indexes where documents are stored as centroid codes + residuals at variable lengths. A single kernel fuses decompression, L2-normalisation and MaxSim. No decoded tensor is ever written back to HBM.
+Use this for PLAID indexes, where documents use centroid codes and residuals with variable lengths. One kernel decompresses the data, L2-normalizes it, and calculates MaxSim. It never writes a decoded tensor to GPU memory.
 
 ```python
 from late_interaction_kernels.plaid import maxsim_residual_varlen
@@ -154,7 +156,7 @@ scores = maxsim_residual_varlen(
 
 <br>
 
-A stateless `nn.Module` wrapper around `maxsim`. Drop it into any training loop that needs autograd-aware late-interaction scoring without touching PyLate.
+`MaxSimScorer` is a stateless `nn.Module` wrapper around `maxsim`. Use it in a training loop when you need autograd-aware late-interaction scoring without PyLate.
 
 ```python
 from late_interaction_kernels import MaxSimScorer
@@ -168,10 +170,7 @@ scores.mean().backward()
 
 ## Benchmarks
 
-1×H100 80GB SXM, bf16 inputs / fp32 accumulator, 50-iter median. All
-speedups are measured at **matched numerics**: every baseline runs the
-einsum with an fp32 accumulator (same as the fused kernel), and parity
-is asserted at `atol=1e-2` before timing.
+Benchmarks use one 80 GB H100 SXM, bf16 inputs, an fp32 accumulator, and the median of 50 runs. Each baseline also uses an fp32 accumulator, so it has the same numeric precision as the fused kernel. The benchmark checks parity at `atol=1e-2` before timing.
 
 ### Speed
 
@@ -179,25 +178,13 @@ is asserted at `atol=1e-2` before timing.
 | ----------- | --------------------- | ---------------------------- | ------------------------------- | -------------------------- | ----------------------- | ----------------------- |
 | **Speedup** | 1.7-16×               | 5.0-6.9×                     | 8-23× full<br>18-51× partial    | 0.94-4.5×                  | 1.1-1.3×                | 1.00-1.06×              |
 
-Rerank is vs both the eager fp32-accumulator path *and* `torch.compile`;
-PLAID rerank includes top-k; the fused D-head win grows with `Nd · Ld`
-(the two smallest LateOn shapes are 0.94-0.95×, i.e. slightly slower;
-≥1.4× from `Nd=128, Ld=1024` up — every ColBERT/ColPali-scale shape);
-FP8 is at `Ld ≥ 256`. Full tables and reproduction commands live in
-[`docs/benchmarks.md`](docs/benchmarks.md); for how the bench scripts
-themselves are organised — CLI conventions (`--only`, `--variants`),
-per-script summaries, and how to run one bench, the whole sweep, or a
-`RUN_ONLY`-filtered subset on a SkyPilot cluster — see
-[`benchmarks/README.md`](benchmarks/README.md).
+Rerank compares against the eager fp32-accumulator path and `torch.compile`. PLAID rerank includes top k. The fused D-head is faster as `Nd * Ld` grows. It is slightly slower for the two smallest LateOn shapes at 0.94 to 0.95x, and at least 1.4x faster from `Nd=128, Ld=1024`, which includes every ColBERT and ColPali-scale shape. FP8 results use `Ld >= 256`.
+
+[`docs/benchmarks.md`](docs/benchmarks.md) contains full tables and commands to reproduce them. [`benchmarks/README.md`](benchmarks/README.md) explains the benchmark scripts, including `--only`, `--variants`, and running a filtered set on a SkyPilot cluster.
 
 ### Memory
 
-The naive einsum materialises the full `[Nq · Nd · Lq · Ld]` similarity
-tensor in fp32 before `max(-1)`; its column reports the measured allocator
-peak, which runs above the similarity tensor alone because the fp32-cast
-operand copies coexist with it. The fused kernel never writes any of that:
-document tiles stream through SRAM and only `[Nq, Nd]` scores come back,
-plus a `[Nq · Nd, Lq]` int32 argmax buffer when training.
+The naive einsum creates the full fp32 `[Nq * Nd * Lq * Ld]` similarity tensor before `max(-1)`. Its peak memory is larger than the tensor because fp32 copies of the inputs are also in memory. The fused kernel streams document tiles through SRAM and returns only `[Nq, Nd]` scores. Training also stores a `[Nq * Nd, Lq]` int32 argmax buffer.
 
 | shape                                     | naive scratch | fused fwd | fused fwd + bwd |
 | ----------------------------------------- | ------------- | --------- | --------------- |
@@ -208,16 +195,11 @@ plus a `[Nq · Nd, Lq]` int32 argmax buffer when training.
 The ColPali row assumes a short text query expanded to `Lq = 128`
 (ColBERT-style query augmentation) against a `Ld ≈ 1024`-patch page.
 
-This runs long-context shapes (`Ld ≥ 8k`) that OOM the naive path, and fits
-~5–10× more in-batch negatives at a fixed HBM budget. In real ColQwen2
-training (80 GB H100, LoRA + grad-ckpt, `vidore/colpali_train_set`) vanilla
-colpali-engine OOMs at `batch=128` where the MaxSim op holds 7.8 GiB; the
-fused kernel holds 61 MiB and doubles the batch ceiling at the same step time.
-The backward keeps the discipline: `auto` routes gradient-heavy shapes to
-`lowmem`, writing `grad_Q` / `grad_D` in the input dtype (no full-size fp32
-buffer, no atomics, deterministic) for roughly half the backward peak, e.g. a
-`B256 × 16-neg` ColPali step from 4.3 GB to 2.2 GB. Full tables in
-[`docs/benchmarks.md`](docs/benchmarks.md#memory).
+The fused kernel supports long contexts with `Ld >= 8k` that exceed the memory available to the naive path. It also fits about 5 to 10 times more in-batch negatives within the same GPU memory budget.
+
+In a ColQwen2 training run on an 80 GB H100, using LoRA, gradient checkpointing, and `vidore/colpali_train_set`, colpali-engine runs out of memory at `batch=128`. MaxSim uses 7.8 GiB, while the fused kernel uses 61 MiB. The fused kernel doubles the maximum batch size without increasing step time.
+
+For shapes with large gradients, `auto` selects `lowmem`. That backward path writes `grad_Q` and `grad_D` in the input dtype. It avoids a full fp32 buffer and atomics, and it is deterministic. For example, it reduces the backward peak for a ColPali step with `B=256` and 16 negatives from 4.3 GB to 2.2 GB. See [`docs/benchmarks.md`](docs/benchmarks.md#memory) for the full tables.
 
 ## API
 
@@ -232,7 +214,7 @@ buffer, no atomics, deterministic) for roughly half the backward peak, e.g. a
 | `maxsim_varlen`                                       | Packed (`cu_seqlens`) layout. Autograd-aware.                         |
 | `maxsim_padded`                                       | Padded reranking wrapper: packs internally, returns `[B, C]` fp32.    |
 
-Other kernels are in submodules: `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, `reference`. See [`docs/design.md`](docs/design.md) for details on every kernel, the autograd graph and the backward variants.
+Other kernels are in the `padded`, `score_pairs`, `fused_head`, `plaid`, `fp8`, and `reference` submodules. [`docs/design.md`](docs/design.md) explains each kernel, the autograd graph, and the backward options.
 
 <details>
 <summary><strong>🔽 Configuration knobs (env vars + kwargs)</strong></summary>
