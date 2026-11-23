@@ -449,3 +449,13 @@ def test_scorer_gradcheck_fp64():
         rtol=1e-4,
         nondet_tol=1e-8,
     )
+
+
+def test_retrieve_chunked_with_1d_d_mask_matches_unchunked():
+    from late_interaction_kernels import retrieve
+
+    Q, D, d_mask = torch.randn(2, 8, 16), torch.randn(10, 12, 16), torch.arange(12) < 7  # shared by every doc
+    scores, idx = retrieve(Q, D, top_k=3, d_mask=d_mask, normalize=True)
+    chunk_scores, chunk_idx = retrieve(Q, D, top_k=3, d_mask=d_mask, normalize=True, chunk=4)
+    assert torch.equal(idx, chunk_idx)
+    assert torch.allclose(scores, chunk_scores)

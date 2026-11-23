@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A 1-D `q_mask` / `d_mask` gave wrong scores and gradients with more than one query / doc in the Triton
+  and Metal kernels, and wrong `retrieve(chunk=...)` results; it is now broadcast, as in `maxsim_reference`.
+
 ## [0.4.5] - 2026-07-05
 
 ### Changed

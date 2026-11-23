@@ -69,6 +69,26 @@ def test_forward_parity_with_masks(shape, rel):
     assert rel(fast, ref) < 5e-3
 
 
+@pytest.mark.parametrize("which", ["q_mask", "d_mask"])
+def test_1d_mask_is_shared_by_every_query_and_doc(which, rel):
+    from late_interaction_kernels import maxsim
+    from late_interaction_kernels.reference import maxsim_reference
+
+    Q = torch.randn(3, 16, 64, device="cuda", dtype=torch.float16, requires_grad=True)
+    D = torch.randn(4, 32, 64, device="cuda", dtype=torch.float16, requires_grad=True)
+    mask = torch.arange(16 if which == "q_mask" else 32, device="cuda") < 9
+    Qr, Dr = Q.detach().float().requires_grad_(), D.detach().float().requires_grad_()
+    fast = maxsim(Q, D, normalize=True, **{which: mask})
+    ref = maxsim_reference(Qr, Dr, normalize=True, **{which: mask})
+    grad = torch.randn_like(ref)
+    fast.backward(grad)
+    ref.backward(grad)
+
+    assert rel(fast.float(), ref) < 5e-3
+    assert rel(Q.grad.float(), Qr.grad) < 5e-3
+    assert rel(D.grad.float(), Dr.grad) < 5e-3
+
+
 def test_fully_masked_doc_scores_zero():
     """A doc whose mask is all-False must score 0 against every query (semantic
     contract: masked tokens are -inf, their max is -inf → clamped to 0)."""
