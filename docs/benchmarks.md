@@ -691,14 +691,18 @@ implementations land on Apple Silicon and the dispatch picks per call:
   / `maxsim_backward_metal`), JIT-compiled via `torch.mps.compile_shader`.
   Never materialises the `[Nq · Nd · Lq · Ld]` similarity tensor and now
   also handles autograd-tracking training calls (via `_MaxSimFnMetal`)
-  when the dtype / shape suit the kernel.
+  when the dtype / shape suit the kernel. Where the toolchain and GPU
+  support Metal 4, the fp16 / bf16 kernels compute the GEMM with
+  `matmul2d` on cooperative tensors (`*_m4`) instead.
 * **`compile`** — `torch.compile`-fused dense reference. Autograd-aware
   fallback for fp32 inputs, `d > 128`, and tiny shapes the Metal launch
   overhead doesn't amortise on.
 
 MacBook Air Apple M4 (2025, 16 GB unified memory), fp16, 30-iter median
 (`benchmarks/kernels/bench_mps.py`). `metal` needs `d ≤ 128` and `d % 8 == 0`;
-outside that the dispatch transparently falls back to `compile`.
+outside that the dispatch transparently falls back to `compile`. These
+numbers predate the Metal 4 path and were measured on the `simdgroup_matrix`
+kernels.
 
 
 | shape                                          | metal    | compile  | eager    | metal vs eager | metal vs compile | compile vs eager |
