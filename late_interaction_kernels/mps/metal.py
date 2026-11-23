@@ -78,11 +78,12 @@ _PARAMS_FORMAT = "6I"  # (Nq, Nd, Lq, Ld, d, flags), all u32
 _MSL_TEMPLATE_PATH = Path(__file__).with_name("_maxsim.metal")
 
 
-def _build_kernel_source() -> str:
+def _build_kernel_source(metal4: bool = False) -> str:
     """Read the MSL template and substitute the Python-side constants.
 
     Literal MSL braces in the template are doubled (``{{`` / ``}}``);
-    substitutions like ``{BLOCK_Q}`` are single.
+    substitutions like ``{BLOCK_Q}`` are single. ``metal4`` adds the kernels whose GEMM
+    runs on Metal 4 tensor ops (``*_m4``).
     """
     template = _MSL_TEMPLATE_PATH.read_text()
     return template.format(
@@ -99,10 +100,24 @@ def _build_kernel_source() -> str:
         FLAG_HAS_D_MASK=_FLAG_HAS_D_MASK,
         FLAG_NORMALIZE=_FLAG_NORMALIZE,
         FLAG_KD_LAYOUT=_FLAG_KD_LAYOUT,
+        METAL4=int(metal4),
     )
 
 
+def _compile_lib() -> Any:
+    """Compile the kernels, with the Metal 4 variants if this toolchain and GPU accept them."""
+    global _lib_metal4
+    try:
+        lib = torch.mps.compile_shader(_build_kernel_source(metal4=True))
+        _ = lib.maxsim_half_small_m4  # builds the pipeline, which fails on a GPU that cannot link tensor ops
+        _lib_metal4 = True
+    except (RuntimeError, SyntaxError):
+        lib = torch.mps.compile_shader(_build_kernel_source())
+    return lib
+
+
 _lib_lock = threading.Lock()
+_lib_metal4 = False
 _lib: Any | None = None
 _lib_compile_error: BaseException | None = None
 
@@ -117,7 +132,7 @@ def _get_lib() -> Any:
     with _lib_lock:
         if _lib is None and _lib_compile_error is None:
             try:
-                _lib = torch.mps.compile_shader(_build_kernel_source())
+                _lib = _compile_lib()
             except BaseException as exc:  # noqa: BLE001
                 _lib_compile_error = exc
                 raise
@@ -125,6 +140,11 @@ def _get_lib() -> Any:
         assert _lib_compile_error is not None
         raise _lib_compile_error
     return _lib
+
+
+def _get_kernel(name: str) -> Any:
+    """``name``, or its ``_m4`` twin (GEMM on Metal 4 tensor ops) when the library has it."""
+    return getattr(_get_lib(), name + "_m4" if _lib_metal4 else name)
 
 
 _DTYPE_TO_KERNEL = {
@@ -366,7 +386,7 @@ def maxsim_inference_metal(
 
     j_blocks = (Nd + j_per_tg - 1) // j_per_tg
 
-    fn = getattr(_get_lib(), kernel_name)
+    fn = _get_kernel(kernel_name)
     fn(
         Q,
         D,
@@ -446,7 +466,7 @@ def maxsim_train_metal(
 
     j_blocks = (Nd + j_per_tg - 1) // j_per_tg
 
-    fn = getattr(_get_lib(), kernel_name)
+    fn = _get_kernel(kernel_name)
     fn(
         Q,
         D,

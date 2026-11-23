@@ -58,7 +58,7 @@ pip install late-interaction-kernels
 | Platform                       | Backend                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------- |
 | Linux + CUDA (sm_75+)          | Fused Triton kernels (autotuned, FP8 on Hopper/Blackwell).                    |
-| macOS (Apple Silicon, MPS)     | Fused Metal `simdgroup_matrix` kernels for inference and training (fp16 / bf16, `d ≤ 128`); `torch.compile` fallback otherwise. |
+| macOS (Apple Silicon, MPS)     | Fused Metal kernels for inference and training (fp16 / bf16, `d ≤ 128`), on Metal 4 `matmul2d` where available, else `simdgroup_matrix`; `torch.compile` fallback otherwise. |
 | CPU / Windows                  | Autograd-aware pure-PyTorch reference.                                        |
 
 ## Quickstart

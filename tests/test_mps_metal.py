@@ -30,6 +30,16 @@ if not _metal.is_available():
 from late_interaction_kernels.reference import maxsim_reference  # noqa: E402
 
 
+@pytest.fixture(params=["simdgroup", "metal4"])
+def kernels(request, monkeypatch):
+    """Run a test on the ``simdgroup_matrix`` kernels and, where the library has them, on the Metal 4 ones."""
+    _metal._get_lib()
+    if request.param == "simdgroup":
+        monkeypatch.setattr(_metal, "_lib_metal4", False)
+    elif not _metal._lib_metal4:
+        pytest.skip("Metal 4 tensor ops not available")
+
+
 def _ref(Q, D, q_mask=None, d_mask=None, normalize=True):
     return maxsim_reference(
         Q.cpu().float(),
@@ -87,6 +97,7 @@ def _rel(out: torch.Tensor, ref: torch.Tensor) -> float:
         (1, 4, 200, 128, 128),  # Lq not multiple of BLOCK_Q
         (1, 4, 256, 128, 128),
         (1, 4, 1024, 128, 128),  # Lq much > BLOCK_Q
+        (3, 5, 20, 45, 72),  # tails in Lq, Ld and d
     ],
     ids=lambda s: f"Nq{s[0]}_Nd{s[1]}_Lq{s[2]}_Ld{s[3]}_d{s[4]}",
 )
@@ -96,7 +107,7 @@ def _rel(out: torch.Tensor, ref: torch.Tensor) -> float:
     [(torch.float16, 5e-3), (torch.bfloat16, 3e-2)],
     ids=["fp16", "bf16"],
 )
-def test_metal_kernel_matches_reference(shape, normalize, dtype, tol):
+def test_metal_kernel_matches_reference(kernels, shape, normalize, dtype, tol):
     Nq, Nd, Lq, Ld, d = shape
     torch.manual_seed(0)
     Q = torch.randn(Nq, Lq, d, dtype=dtype, device="mps")
@@ -620,9 +631,10 @@ def _dense_argmax(Q_hat, D_hat):
         (4, 8, 16, 32, 64),
         (8, 16, 32, 64, 128),
         (4, 8, 32, 256, 128),
+        (3, 5, 20, 45, 72),
     ],
 )
-def test_metal_train_argmax_matches_fp32(dtype, normalize, shape):
+def test_metal_train_argmax_matches_fp32(kernels, dtype, normalize, shape):
     """Kernel argmax agrees with the fp32 reference (per (i, s, j))."""
     Nq, Nd, Lq, Ld, d = shape
     torch.manual_seed(0)
@@ -834,9 +846,9 @@ def test_metal_backward_argmax_sentinel_skips_fully_masked_rows():
 @pytest.mark.parametrize("normalize", [False, True])
 @pytest.mark.parametrize(
     "shape",
-    [(4, 8, 16, 32, 64), (8, 16, 32, 64, 128), (8, 32, 32, 256, 128)],
+    [(4, 8, 16, 32, 64), (8, 16, 32, 64, 128), (8, 32, 32, 256, 128), (3, 5, 20, 45, 72)],
 )
-def test_maxsim_mps_autograd_routes_through_metal(monkeypatch, normalize, shape):
+def test_maxsim_mps_autograd_routes_through_metal(kernels, monkeypatch, normalize, shape):
     """``maxsim_mps`` end-to-end: scores + grads match the dense reference."""
     from late_interaction_kernels.mps.compile_dispatch import maxsim_mps
 
