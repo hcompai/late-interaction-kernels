@@ -376,9 +376,9 @@ def maxsim_forward(
     if d_was_2d:
         D = D.unsqueeze(0)
     if q_mask is not None and q_mask.dim() == 1:
-        q_mask = q_mask.unsqueeze(0)
+        q_mask = q_mask.unsqueeze(0).expand(Q.shape[0], -1)  # a 1-D mask is shared by every query / doc
     if d_mask is not None and d_mask.dim() == 1:
-        d_mask = d_mask.unsqueeze(0)
+        d_mask = d_mask.unsqueeze(0).expand(D.shape[0], -1)
 
     Q = ensure_contiguous_last(Q)
     D = ensure_contiguous_last(D)

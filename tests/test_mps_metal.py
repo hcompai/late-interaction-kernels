@@ -153,6 +153,14 @@ def test_metal_kernel_handles_2d_inputs():
     assert rel < 5e-3
 
 
+def test_metal_kernel_1d_masks_are_shared_by_every_query_and_doc():
+    Q = torch.randn(3, 16, 64, dtype=torch.float16, device="mps")
+    D = torch.randn(4, 32, 64, dtype=torch.float16, device="mps")
+    qm, dm = torch.arange(16, device="mps") < 9, torch.arange(32, device="mps") < 20
+    out = _metal.maxsim_inference_metal(Q, D, q_mask=qm, d_mask=dm, normalize=True)
+    assert _rel(out.cpu(), _ref(Q, D, q_mask=qm, d_mask=dm, normalize=True)) < 5e-3
+
+
 def test_metal_kernel_full_q_mask_is_zero():
     """An all-False q_mask zeros every score (no -inf bleed-through)."""
     Q = torch.randn(2, 8, 64, dtype=torch.float16, device="mps")
