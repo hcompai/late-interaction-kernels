@@ -13,6 +13,10 @@
 
 #include <metal_stdlib>
 #include <metal_simdgroup_matrix>
+#if {METAL4}
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+#endif
 using namespace metal;
 
 #define BLOCK_Q      {BLOCK_Q}
@@ -324,6 +328,200 @@ MAXSIM_TRAIN_KERNEL(maxsim_half_small_train,   half,   1)
 MAXSIM_TRAIN_KERNEL(maxsim_half_big_train,     half,   {J_PER_TG_BIG})
 MAXSIM_TRAIN_KERNEL(maxsim_bfloat_small_train, bfloat, 1)
 MAXSIM_TRAIN_KERNEL(maxsim_bfloat_big_train,   bfloat, {J_PER_TG_BIG})
+
+#if {METAL4}
+// Metal 4 variant: `matmul2d` reads Q and D from device memory and leaves the 16x32 tile in registers.
+// The register layout depends on the GPU, so elements are addressed by their own (column, row) index.
+constant uint TILE_Q = 16;
+constant uint TILE_D = 32;
+
+template <typename T>
+inline float inv_row_norm(device const T* x, uint row, uint rows, uint d)
+{{
+    if (row >= rows) return 0.0f;
+    device const vec<T, 4>* x4 = reinterpret_cast<device const vec<T, 4>*>(x + (ulong)row * d);
+    float sum2 = 0.0f;
+    for (uint k = 0; k < (d >> 2); ++k) {{
+        const float4 v = float4(x4[k]);
+        sum2 += dot(v, v);
+    }}
+    return rsqrt(max(sum2, 1e-12f));
+}}
+
+// Row reductions come back in an implementation-defined distribution; publish one value per row.
+template <typename C>
+inline void share_rows(thread C& rows, threadgroup float* dst)
+{{
+    for (ushort e = 0; e < rows.get_capacity(); ++e) {{
+        if (rows.is_valid_element(e)) {{
+            dst[rows.get_multidimensional_index(e)[0]] = rows[e];
+        }}
+    }}
+}}
+
+template <typename T, int J_PER_TG, bool SaveArgmax>
+inline void maxsim_tensor_impl(
+    device const T*        Q,
+    device const T*        D,
+    device const char*     q_mask,
+    device const char*     d_mask,
+    device       float*    scores,
+    device       int*      argmax,        // [Nq * Nd, Lq]; unused when !SaveArgmax
+    constant MaxSimParams& p,
+    threadgroup float*     row_tile,      // q_inv, d_inv, row_max, row_argmax
+    uint tid,
+    uint i,
+    uint j_block)
+{{
+    const bool has_q_mask = (p.flags & {FLAG_HAS_Q_MASK}u) != 0u;
+    const bool has_d_mask = (p.flags & {FLAG_HAS_D_MASK}u) != 0u;
+    const bool normalize  = (p.flags & {FLAG_NORMALIZE}u) != 0u;
+    const bool kd_layout  = (p.flags & {FLAG_KD_LAYOUT}u) != 0u;
+    const uint Nd = p.Nd;
+    const uint Lq = p.Lq;
+    const uint Ld = p.Ld;
+    const uint d  = p.d;
+
+    threadgroup float* q_inv   = row_tile;
+    threadgroup float* d_inv   = q_inv + TILE_Q;
+    threadgroup float* row_max = d_inv + TILE_D;
+    threadgroup float* row_argmax = row_max + TILE_Q;   // float: exact below 2^24
+
+    constexpr auto desc = mpp::tensor_ops::matmul2d_descriptor(
+        TILE_Q, TILE_D, static_cast<int>(dynamic_extent), false, true);
+    mpp::tensor_ops::matmul2d<desc, execution_simdgroup> op;
+    using extents = dextents<int, 2>;
+    using tensor_t = tensor<device T, extents, tensor_inline>;
+
+    float score_acc[J_PER_TG] = {{}};
+
+    device const T* Q_i = Q + (ulong)i * Lq * d;
+    tensor_t q_all(const_cast<device T*>(Q_i), extents(d, Lq));
+    for (uint q_start = 0; q_start < Lq; q_start += TILE_Q) {{
+        auto q_tile = q_all.slice(0, q_start);
+        q_inv[tid] = normalize ? inv_row_norm(Q_i, q_start + tid, Lq, d) : 1.0f;
+
+        for (int j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
+            const uint j = j_block * J_PER_TG + j_idx;
+            if (j >= Nd) break;
+            const uint j_global = kd_layout ? (i * Nd + j) : j;
+            device const T* D_j = D + (ulong)j_global * Ld * d;
+            tensor_t d_all(const_cast<device T*>(D_j), extents(d, Ld));
+
+            // Built one by one: older toolchains cannot copy a cooperative tensor.
+            auto new_rows = [&]() {{
+                return op.template get_row_reduction_destination_cooperative_tensor<
+                    decltype(q_tile), decltype(d_all.slice(0, 0)), float>();
+            }};
+            auto running_max = new_rows();
+            auto running_argmax = new_rows();
+            for (ushort e = 0; e < running_max.get_capacity(); ++e) {{
+                running_max[e] = -INFINITY;
+                running_argmax[e] = -1.0f;
+            }}
+
+            for (uint d_start = 0; d_start < Ld; d_start += TILE_D) {{
+                d_inv[tid] = normalize ? inv_row_norm(D_j, d_start + tid, Ld, d) : 1.0f;
+                simdgroup_barrier(mem_flags::mem_threadgroup);
+
+                auto d_tile = d_all.slice(0, d_start);
+                auto c = op.template get_destination_cooperative_tensor<
+                    decltype(q_tile), decltype(d_tile), float>();
+                op.run(q_tile, d_tile, c);
+
+                for (ushort e = 0; e < c.get_capacity(); ++e) {{
+                    if (!c.is_valid_element(e)) continue;
+                    const auto at = c.get_multidimensional_index(e);
+                    const uint t = d_start + at[0];
+                    const bool active = t < Ld && (!has_d_mask || d_mask[j_global * Ld + t] != 0);
+                    c[e] = active ? c[e] * d_inv[at[0]] : -INFINITY;
+                }}
+                auto local_max = new_rows();
+                mpp::tensor_ops::reduce_rows(
+                    c, local_max, mpp::tensor_ops::reduction_operation::max, -INFINITY);
+                share_rows(local_max, row_max);
+                simdgroup_barrier(mem_flags::mem_threadgroup);
+
+                // First doc token attaining the row max, as in the simdgroup kernel.
+                for (ushort e = 0; e < c.get_capacity(); ++e) {{
+                    if (!c.is_valid_element(e)) continue;
+                    const auto at = c.get_multidimensional_index(e);
+                    const bool hit = isfinite(c[e]) && c[e] == row_max[at[1]];
+                    c[e] = hit ? float(d_start + at[0]) : INFINITY;
+                }}
+                auto local_argmax = new_rows();
+                mpp::tensor_ops::reduce_rows(
+                    c, local_argmax, mpp::tensor_ops::reduction_operation::min, INFINITY);
+                for (ushort e = 0; e < running_max.get_capacity(); ++e) {{
+                    if (running_max.is_valid_element(e) && local_max[e] > running_max[e]) {{
+                        running_max[e] = local_max[e];
+                        running_argmax[e] = local_argmax[e];
+                    }}
+                }}
+                simdgroup_barrier(mem_flags::mem_threadgroup);
+            }}
+
+            share_rows(running_max, row_max);
+            share_rows(running_argmax, row_argmax);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // Lane r owns query token r: q-mask, clamp -inf rows to 0, sum across the simdgroup.
+            const uint s = q_start + tid;
+            float m = 0.0f;
+            if (tid < TILE_Q && s < Lq) {{
+                const bool q_active = !has_q_mask || q_mask[i * Lq + s] != 0;
+                if (q_active && isfinite(row_max[tid])) {{
+                    m = row_max[tid] * q_inv[tid];
+                }}
+                if (SaveArgmax) {{
+                    argmax[(i * Nd + j) * Lq + s] = (int)row_argmax[tid];
+                }}
+            }}
+            score_acc[j_idx] += simd_sum(m);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }}
+    }}
+
+    if (tid == 0) {{
+        for (uint j_idx = 0; j_idx < J_PER_TG; ++j_idx) {{
+            const uint j = j_block * J_PER_TG + j_idx;
+            if (j < Nd) {{
+                scores[i * Nd + j] = score_acc[j_idx];
+            }}
+        }}
+    }}
+}}
+
+#define M4_INFER_BUF
+#define M4_TRAIN_BUF device int* argmax [[buffer(6)]],
+#define MAXSIM_M4_KERNEL(NAME, T, J, SAVE, ARGMAX_BUF, ARGMAX_OUT)               \
+kernel void NAME(                                                                \
+    device const T*        Q       [[buffer(0)]],                                \
+    device const T*        D       [[buffer(1)]],                                \
+    device const char*     q_mask  [[buffer(2)]],                                \
+    device const char*     d_mask  [[buffer(3)]],                                \
+    device       float*    scores  [[buffer(4)]],                                \
+    constant MaxSimParams& p       [[buffer(5)]],                                \
+    ARGMAX_BUF                                                                   \
+    uint3 tg                       [[threadgroup_position_in_grid]],             \
+    uint tid                      [[thread_index_in_simdgroup]])                \
+{{                                                                               \
+    threadgroup float row_tile[4 * TILE_Q + TILE_D];                             \
+    maxsim_tensor_impl<T, J, SAVE>(                                              \
+        Q, D, q_mask, d_mask, scores, reinterpret_cast<device int*>(ARGMAX_OUT), \
+        p, row_tile, tid, tg.x, tg.y);                                          \
+}}
+
+MAXSIM_M4_KERNEL(maxsim_half_small_m4,   half,   1,               false, M4_INFER_BUF, scores)
+MAXSIM_M4_KERNEL(maxsim_half_big_m4,     half,   {J_PER_TG_BIG},  false, M4_INFER_BUF, scores)
+MAXSIM_M4_KERNEL(maxsim_bfloat_small_m4, bfloat, 1,               false, M4_INFER_BUF, scores)
+MAXSIM_M4_KERNEL(maxsim_bfloat_big_m4,   bfloat, {J_PER_TG_BIG},  false, M4_INFER_BUF, scores)
+
+MAXSIM_M4_KERNEL(maxsim_half_small_train_m4,   half,   1,              true, M4_TRAIN_BUF, argmax)
+MAXSIM_M4_KERNEL(maxsim_half_big_train_m4,     half,   {J_PER_TG_BIG}, true, M4_TRAIN_BUF, argmax)
+MAXSIM_M4_KERNEL(maxsim_bfloat_small_train_m4, bfloat, 1,              true, M4_TRAIN_BUF, argmax)
+MAXSIM_M4_KERNEL(maxsim_bfloat_big_train_m4,    bfloat, {J_PER_TG_BIG}, true, M4_TRAIN_BUF, argmax)
+#endif
 
 
 // Backward — Triton analogue: `maxsim_backward_unified`. One
